@@ -80,7 +80,7 @@ dsh-composer-ux/
 ├── cordis.patch.yml              # 组合包层（随包发布）：按包名 dsh-composer-ux 插入插件行
 ├── cordis.dev.patch.yml          # 本地开发覆盖层（file:/// 绝对路径，已 gitignore，不随包发布）
 ├── CHANGELOG.md                  # 版本更新日志
-├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器）
+├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器），并做发行后处理
 ├── src/
 │   ├── host.ts                    # Host 半：注册 settings namespace + 把请求头镜像进 llm-pi-ai
 │   ├── settings-contract.ts       # 字段/默认值/菜单元数据（零依赖共享）
@@ -134,6 +134,13 @@ pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.dev.patch.yml
 ## 设置持久化
 
 设置存在 Host 用户设置文档（默认 `$DSH_HOME/settings.yaml`）的 `composer-ux` 分区，随工作区/机器生效；删除该分区即恢复全部默认。
+
+## 发行包与「装前体检」
+
+插件市场的装前体检会扫描宿主代码里的混淆/动态执行特征（`eval` / `new Function` / 超长 base64 块）。本插件的 `lib/` 里这些特征**为零**：
+
+- 内联的 schemastery 带有一条「字符串回调 → `new Function` 还原」的分支。本插件所有 schema 都传函数回调，从不使用字符串回调，因此 `build.mjs` 在打包后会把该分支替换为等价空实现；若将来依赖升级导致模式失配，构建会**直接报错退出**，不会悄悄带着 `new Function` 发行。
+- 构建与测试命令见上文「构建」；`lib/` 为纯 JavaScript，安装时不需要执行任何构建脚本（因此**不需要 pnpm 的构建授权**，也不会在安装期于用户机器上执行代码）。
 
 ## 与官方版本兼容提示
 

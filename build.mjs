@@ -12,7 +12,7 @@
  * 目录内联（可用 env DSH_REPO_PATH 覆盖检出路径）。
  */
 import { build } from 'esbuild'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
 const dshPluginId = 'dsh-composer-ux'
 const repoPath = (process.env.DSH_REPO_PATH ?? 'D:/DeepSeek Harness').replace(/\\/g, '/')
@@ -90,6 +90,36 @@ try {
   console.error(error)
   failures += 1
 }
+
+// ── 发行后处理：消除第三方库里的动态执行标记 ─────────────────────────────────
+//
+// schemastery 允许把 schema callback 写成字符串，再用 new Function 还原成函数。
+// 本插件从不使用字符串回调（全部传函数），但这段代码被打包后会让插件市场的
+// 「装前体检」把宿主包判定为「含混淆/动态执行代码」，从而给用户一条"建议不要安装"。
+// 这里把该分支替换成等价的空实现：非字符串回调路径完全不变，我们自己的 schema 行为不变。
+//
+// 若将来依赖升级导致模式失配，构建会直接报错退出，避免悄悄带着 new Function 发行。
+const POST_BUILD_RULES = [
+  {
+    file: 'lib/index.js',
+    from: 'schema.callback = new Function("return " + schema.callback)();',
+    to: 'schema.callback = null;',
+    note: 'schemastery 字符串回调分支',
+  },
+]
+
+function stripDynamicCode(rule) {
+  const code = readFileSync(rule.file, 'utf8')
+  if (!code.includes(rule.from)) {
+    console.error(`[dsh-composer-ux] 发行后处理失配：${rule.file} 中找不到「${rule.note}」模式`)
+    failures += 1
+    return
+  }
+  writeFileSync(rule.file, code.split(rule.from).join(rule.to))
+  console.log(`[dsh-composer-ux] 已移除动态执行标记：${rule.note} (${rule.file})`)
+}
+
+for (const rule of POST_BUILD_RULES) stripDynamicCode(rule)
 
 if (failures > 0) process.exit(1)
 console.log('[dsh-composer-ux] build ok -> lib/index.js, lib/client.js')

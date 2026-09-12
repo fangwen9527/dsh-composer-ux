@@ -1,0 +1,5 @@
+# 依赖与构建中间产物（lib/*.js 为发行所需，随仓库提交，仅忽略 sourcemap）
+node_modules/
+lib/*.map
+package-lock.json
+*.log

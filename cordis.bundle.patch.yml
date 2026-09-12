@@ -1,0 +1,8 @@
+# dsh-composer-ux — 可安装组合包层（bundle patch）
+# 本文件由 package.json 的 dsh.bundle.patch 引用；插件行按「包名」引用，
+# 安装后 Node/pnpm 从 node_modules 解析到 lib/index.js（Host 半），
+# 客户端半由 package.json 的 dsh.client 清单 + exports["./client"] 自动发现。
+# 本地开发（--patch）仍使用 cordis.patch.yml 中的 file:/// 绝对路径行。
+- insert:
+    - id: composer-ux
+      name: dsh-composer-ux

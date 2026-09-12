@@ -1,0 +1,7 @@
+# dsh-composer-ux — Web overlay
+# 用绝对路径引用本包构建产物；patch 文件只贡献配置，不改变 loader 的
+# profile 目录。请直接从 D:\DeepSeek Harness 源码检出运行：
+#   pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.patch.yml
+- insert:
+    - id: composer-ux
+      name: 'file:///D:/1zcode/dsh插件/输入体验/lib/index.js'

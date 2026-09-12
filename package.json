@@ -42,7 +42,7 @@
       ]
     },
     "bundle": {
-      "patch": "./cordis.bundle.patch.yml"
+      "patch": "./cordis.patch.yml"
     }
   },
   "scripts": {

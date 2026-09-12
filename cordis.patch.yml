@@ -1,7 +1,12 @@
-# dsh-composer-ux — Web overlay
-# 用绝对路径引用本包构建产物；patch 文件只贡献配置，不改变 loader 的
-# profile 目录。请直接从 D:\DeepSeek Harness 源码检出运行：
-#   pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.patch.yml
+# dsh-composer-ux — 可安装组合包层（bundle patch）
+#
+# 本文件由 package.json 的 dsh.bundle.patch 引用。插件行按「包名」引用本包，
+# 安装后 Node/pnpm 从 profile 的 node_modules 解析到 lib/index.js（Host 半）；
+# 客户端半由 package.json 的 dsh.client 清单 + exports["./client"] 自动发现。
+#
+# 安装：
+#   dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux
+# 本地源码开发请改用 cordis.dev.patch.yml（file:/// 绝对路径，见 README「加载」一节）。
 - insert:
     - id: composer-ux
-      name: 'file:///D:/1zcode/dsh插件/输入体验/lib/index.js'
+      name: dsh-composer-ux

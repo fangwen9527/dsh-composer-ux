@@ -1,5 +1,12 @@
 # dsh-composer-ux
 
+> **English summary** — A DeepSeek Harness **Web** plugin that upgrades the composer (chat input) experience:
+> configurable **send / newline keys**, a native-style **7-item right-click context menu**, a resizable &
+> scrollable **settings panel with persisted size**, a **global on/off switch**, and automatic
+> **`x-opencode-session` request-header injection** so OpenCode (Go) routes work inside DSH.
+> Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
+> ships in this repository, so there is **no build step and no build authorization**. License: MIT.
+
 DeepSeek Harness Web 输入体验增强插件：
 
 0. **全局开关**：设置页顶部「启用输入增强」总开关——关闭后键位、右键菜单、设置面板滚动/缩放全部停用（输入框恢复 DSH 原生行为），设置页保留用于一键恢复；开关状态持久保存。
@@ -11,19 +18,26 @@ DeepSeek Harness Web 输入体验增强插件：
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
 2. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
 
-## 安装（上架版）
+## 安装
 
-本插件按官方「[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)」规范打包为可安装组合包（`dsh.bundle`）；仓库已打 `dsh-plugin` topic，可在插件市场搜索到。
+本插件按官方「[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)」规范打包为可安装**组合包**（bundle）：`package.json` 声明 `dsh.bundle.patch → ./cordis.patch.yml`，该层以**包名**插入插件行 `dsh-composer-ux`，装进 profile 后由 pnpm/Node 从 `node_modules` 解析到 `lib/index.js`。
 
 ```sh
-# 从 GitHub 安装（公开仓库；lib/ 构建产物已随仓库提交，无需任何构建授权）
+# GitHub 安装（推荐）：lib/ 构建产物已随仓库提交，没有 prepare 脚本，因此不需要 pnpm 的构建授权
 dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux
 
-# 从本地目录安装（开发时改完直接装，等价于 link）
+# 锁定 commit 安装（更安全：后续推送无法悄悄改变实际运行的内容）
+dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux#<commit-sha>
+
+# 本地目录安装（开发用，等价于 link）
 dsh plugin --profile <你的 profile> add D:/1zcode/dsh插件/输入体验
 ```
 
-从 DSH 源码检出直接 `--patch` 挂载的本地开发方式不变，见下文「加载」一节。
+装完按 DSH 提示重启一次（Host 半的插件代码只在进程启动时 import），客户端半刷新页面即生效。
+
+**发现渠道**：仓库已打官方发现用的 [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic（另带 `deepseek-harness` / `cordis` / `dsh` / `opencode` 等关键词）；社区目录（mydsh.dev、dshbase.com、dsplugin.app）按该 topic 自动同步收录。仓库里的 `cordis.patch.yml` 就是随包发布的组合层文件，`dsh.bundle.patch` 指向它即可。
+
+从 DSH 源码检出直接 `--patch` 挂载的本地开发方式见下文「加载」一节。
 
 ## 键位规则
 
@@ -62,9 +76,10 @@ OpenCode 的接口要求客户端在每次请求里带上一个稳定的会话 I
 
 ```
 dsh-composer-ux/
-├── package.json                  # dsh.client 清单（platform: web）+ exports["./client"] + dsh.bundle 清单
-├── cordis.patch.yml              # --patch 覆盖层（插入插件行，file:/// 绝对路径，本地开发用）
-├── cordis.bundle.patch.yml       # 组合包层（插件行按包名 dsh-composer-ux 引用，安装后用）
+├── package.json                  # dsh.client 清单（platform: web）+ exports["./client"] + dsh.bundle.patch 清单
+├── cordis.patch.yml              # 组合包层（随包发布）：按包名 dsh-composer-ux 插入插件行
+├── cordis.dev.patch.yml          # 本地开发覆盖层（file:/// 绝对路径，已 gitignore，不随包发布）
+├── CHANGELOG.md                  # 版本更新日志
 ├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器）
 ├── src/
 │   ├── host.ts                    # Host 半：注册 settings namespace + 把请求头镜像进 llm-pi-ai
@@ -98,10 +113,16 @@ $env:DSH_REPO_PATH='D:/DeepSeek Harness'; node build.mjs
 
 ```sh
 cd D:\DeepSeek Harness
-pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.patch.yml
+pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.dev.patch.yml
 ```
 
-替换为你的真实路径即可；插件行的 `name` 必须是 `file:///` 形式的绝对 URL（Windows 下 `D:/...` 裸路径无法被 ESM loader 导入）。
+替换为你的真实路径即可；插件行的 `name` 必须是 `file:///` 形式的绝对 URL（Windows 下 `D:/...` 裸路径无法被 ESM loader 导入）。该文件只在本机存在（已 gitignore），内容如下：
+
+```yaml
+- insert:
+    - id: composer-ux
+      name: 'file:///D:/1zcode/dsh插件/输入体验/lib/index.js'
+```
 
 ## 开发时热更新
 

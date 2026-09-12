@@ -2,6 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.3] — 2026-09-13
+
+### 变更
+- **发布到 npm**：`dsh-composer-ux` 已上架 <https://www.npmjs.com/package/dsh-composer-ux>，安装命令简化为 `dsh plugin --profile <profile> add dsh-composer-ux`（预构建产物，安装期不执行任何代码）；README 的安装一节改为 npm 优先，GitHub 安装作为等价备选保留。
+- 包内 `repository` 字段指回 https://github.com/fangwen9527/dsh-composer-ux ，便于插件市场把 npm 包与仓库关联（下载量展示据此生效）。
+- 功能代码无改动（`lib/` 与 0.1.2 一致），26 项宿主行为测试保持全绿。
+
 ## [0.1.2] — 2026-09-12
 
 ### 修复

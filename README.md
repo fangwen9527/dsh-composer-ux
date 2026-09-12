@@ -23,7 +23,10 @@ DeepSeek Harness Web 输入体验增强插件：
 本插件按官方「[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)」规范打包为可安装**组合包**（bundle）：`package.json` 声明 `dsh.bundle.patch → ./cordis.patch.yml`，该层以**包名**插入插件行 `dsh-composer-ux`，装进 profile 后由 pnpm/Node 从 `node_modules` 解析到 `lib/index.js`。
 
 ```sh
-# GitHub 安装（推荐）：lib/ 构建产物已随仓库提交，没有 prepare 脚本，因此不需要 pnpm 的构建授权
+# npm 安装（推荐）：已是预构建产物，没有构建脚本，安装时不会在本地执行任何代码
+dsh plugin --profile <你的 profile> add dsh-composer-ux
+
+# 从 GitHub 安装（等价；lib/ 构建产物已提交，没有 prepare 脚本，因此不需要 pnpm 的构建授权）
 dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux
 
 # 锁定 commit 安装（更安全：后续推送无法悄悄改变实际运行的内容）
@@ -32,6 +35,8 @@ dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux#<co
 # 本地目录安装（开发用，等价于 link）
 dsh plugin --profile <你的 profile> add D:/1zcode/dsh插件/输入体验
 ```
+
+npm 包：<https://www.npmjs.com/package/dsh-composer-ux>（`repository` 指回本仓库，市场据此关联下载量）。
 
 装完按 DSH 提示重启一次（Host 半的插件代码只在进程启动时 import），客户端半刷新页面即生效。
 

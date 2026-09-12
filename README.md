@@ -20,23 +20,33 @@ DeepSeek Harness Web 输入体验增强插件：
 
 ## 安装
 
-本插件按官方「[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)」规范打包为可安装**组合包**（bundle）：`package.json` 声明 `dsh.bundle.patch → ./cordis.patch.yml`，该层以**包名**插入插件行 `dsh-composer-ux`，装进 profile 后由 pnpm/Node 从 `node_modules` 解析到 `lib/index.js`。
-
 ```sh
-# npm 安装（推荐）：已是预构建产物，没有构建脚本，安装时不会在本地执行任何代码
-dsh plugin --profile <你的 profile> add dsh-composer-ux
+# 安装
+dsh plugin --profile web add dsh-composer-ux
 
-# 从 GitHub 安装（等价；lib/ 构建产物已提交，没有 prepare 脚本，因此不需要 pnpm 的构建授权）
-dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux
-
-# 锁定 commit 安装（更安全：后续推送无法悄悄改变实际运行的内容）
-dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux#<commit-sha>
-
-# 本地目录安装（开发用，等价于 link）
-dsh plugin --profile <你的 profile> add D:/1zcode/dsh插件/输入体验
+# 更新到最新版
+dsh plugin --profile web update dsh-composer-ux
 ```
 
-npm 包：<https://www.npmjs.com/package/dsh-composer-ux>（`repository` 指回本仓库，市场据此关联下载量）。
+npm 包：[dsh-composer-ux](https://www.npmjs.com/package/dsh-composer-ux) —— 预构建产物，安装期不在本地执行任何代码，也不需要 pnpm 的构建授权。（`--profile web` 换成你自己的 profile 名即可。）
+
+<details>
+<summary>其它安装方式（GitHub 源码 / 锁定 commit / 本地目录）</summary>
+
+```sh
+# 从 GitHub 安装（等价；lib/ 构建产物已提交，没有 prepare 脚本，因此不需要 pnpm 的构建授权）
+dsh plugin --profile web add github:fangwen9527/dsh-composer-ux
+
+# 锁定 commit 安装（更安全：后续推送无法悄悄改变实际运行的内容）
+dsh plugin --profile web add github:fangwen9527/dsh-composer-ux#<commit-sha>
+
+# 本地目录 / 源码开发（等价于 link；改完 src/ 先跑 node build.mjs）
+dsh plugin --profile web add <你克隆或解压出来的目录>
+```
+
+本插件按官方「[打包与安装插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)」规范打包为可安装**组合包**（bundle）：`package.json` 声明 `dsh.bundle.patch → ./cordis.patch.yml`，该层以**包名**插入插件行 `dsh-composer-ux`，装进 profile 后由 pnpm/Node 从 `node_modules` 解析到 `lib/index.js`。
+
+</details>
 
 装完按 DSH 提示重启一次（Host 半的插件代码只在进程启动时 import），客户端半刷新页面即生效。
 
@@ -77,7 +87,7 @@ OpenCode 的接口要求客户端在每次请求里带上一个稳定的会话 I
 
 ## 结构
 
-项目根目录：`D:\1zcode\dsh插件\输入体验\`（构建产物与被挂载的 `cordis.patch.yml` 都在这里）。
+仓库根目录（克隆或解压出来即是）：
 
 ```
 dsh-composer-ux/
@@ -117,16 +127,16 @@ $env:DSH_REPO_PATH='D:/DeepSeek Harness'; node build.mjs
 ## 加载（从 DSH 源码检出）
 
 ```sh
-cd D:\DeepSeek Harness
-pnpm dsh web --patch D:/1zcode/dsh插件/输入体验/cordis.dev.patch.yml
+cd <你的 DeepSeek Harness 检出目录>
+pnpm dsh web --patch <本仓库的绝对路径>/cordis.dev.patch.yml
 ```
 
-替换为你的真实路径即可；插件行的 `name` 必须是 `file:///` 形式的绝对 URL（Windows 下 `D:/...` 裸路径无法被 ESM loader 导入）。该文件只在本机存在（已 gitignore），内容如下：
+把尖括号替换成你的真实路径；插件行的 `name` 必须是 `file:///` 形式的绝对 URL（Windows 下 `D:/...` 裸路径无法被 ESM loader 导入）。该文件只在本机存在（已 gitignore），内容如下：
 
 ```yaml
 - insert:
     - id: composer-ux
-      name: 'file:///D:/1zcode/dsh插件/输入体验/lib/index.js'
+      name: 'file:///<本仓库的绝对路径>/lib/index.js'
 ```
 
 ## 开发时热更新

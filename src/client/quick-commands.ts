@@ -88,7 +88,10 @@ export function alwaysPrompts(prompts: readonly QuickPrompt[]): readonly QuickPr
  *  - 多条按列表顺序拼接，条目之间空一行；
  *  - 原文为空时**不附加** —— 没有「你的消息」可附加，此时应当交还官方原语义
  *    （空输入的 Enter 在官方那里是别的动作，抢过来会让人意外）；
- *  - 一条都没勾时返回 null。
+ *  - 一条都没勾时返回 null；
+ *  - **已经以同一段后缀结尾时返回 null（幂等）** —— 万一发送那一步没成，第二次
+ *    点击不会把同一段提示词再叠一遍，而是直接放行官方发送（0.2.0 的失控症状就是
+ *    「一直点一直插入」，这条护栏让它变成「再点一次就发出去」）。
  * @param draft - 当前草稿原文。
  * @param prompts - 完整快捷指令列表。
  * @returns 拼接后的完整草稿；无需附加时为 null。
@@ -99,6 +102,7 @@ export function withAlwaysPrompts(draft: string, prompts: readonly QuickPrompt[]
   const base = draft.replace(/\s+$/, '')
   if (base === '') return null
   const suffix = picked.map(item => item.prompt.trim()).join('\n\n')
+  if (base.endsWith(suffix)) return null
   return `${base}\n\n${suffix}`
 }
 
@@ -145,26 +149,35 @@ export function focusComposer(): void {
 }
 
 /**
- * 目标元素是不是官方的「发送」主按钮。
+ * 找出这次点击落在的**官方发送主按钮**；不是发送键时返回 null。
+ *
+ * 为什么返回元素而不是布尔：调用方要拿它**重放一次点击**（见 interceptors.ts）。
+ * 这里必须返回真正的 `<button>`，而不是 `event.target` —— 发送键是个圆形按钮，
+ * 视觉中心就是里面的 `<svg>` / `<path>`，而 **SVG 元素没有 `.click()`**。
+ * 0.2.0 就是因为把 `event.target` 当按钮用、`click()` 抛 TypeError 而没发送，
+ * 症状是「点了只插入、不发送，一直点一直插入」。
  *
  * 为什么敢按结构判别：发送键与停止键共用同一个位置（卡片里最后一个 button），
  * 只能靠图形区分 —— 停止渲染 `<rect>`（方块），发送渲染 `<path>`（箭头）。
  * 按图形判别与界面文案、语言都无关，中英文环境一致。
- * @param target - 事件目标。
- * @returns 是发送主按钮时为 true。
+ * @param target - 事件目标（可能是按钮本身，也可能是它内部的图标）。
+ * @returns 官方发送主按钮；无法确定时 null（此时调用方必须**不拦截**）。
  */
-export function isSendButton(target: EventTarget | null): target is HTMLElement {
-  if (!(target instanceof Element)) return false
+export function sendButtonOf(target: EventTarget | null): HTMLButtonElement | null {
+  if (!(target instanceof Element)) return null
   const card = target.closest(CARD_SELECTOR)
-  if (card === null) return false
+  if (card === null) return null
   const buttons = card.querySelectorAll('button')
-  if (buttons.length === 0) return false
+  if (buttons.length === 0) return null
   const last = buttons[buttons.length - 1]!
-  if (last !== target && !last.contains(target)) return false
-  if (last instanceof HTMLButtonElement && last.disabled) return false
+  // 必须是真正的 <button>：拿到的若是 svg，重放点击会失败。
+  if (!(last instanceof HTMLButtonElement)) return null
+  if (last !== target && !last.contains(target)) return null
+  if (last.disabled) return null
   // 停止键：方块图标。发送键：箭头 path。
-  if (last.querySelector('svg rect') !== null) return false
-  return last.querySelector('svg path') !== null
+  if (last.querySelector('svg rect') !== null) return null
+  if (last.querySelector('svg path') === null) return null
+  return last
 }
 
 /** 一次优化的结果。 */

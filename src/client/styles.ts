@@ -181,38 +181,11 @@ export const menuNote: CSSProperties = {
   padding: '4px 10px 2px',
 }
 
-// ── 快捷指令：输入卡片里的入口按钮（形状对齐官方「展开」胶囊） ─────────────
-
-/** 入口按钮（静止态）。 */
-export const quickButton: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  height: 26,
-  padding: '0 10px',
-  borderRadius: 999,
-  border: '0.5px solid var(--dsw-alias-border-l2)',
-  background: 'transparent',
-  color: 'var(--dsw-alias-label-secondary)',
-  fontSize: 12,
-  lineHeight: 1,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-  flex: '0 0 auto',
-}
-
-/** 入口按钮（面板已展开）。 */
-export const quickButtonActive: CSSProperties = {
-  ...quickButton,
-  color: 'var(--dsw-alias-button-primary-fill)',
-  borderColor: 'var(--dsw-alias-button-primary-fill)',
-  background: 'var(--dsw-alias-interactive-bg-hover)',
-}
-
-/** 入口按钮里的图标。 */
-export const quickButtonIcon: CSSProperties = {
-  flex: '0 0 auto',
-}
+// ── 快捷指令：输入卡片里的入口按钮 ─────────────────────────────────────────
+//
+// 按钮样式**故意不放在这里**：它需要 hover 与展开态，行内样式表达不了，而且
+// 要与旁边官方「展开」按钮（dsh-composer-expand 的 .cpex-btn）逐项对齐。
+// 见 `quick-style.ts` 的注入样式表。
 
 // ── 快捷指令：展开面板 ─────────────────────────────────────────────────────
 

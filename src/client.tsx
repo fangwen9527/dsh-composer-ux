@@ -15,6 +15,7 @@ import {
 import { installInterceptors, runMenuAction } from './client/interceptors.ts'
 import { installPanelStyle } from './client/panel.ts'
 import { installSettingsCardStyle } from './client/settings-style.ts'
+import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
 import { SettingsSection } from './client/SettingsSection.tsx'
@@ -204,6 +205,9 @@ export function apply(ctx: any): void {
 
   // 设置页折叠卡片样式（常驻；只管设置页外观，与总开关无关）。
   ctx.effect(() => installSettingsCardStyle(), 'composer-ux: settings card style')
+
+  // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。
+  ctx.effect(() => installQuickButtonStyle(), 'composer-ux: quick button style')
 
   // 设置面板导航滚动样式（随 panelScroll 开关切换；总开关关闭时一并停用）。
   ctx.effect(

@@ -112,6 +112,18 @@ console.log('2. 默认插入：发送时拼到消息末尾')
   ]
   check('勾选区里的空正文被跳过、其余仍拼接', pure.withAlwaysPrompts('原文', list) === '原文\n\n甲\n\n丙')
 }
+{
+  // 幂等护栏：这是「一直点一直插入」那个 bug 的兜底。
+  // 若发送那一步没成，第二次点击不能再叠一遍，而应放行官方发送。
+  const list = [{ id: '1', label: '甲', prompt: '甲', always: true }]
+  const once = pure.withAlwaysPrompts('原文', list)
+  check('第一次正常附加', once === '原文\n\n甲')
+  check('已以同一后缀结尾 → 不再附加（幂等）', pure.withAlwaysPrompts(once, list) === null)
+  check('尾部有空白也算已附加', pure.withAlwaysPrompts(`${once}   \n`, list) === null)
+  check('中间出现同样文字不算已附加', pure.withAlwaysPrompts('甲\n\n原文', list) === '甲\n\n原文\n\n甲')
+  check('后缀相同但前面还有别的话 → 仍不再叠（结尾匹配）',
+    pure.withAlwaysPrompts('别的\n\n原文\n\n甲', list) === null)
+}
 
 // ══════════════ 3. 发送键 / 停止键的图形判别 ════════════════════════════════
 console.log('3. 发送按钮识别（不依赖界面文案）')
@@ -152,7 +164,21 @@ console.log('3. 发送按钮识别（不依赖界面文案）')
       return other === this || this.nodes.includes(other)
     }
   }
-  class FakeButtonElement extends FakeElement {}
+  /** 真 <button>：有 click()（重放靠它）。 */
+  class FakeButtonElement extends FakeElement {
+    constructor(options) {
+      super(options)
+      this.clickCalls = 0
+      this.click = () => { this.clickCalls += 1 }
+    }
+  }
+  /**
+   * 按钮内部的图标节点：**故意不给 click()**，与真 SVG 一致
+   * （SVGElement 不继承 HTMLElement.click）。0.2.0 的 bug 正是把这种节点
+   * 当成按钮去 .click()，抛 TypeError → 已插入但没发送。
+   */
+  class FakeSvgNode extends FakeElement {}
+
   globalThis.Element = FakeElement
   globalThis.HTMLButtonElement = FakeButtonElement
 
@@ -177,18 +203,23 @@ console.log('3. 发送按钮识别（不依赖界面文案）')
   }
 
   const send = card()
-  check('箭头图标 → 认作发送键', pure.isSendButton(send.primary) === true)
+  check('箭头图标 → 认作发送键', pure.sendButtonOf(send.primary) === send.primary)
   const stop = card({ stop: true })
-  check('方块图标（停止）→ 不认', pure.isSendButton(stop.primary) === false)
-  check('被禁用的发送键 → 不认', pure.isSendButton(card({ disabled: true }).primary) === false)
-  check('工具行里靠前的按钮 → 不认', pure.isSendButton(send.tools[0]) === false)
-  check('卡片本身 → 不认', pure.isSendButton(send.shell) === false)
-  check('卡片外的元素 → 不认', pure.isSendButton(new FakeElement()) === false)
-  check('非元素（null）→ 不认', pure.isSendButton(null) === false)
+  check('方块图标（停止）→ 不认', pure.sendButtonOf(stop.primary) === null)
+  check('被禁用的发送键 → 不认', pure.sendButtonOf(card({ disabled: true }).primary) === null)
+  check('工具行里靠前的按钮 → 不认', pure.sendButtonOf(send.tools[0]) === null)
+  check('卡片本身 → 不认', pure.sendButtonOf(send.shell) === null)
+  check('卡片外的元素 → 不认', pure.sendButtonOf(new FakeElement()) === null)
+  check('非元素（null）→ 不认', pure.sendButtonOf(null) === null)
 
-  const withInner = card({ innerSvg: new FakeElement() })
-  check('点在内层 svg 上 → 仍认作发送键', pure.isSendButton(withInner.innerSvg) === true)
-  check('停止键里点内层图标也不认', pure.isSendButton(card({ stop: true, innerSvg: new FakeElement() }).innerSvg) === false)
+  const withInner = card({ innerSvg: new FakeSvgNode() })
+  const resolved = pure.sendButtonOf(withInner.innerSvg)
+  check('点在内层 svg 上 → 仍认作发送键', resolved === withInner.primary)
+  // 关键回归：拿到的必须是**真按钮**，否则重放点击会抛 TypeError（0.2.0 的 bug）。
+  check('返回的是真 <button>（有 click），而不是 svg',
+    typeof resolved?.click === 'function' && resolved.clickCalls === 0)
+  check('停止键里点内层图标也不认',
+    pure.sendButtonOf(card({ stop: true, innerSvg: new FakeSvgNode() }).innerSvg) === null)
 }
 
 // ══════════════ 4. 提示词资产（提取自 WestFox 的插件） ══════════════════════
@@ -433,6 +464,12 @@ console.log('7. 样式配对（fill 必须配 label-primary-foreground）')
   check('条目按钮可被压缩（flex 1 1 auto + minWidth 0）',
     item.flex === '1 1 auto' && item.minWidth === 0, `flex=${item.flex} minWidth=${item.minWidth}`)
   check('条目按钮不再吃满整行（width 已移除）', item.width === undefined, String(item.width))
+
+  // 入口按钮样式改用注入样式表，且**不能再有行内样式**（行内表达不了 hover）。
+  check('入口按钮有稳定类名', pure.QUICK_BUTTON_CLASS === 'composer-ux-quick-button', pure.QUICK_BUTTON_CLASS)
+  check('入口按钮的旧行内样式已删除',
+    pure.styles.quickButton === undefined && pure.styles.quickButtonActive === undefined
+    && pure.styles.quickButtonIcon === undefined)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

@@ -30,22 +30,31 @@
 - 原文为空时**不附加**（没有「你的消息」可附加，交还官方原语义）；一条都没勾时同样不碰事件。
 - 数据存进本插件既有的 `composer-ux` 设置命名空间（跟另外 8 项设置同一处），换机器也在；净化端逐条收窄形状、按 id 去重、限 60 条 / 4000 字符。
 
-### 开发中修掉的两个渲染 bug（实测截图发现，均未流出）
+### 开发中修掉的问题（均由用户实测截图/操作发现，均未流出）
 
-1. **档位选中态与「优化提示词」按钮白底白字。** 我用了 `--dsw-alias-button-primary-fill` 当填充，却把文字**写死成 `#fff`**。该令牌定义为 `--dsw-alias-brand-primary`：浅色主题下是墨色（深），**深色主题下它是白** —— 于是暗色主题里白底配白字，字完全看不见（用户截图里那个「空白白色按钮」就是它）。
-   ✅ 正解：填充与前景**必须成对**，官方 `ui-primitives/Button.module.css` 的写法是 `background: var(--dsw-alias-button-primary-fill)` + `color: var(--dsw-alias-label-primary-foreground)`；后者在浅色是 `neutral-bluish-00`、深色是 `neutral-bluish-1000`，自动翻转。禁用态改用官方的 `opacity: .4`。
-   注：`button-primary-fill` 本身没错 —— 本插件另有两处把**它当文字色**用在中性底上（`pillActive` / `quickButtonActive`），那是 ink 的正确语义，故保留。
-2. **列表行长预览把「默认插入」勾选框挤出面板。** 条目按钮写了 `width: 100%`，在 flex 行里吃满整行，右侧勾选框被面板的 `overflow: hidden` 裁掉 —— 截图里 `交接文档`、`提交代码` 两行看不到勾选框。
+1. **点了发送只插入、不发送，一直点一直插入。** 官方发送键是个圆形按钮，点击的视觉中心落在它内部的 `<svg>`/`<path>` 上，而 `event.target` 那时**是 SVG 元素** —— `SVGElement` 不继承 `HTMLElement.click()`，于是「先 preventDefault/stopPropagation 再 `button.click()` 重放」里的 `click()` 抛 TypeError：原始点击已被吞掉，重放又没发生 ⇒ **草稿被附加了、消息没发出去**；再点一次又叠一遍。
+   ✅ 正解：`isSendButton(target): boolean` 改为 **`sendButtonOf(target): HTMLButtonElement | null`**，返回真正的 `<button>`（并加 `instanceof HTMLButtonElement` 守卫）而不是 `event.target`；拿不到按钮就**不拦截**，绝不吞掉用户的点击。
+   ✅ 另加**幂等护栏**：草稿已以同一段后缀结尾时 `withAlwaysPrompts` 返回 null，于是第二次点击直接放行官方发送 —— 万一将来发送那一步再出问题，症状会退化成「再点一次就发出去」，而不是无限叠加。
+2. **入口按钮与旁边的官方「展开」按钮不统一（那圈白线）。** 我用 `--dsw-alias-border-l2`（"Secondary stronger border"，更亮）当边框，且没给 `opacity`，于是比 `dsh-composer-expand` 的按钮亮一圈；又因为用了**行内样式**，`hover` 根本表达不出来。
+   ✅ 正解：改为**注入样式表**（`src/client/quick-style.ts`），参数与同一个槽位的 `dsh-composer-expand` 的 `.cpex-btn` **逐项对齐**：`height:24px` / `border:1px solid rgba(127,127,137,.35)`（中性半透明灰，不用更亮的主题令牌）/ `padding:0 9px` / `opacity:.75` / `color:inherit`，并补上 `:hover` 与 `[aria-expanded="true"]` 两个状态。
+3. **档位选中态与「优化提示词」按钮白底白字。** 用 `--dsw-alias-button-primary-fill` 当填充，却把文字**写死成 `#fff`**。该令牌定义为 `--dsw-alias-brand-primary`：浅色主题下是墨色（深），**深色主题下它是白** —— 于是暗色主题里白底配白字（用户截图里那个「空白白色按钮」）。
+   ✅ 正解：填充与前景**必须成对**，官方 `ui-primitives/Button.module.css` 的写法是 `background: var(--dsw-alias-button-primary-fill)` + `color: var(--dsw-alias-label-primary-foreground)`；后者浅色是 `neutral-bluish-00`、深色是 `neutral-bluish-1000`，自动翻转。禁用态改用官方的 `opacity: .4`。
+   注：`button-primary-fill` 本身没错 —— 本插件有两处把**它当文字色**用在中性底上（`pillActive`），那是 ink 的正确语义，故保留。
+4. **列表行长预览把「默认插入」勾选框挤出面板。** 条目按钮写了 `width: 100%`，在 flex 行里吃满整行，右侧勾选框被面板的 `overflow: hidden` 裁掉 —— 截图里 `交接文档`、`提交代码` 两行看不到勾选框。
    ✅ 正解：按钮改 `flex: 1 1 auto; minWidth: 0`，让预览可被压缩。
 
-**新增回归护栏**：`test/quick-commands.mjs` 第 7 节把样式表**当数据**检查 —— 凡是用 `button-primary-fill` 当背景的样式，前景必须是配对令牌；并断言样式表里不再出现写死的 `#fff`；再断言条目按钮可压缩（`flex` / `minWidth` / 无 `width`）。已用「把 bug 放回去」验证过它真的会红（2 项失败并点名到具体样式）。
+**新增回归护栏**（都在 `test/quick-commands.mjs`，且都**做过「把 bug 放回去」验证确认会红**）：
+
+- 第 3 节：假 DOM 里让按钮内部的图标节点**故意没有 `click()`**（与真 SVG 一致），断言 `sendButtonOf(svg)` 返回的是**真按钮**而不是那个图标 —— 这正是问题 1 的根因。
+- 第 2 节：断言幂等（已附加过就不再叠）。
+- 第 7 节：把样式表**当数据**检查 —— 凡用 `button-primary-fill` 当背景的样式，前景必须是配对令牌；样式表里不得再出现写死的 `#fff`；条目按钮必须可压缩；入口按钮的旧行内样式必须已删除。
 
 ### 测试
 
-- 新增 `test/quick-commands.mjs`（**76 项**）：设置净化、末尾拼接语义、发送键图形判别（最小假 DOM，含父链）、三档提示词资产、用假 `webServer` + 假 `llm` 驱动 `lib/index.js` 跑通整条优化往返（200 / 405 / 400 / 模型报错 / 无路由）、宿主半真实注册的那个 settings schema 的默认值解析，以及第 7 节的**样式配对护栏**。
+- 新增 `test/quick-commands.mjs`（**84 项**）：设置净化、末尾拼接语义（含幂等）、发送键图形判别与「返回真按钮」回归（最小假 DOM，含父链）、三档提示词资产、用假 `webServer` + 假 `llm` 驱动 `lib/index.js` 跑通整条优化往返（200 / 405 / 400 / 模型报错 / 无路由）、宿主半真实注册的那个 settings schema 的默认值解析，以及第 7 节的**样式配对 / 行内样式退场护栏**。
 - 新增 `test/client-registration.mjs`（**29 项**）：直接执行 `lib/client.js`，用最小 window/document/React 桩跑一遍 `apply(ctx)`，断言 5 个槽位条目、order=89、拦截器三类监听、以及注入面字段与组件取用的名字一致 —— 这类接线错误构建期看不出来。
 - `test/host-header-mirror.mjs` 的假 ctx 改为遵循 Cordis 的 inject 语义（只在该服务确实挂载时进入回调），35 项保持全绿。
-- 合计 **140 passed, 0 failed**；两个产物经市场「装前体检」同款正则扫描，风险特征 **0 命中**。
+- 合计 **148 passed, 0 failed**；两个产物经市场「装前体检」同款正则扫描，风险特征 **0 命中**。
 
 ## [0.1.5] — 2026-09-13
 

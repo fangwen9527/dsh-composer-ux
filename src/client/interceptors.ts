@@ -16,7 +16,7 @@
 import {
   chordToInit, encodeChord, isEnterFamily, type ChordEvent,
 } from './chords.ts'
-import { applyAlwaysPrompts, isSendButton } from './quick-commands.ts'
+import { applyAlwaysPrompts, sendButtonOf } from './quick-commands.ts'
 import type { ComposerUxSettings, MenuState } from '../settings-contract.ts'
 
 export interface InterceptorDeps {
@@ -147,13 +147,20 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
    * 官方主按钮走的是包内部的 keyboard.submit（没有对外的拦截钩子），所以只能在
    * 捕获阶段认下这次点击。认下之后不去自己调 submit —— 而是先把附加内容写回编辑器、
    * 再用同一个按钮重放一次点击，让官方的 primarySubmitMode（发送 / 排队 / 打断）
-   * 原样生效。中止键是方块图标，与发送键（箭头）不共用判定，见 isSendButton。
+   * 原样生效。
+   *
+   * 两条必须守住的纪律（0.2.0 在这两处都出过事）：
+   *  1. 重放的必须是 `sendButtonOf()` 返回的**真 <button>**，不能是 event.target
+   *     —— 点在圆形按钮的视觉中心时 target 是内部的 svg，svg 没有 `.click()`，
+   *     会抛 TypeError，结果就是「已插入但没发送」。
+   *  2. 只有在确认能重放之后才 preventDefault/stopPropagation；拿不到按钮就直接
+   *     放行，绝不把用户这次点击吞掉。
    */
   const onClickSend = (event: MouseEvent): void => {
     if (replayingSendClick) return
-    if (!isSendButton(event.target)) return
+    const button = sendButtonOf(event.target)
+    if (button === null) return
     if (!applyAlwaysPrompts(deps.settings().quickPrompts)) return
-    const button = event.target as HTMLElement
     event.preventDefault()
     event.stopPropagation()
     replayingSendClick = true

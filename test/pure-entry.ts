@@ -9,9 +9,11 @@ export {
   DEFAULT_SETTINGS, DEFAULT_QUICK_PROMPTS, OPTIMIZER_API_PATH, OPTIMIZER_TIERS,
   QUICK_LABEL_MAX, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, sanitizeSettings,
 } from '../src/settings-contract.ts'
-export { alwaysPrompts, isSendButton, withAlwaysPrompts } from '../src/client/quick-commands.ts'
+export { alwaysPrompts, sendButtonOf, withAlwaysPrompts } from '../src/client/quick-commands.ts'
 export {
   OPTIMIZER_SPECS, buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser,
 } from '../src/optimizer-prompt.ts'
 /** 样式表也当数据测：实色按钮的「填充 + 前景」必须成对（见测试第 7 节）。 */
 export * as styles from '../src/client/styles.ts'
+/** 入口按钮的注入样式表：只取类名常量（installX 会碰 document，不在 node 里跑）。 */
+export { QUICK_BUTTON_CLASS } from '../src/client/quick-style.ts'

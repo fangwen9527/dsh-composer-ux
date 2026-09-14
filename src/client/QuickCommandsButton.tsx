@@ -13,7 +13,7 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ComposerUxSettings } from '../settings-contract.ts'
 import { publishInputBridge, releaseInputBridge, type InputActionsLike } from './quick-commands.ts'
-import { quickButton, quickButtonActive, quickButtonIcon } from './styles.ts'
+import { QUICK_BUTTON_CLASS } from './quick-style.ts'
 
 /** 面板锚点：按钮的视口矩形（面板据此贴在上方）。 */
 export interface QuickPanelAnchor {
@@ -68,11 +68,12 @@ export function QuickCommandsButton({
     <button
       ref={ref}
       type="button"
-      className="composer-ux-quick-button"
+      className={QUICK_BUTTON_CLASS}
       aria-haspopup="dialog"
       aria-expanded={open}
       title="快捷指令：一键插入常用提示词，或把输入框里的话优化成一条清晰的指令"
-      style={open ? quickButtonActive : quickButton}
+      // 样式全部来自注入的样式表（见 quick-style.ts）：与旁边官方「展开」按钮
+      // 逐项对齐，且 hover / 展开态只有样式表能表达。
       // 不让按钮抢走拖动时可能存在的输入框选区（与官方工具行一致）。
       onMouseDown={event => { event.preventDefault() }}
       onClick={() => {
@@ -89,7 +90,6 @@ export function QuickCommandsButton({
         width="12"
         height="12"
         aria-hidden
-        style={quickButtonIcon}
       >
         <path
           d="M9.2 1.2 3.4 9.1h3.5l-0.9 5.7 6-8.1H8.4l0.8-5.5Z"

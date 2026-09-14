@@ -20,7 +20,7 @@ import {
   HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
-  OPENCODE_ROUTE_PREFIX, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD,
+  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD,
   PANEL_WIDTH_FIELD, SEND_KEY_FIELD, newSessionId, parseRouteList,
 } from './settings-contract.ts'
 
@@ -76,9 +76,29 @@ function valueIsValid(value: string): boolean {
 }
 
 /**
+ * provider 的 baseURL 是否指向 OpenCode（含子域）。
+ * 用户自建路由的名字可以是任意字符串（例如 `go`），端点却仍是 OpenCode，
+ * 所以「按 URL 认」比「按名字认」可靠；URL 解析失败时退回子串判断。
+ */
+function isOpencodeBaseUrl(value: unknown): boolean {
+  const raw = textOf(value).trim()
+  if (raw === '') return false
+  let host = ''
+  try {
+    host = new URL(raw).hostname.toLowerCase()
+  } catch {
+    return raw.toLowerCase().includes('opencode.ai')
+  }
+  return OPENCODE_HOSTS.some(name => host === name || host.endsWith(`.${name}`))
+}
+
+/**
  * 本次要写的目标路由。
  * 显式名单只保留 llm-pi-ai 里**已存在**的路由——profile 的 `models` 是必填项，
  * 凭空造一个只有 headers 的 profile 会让整份配置校验失败。
+ * 留空时的自动匹配：路由名以 `opencode` 开头（内置 `opencode-go` 走这条，它的
+ * baseURL 由 pi-ai 目录内置、配置里没有），**或**该路由的 `baseURL` 指向 opencode.ai
+ * （自建路由常起别名，按 URL 认更准）。
  * @param providers - llm-pi-ai 当前的 providers 字典。
  * @param listed - 设置里的「作用路由」名单（留空表示自动匹配）。
  * @returns 目标路由名，顺序跟随 providers 的键顺序。
@@ -88,7 +108,10 @@ function pickRoutes(
   listed: readonly string[],
 ): readonly string[] {
   const keys = Object.keys(providers)
-  if (listed.length === 0) return keys.filter(key => key.startsWith(OPENCODE_ROUTE_PREFIX))
+  if (listed.length === 0) {
+    return keys.filter(key => key.startsWith(OPENCODE_ROUTE_PREFIX)
+      || isOpencodeBaseUrl(objectOf(providers[key])?.baseURL))
+  }
   return listed.filter(key => Object.prototype.hasOwnProperty.call(providers, key))
 }
 
@@ -143,7 +166,7 @@ async function mirrorHeader(settings: SettingsLike): Promise<void> {
       applied.push(route)
     }
     status = applied.length === 0
-      ? `已启用，但没有可写入的路由（目标：${routesText.length === 0 ? `${OPENCODE_ROUTE_PREFIX}*` : routesText.join('、')}）`
+      ? `已启用，但没有可写入的路由（目标：${routesText.length === 0 ? `自动（名字以 ${OPENCODE_ROUTE_PREFIX} 开头，或 baseURL 指向 opencode.ai）` : routesText.join('、')}）`
       : `已写入 ${applied.join('、')}`
   }
 

@@ -206,5 +206,65 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
   check('头已撤销', headersOf(app.state, 'opencode-go')['x-opencode-session'] === undefined)
 }
 
+{
+  console.log('12. 自动匹配：按 baseURL 认出改了名字的 OpenCode 路由')
+  const seed = {
+    [NAMESPACE]: baseOwn({ headerEnabled: true }),
+    [LLM]: {
+      providers: {
+        // 内置路由：配置里没有 baseURL，只能靠名字（opencode 前缀）
+        'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'm1' }] },
+        // 用户自建别名：名字任意，端点仍是 OpenCode —— 这正是「按 URL 认」要覆盖的情形
+        go: { apiKeyEnv: 'GO_API_KEY', baseURL: 'https://opencode.ai/zen/go/v1', models: [{ id: 'm2' }] },
+        // 子域
+        'opencode-zen': { apiKeyEnv: 'K', baseURL: 'https://zen.opencode.ai/v1', models: [{ id: 'm3' }] },
+        // 非 OpenCode：不得写入
+        ds: { apiKeyEnv: 'DS_API_KEY', baseURL: 'https://api.deepseek.com', models: [{ id: 'm4' }] },
+        // 名字里含 opencode 但主机不是它：不得写入
+        mimic: { apiKeyEnv: 'K2', baseURL: 'https://opencode.ai.evil.example/v1', models: [{ id: 'm5' }] },
+      },
+    },
+  }
+  const app = await boot(seed)
+  const value = app.state[NAMESPACE].headerValue
+  const hit = route => headersOf(app.state, route)?.['x-opencode-session'] === value
+  check('内置 opencode-go（按名字）写入', hit('opencode-go'))
+  check('自建别名 go（按 URL）写入', hit('go'))
+  check('子域 zen.opencode.ai 写入', hit('opencode-zen'))
+  check('deepseek 路由未动', headersOf(app.state, 'ds') === undefined)
+  check('仿冒主机 opencode.ai.evil.example 未写入', headersOf(app.state, 'mimic') === undefined)
+  check('状态列出全部命中路由', app.state[NAMESPACE].headerStatus === '已写入 opencode-go、go、opencode-zen', app.state[NAMESPACE].headerStatus)
+}
+
+{
+  console.log('13. 显式名单优先：只写名单里且确实存在的路由')
+  const seed = {
+    [NAMESPACE]: baseOwn({ headerEnabled: true, headerRoutes: 'go, not-there' }),
+    [LLM]: {
+      providers: {
+        'opencode-go': { apiKeyEnv: 'K', models: [{ id: 'm1' }] },
+        go: { apiKeyEnv: 'K', baseURL: 'https://opencode.ai/zen/go/v1', models: [{ id: 'm2' }] },
+      },
+    },
+  }
+  const app = await boot(seed)
+  check('名单里的 go 写入', typeof headersOf(app.state, 'go')?.['x-opencode-session'] === 'string')
+  check('未列入的 opencode-go 不写', headersOf(app.state, 'opencode-go') === undefined)
+}
+
+{
+  console.log('14. baseURL 不是合法 URL 时退回子串判断')
+  const seed = {
+    [NAMESPACE]: baseOwn({ headerEnabled: true }),
+    [LLM]: {
+      providers: {
+        weird: { apiKeyEnv: 'K', baseURL: 'opencode.ai/zen/go/v1', models: [{ id: 'm1' }] },
+      },
+    },
+  }
+  const app = await boot(seed)
+  check('含 opencode.ai 的裸串仍写入', typeof headersOf(app.state, 'weird')?.['x-opencode-session'] === 'string')
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

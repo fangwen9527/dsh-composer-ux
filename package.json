@@ -1,6 +1,6 @@
 {
   "name": "dsh-composer-ux",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + OpenCode 会话请求头（含设置页）",
   "type": "module",
   "main": "./lib/index.js",

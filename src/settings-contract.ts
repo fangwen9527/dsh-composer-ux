@@ -46,7 +46,7 @@ export const MENU_NATIVE_FIELD = 'menuNative'
 export const HEADER_ENABLED_FIELD = 'headerEnabled'
 export const HEADER_NAME_FIELD = 'headerName'
 export const HEADER_VALUE_FIELD = 'headerValue'
-/** 作用路由名单（逗号/空格分隔）；留空 = 自动匹配 opencode 系路由。 */
+/** 作用路由名单（逗号/空格分隔）；留空 = 自动匹配 OpenCode 路由（见 OPENCODE_ROUTE_PREFIX / OPENCODE_HOSTS）。 */
 export const HEADER_ROUTES_FIELD = 'headerRoutes'
 
 /** 宿主半记账：上次实际写入的头名与值（决定停用/改名时撤销哪些键）。 */
@@ -69,8 +69,17 @@ export const HOST_OWNED_FIELDS = [
 /** 请求头最终落地的设置命名空间（由 llm-pi-ai 注册）。 */
 export const LLM_NAMESPACE = 'llm-pi-ai'
 
-/** 作用路由的自动匹配前缀：`providers` 里以它开头的路由。 */
+/**
+ * 自动匹配的两条判据（满足其一即算 OpenCode 路由）：
+ *  1. 路由名以 `opencode` 开头——DSH 内置的 `opencode-go` 就属于这种，
+ *     它的 baseURL 由 pi-ai 目录内置，配置里读不到，只能靠名字。
+ *  2. 该路由的 `baseURL` 主机是 opencode.ai（含子域）——用户自建路由常起任意名字
+ *     （例如 `go`），但端点照样是 OpenCode，按 URL 认比按名字认可靠。
+ */
 export const OPENCODE_ROUTE_PREFIX = 'opencode'
+
+/** 判据 2 用的主机名（含子域）。 */
+export const OPENCODE_HOSTS = ['opencode.ai'] as const
 
 /** 头名默认值 = OpenCode 官方要求的那一个。 */
 export const DEFAULT_HEADER_NAME = 'x-opencode-session'

@@ -531,9 +531,9 @@ export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
         />
         <TextFieldRow
           title="作用路由"
-          desc="逗号或空格分隔；留空 = 自动匹配 opencode 系路由"
+          desc="逗号或空格分隔；留空 = 自动匹配 OpenCode 路由（名字以 opencode 开头，或 baseURL 指向 opencode.ai）"
           value={settings.headerRoutes}
-          placeholder="留空 = 自动（opencode*）"
+          placeholder="留空 = 自动（opencode* 或 opencode.ai 端点）"
           maxLength={HEADER_VALUE_MAX}
           onChange={next => { actions.setField(HEADER_ROUTES_FIELD, next) }}
         />

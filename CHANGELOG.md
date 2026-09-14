@@ -2,6 +2,16 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] — 2026-09-13
+
+### 新增
+- **按 baseURL 识别 OpenCode 路由**：自动匹配（「作用路由」留空）原先只看路由名是否以 `opencode` 开头，因此自建别名路由（例如 `go: { baseURL: https://opencode.ai/zen/go/v1 }`）拿不到请求头。现在改为「名字前缀 **或** baseURL 主机是 `opencode.ai`（含子域）」两者取或——内置 `opencode-go` 仍走名字那条（它的 baseURL 由 pi-ai 目录内置，配置里读不到），自建别名走 URL 那条。
+- 仿冒主机不匹配：`https://opencode.ai.evil.example/v1` 若只做子串判断会误伤，因此改为解析 URL 后比较主机名（解析失败才退回子串）。
+- 设置页「作用路由」的说明与占位符同步更新；无命中时「状态」行会写出实际的匹配规则。
+
+### 测试
+- `test/host-header-mirror.mjs` 新增 3 组（9 项）：按 URL 命中别名路由 / 子域命中 / 非 OpenCode 路由不动 / 仿冒主机不写入 / 显式名单优先 / URL 非法时子串回退。**35 passed, 0 failed**。
+
 ## [0.1.4] — 2026-09-13
 
 ### 文档

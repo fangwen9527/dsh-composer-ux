@@ -35,6 +35,99 @@ export type MenuField = (typeof MENU_FIELDS)[number]
 /** 右键菜单模式字段名：true = 浏览器原生菜单（粘贴免授权），false = 自定义菜单。 */
 export const MENU_NATIVE_FIELD = 'menuNative'
 
+// ── 快捷指令与提示词优化 ─────────────────────────────────────────────────────
+
+/** 快捷指令列表字段名。 */
+export const QUICK_PROMPTS_FIELD = 'quickPrompts'
+
+/** 优化强度档位字段名。 */
+export const OPTIMIZER_TIER_FIELD = 'optimizerTier'
+
+/** 列表条数上限（防脏数据把设置文档撑爆）。 */
+export const QUICK_PROMPT_MAX = 60
+
+/** 单条「名称」的字符上限。 */
+export const QUICK_LABEL_MAX = 40
+
+/** 单条「提示词」的字符上限。 */
+export const QUICK_TEXT_MAX = 4000
+
+/** 优化结果长度上限（超过视为异常产出，截断并提示）。 */
+export const OPTIMIZE_OUTPUT_MAX = 12000
+
+/**
+ * 宿主半为「优化提示词」注册的 HTTP 接口路径。
+ *
+ * 为什么必须走 HTTP：出网请求由宿主的模型适配器发出（浏览器侧碰不到模型路由），
+ * 而宿主半 <-> 客户端半之间没有别的受支持通道 —— 与
+ * WestFox-AwA/dsh-prompt-optimizer 的做法一致。
+ */
+export const OPTIMIZER_API_PATH = '/composer-ux/optimize'
+
+/**
+ * 一条快捷指令。
+ *
+ * `always` 就是界面上的「默认插入」：勾上之后，点发送时这条提示词会被
+ * 自动拼到消息**末尾**一起发出去（输入框里不提前显示），见
+ * `client/quick-commands.ts` 的 `appendAlwaysPrompts()`。
+ */
+export interface QuickPrompt {
+  /** 稳定 id：编辑名称/内容时不变，用于勾选状态与列表 diff。 */
+  readonly id: string
+  /** 按钮上显示的名称。 */
+  readonly label: string
+  /** 点击后插入输入框的提示词正文。 */
+  readonly prompt: string
+  /** 默认插入：发送时自动附加到消息末尾。 */
+  readonly always: boolean
+}
+
+/**
+ * 优化强度档位。
+ *
+ * 三档的系统提示词提取自 WestFox-AwA/dsh-prompt-optimizer（BSD-3-Clause，
+ * 作者「啃轮胎的西狐」）的 `lib/index.js`，见 `optimizer-prompt.ts`。
+ */
+export type OptimizerTier = 'basic' | 'advanced' | 'extreme'
+
+/** 档位元数据（顺序即界面顺序）。 */
+export const OPTIMIZER_TIERS: readonly {
+  readonly id: OptimizerTier
+  readonly label: string
+  readonly hint: string
+}[] = [
+  { id: 'basic', label: '普通', hint: '只做语言层修复：病句、错别字、指代与含糊词，不新增任何需求，篇幅与原文相当。' },
+  { id: 'advanced', label: '高级', hint: '在不动目标的前提下，把「你显然想要、但没说出口」的必要要求补成对 AI 的要求，让它一次做对。' },
+  { id: 'extreme', label: '极端', hint: '按复杂任务处理：固化命令结构 + 分阶段执行计划 + 2~4 种情况的预案。' },
+]
+
+/** 默认档位。 */
+export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'advanced'
+
+/**
+ * 内置的 9 条快捷指令 = 用户口述的 4 条 + 提取自 congyaqwq/dsh-quick-prompts 的 5 条。
+ *
+ * 说明（如实记录调研结果）：另外两个同名插件 lcsdg / lnyuqian 的
+ * dsh-quick-prompts **不带内置指令**（列表默认是空的，靠用户自建），
+ * 所以从它们那里没有可提取的条目。
+ */
+export const DEFAULT_QUICK_PROMPTS: readonly QuickPrompt[] = [
+  { id: 'builtin-1', label: '一问一答', prompt: '你不懂的就问我，一问一答；同时说清楚你为什么要问该问题；直到你对我的目标有明确认知后再开始干活。', always: false },
+  { id: 'builtin-2', label: '交接文档', prompt: '把这次任务、已完成内容、当前卡点、下一步计划、踩过的坑，整理成一份交接文档，写给新会话看。', always: false },
+  { id: 'builtin-3', label: '仅说明原因', prompt: '仅说明原因，不要做其他动作。', always: false },
+  { id: 'builtin-4', label: '分析后直接干', prompt: '分析原因，然后直接开始干活，不需要过问我。', always: false },
+  { id: 'builtin-5', label: '提交代码', prompt: '请帮我提交代码：检查当前 git 变更，生成规范的 commit message 并执行提交。', always: false },
+  { id: 'builtin-6', label: '给方案', prompt: '请针对上面的问题给出一个完整方案，包括思路、步骤、注意事项和风险。', always: false },
+  { id: 'builtin-7', label: '解释代码', prompt: '请解释这段代码的作用和实现思路。', always: false },
+  { id: 'builtin-8', label: '写测试', prompt: '请为下面的代码编写单元测试。', always: false },
+  { id: 'builtin-9', label: '代码审查', prompt: '请对下面的代码进行代码审查，指出问题并给出改进建议。', always: false },
+]
+
+/** 生成一条新快捷指令的 id（时间戳 + 随机后缀，避免与既有 id 碰撞）。 */
+export function newQuickPromptId(): string {
+  return `qp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 // ── OpenCode 请求头 ─────────────────────────────────────────────────────────
 //
 // OpenCode 的接口要求客户端每次请求都带一个稳定的会话 ID 请求头
@@ -104,6 +197,8 @@ export type SettingsField =
   | typeof HEADER_NAME_FIELD
   | typeof HEADER_VALUE_FIELD
   | typeof HEADER_ROUTES_FIELD
+  | typeof QUICK_PROMPTS_FIELD
+  | typeof OPTIMIZER_TIER_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -155,6 +250,10 @@ export interface ComposerUxSettings {
   headerAppliedValue: string
   /** 宿主半写入结果（设置页只读）。 */
   headerStatus: string
+  /** 快捷指令列表（顺序即面板与设置页里的显示顺序）。 */
+  quickPrompts: readonly QuickPrompt[]
+  /** 提示词优化强度档位。 */
+  optimizerTier: OptimizerTier
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -179,6 +278,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   headerAppliedName: '',
   headerAppliedValue: '',
   headerStatus: '',
+  quickPrompts: DEFAULT_QUICK_PROMPTS,
+  optimizerTier: DEFAULT_OPTIMIZER_TIER,
 }
 
 /** 设置页「键位」一节的预设。 */
@@ -240,6 +341,34 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     const v = source[field]
     return typeof v === 'number' && Number.isFinite(v) && v >= 320 && v <= 4000 ? Math.round(v) : undefined
   }
+  /**
+   * 净化快捷指令列表：逐条收窄形状，丢掉残缺项，并按 id 去重保序。
+   * 字段缺失 / 不是数组（首次启用）→ 回落到内置 9 条；字段是数组就照它来，
+   * 空数组也是合法状态（用户把条目全删光，就应当保持全空，不再自动冒出来）。
+   */
+  const asQuickPrompts = (): readonly QuickPrompt[] => {
+    const raw = source[QUICK_PROMPTS_FIELD]
+    if (!Array.isArray(raw)) return DEFAULT_QUICK_PROMPTS
+    const seen = new Set<string>()
+    const out: QuickPrompt[] = []
+    for (const item of raw) {
+      if (out.length >= QUICK_PROMPT_MAX) break
+      if (typeof item !== 'object' || item === null) continue
+      const row = item as Record<string, unknown>
+      const prompt = typeof row.prompt === 'string' ? row.prompt.slice(0, QUICK_TEXT_MAX).trim() : ''
+      if (prompt === '') continue
+      const label = typeof row.label === 'string' ? row.label.slice(0, QUICK_LABEL_MAX).trim() : ''
+      const id = typeof row.id === 'string' && row.id !== '' ? row.id.slice(0, 64) : newQuickPromptId()
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push({ id, label: label === '' ? prompt.slice(0, 12) : label, prompt, always: row.always === true })
+    }
+    return out
+  }
+  const asTier = (): OptimizerTier => {
+    const v = source[OPTIMIZER_TIER_FIELD]
+    return v === 'basic' || v === 'advanced' || v === 'extreme' ? v : DEFAULT_OPTIMIZER_TIER
+  }
   return {
     enabled: asBool(ENABLED_FIELD),
     sendKey: asString(SEND_KEY_FIELD),
@@ -265,5 +394,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     headerAppliedName: asText(HEADER_APPLIED_NAME_FIELD, HEADER_NAME_MAX),
     headerAppliedValue: asText(HEADER_APPLIED_VALUE_FIELD, HEADER_VALUE_MAX),
     headerStatus: asText(HEADER_STATUS_FIELD, HEADER_VALUE_MAX),
+    quickPrompts: asQuickPrompts(),
+    optimizerTier: asTier(),
   }
 }

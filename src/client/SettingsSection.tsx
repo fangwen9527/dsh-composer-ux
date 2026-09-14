@@ -13,10 +13,13 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
   HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  MENU_ITEMS, MENU_NATIVE_FIELD, NEWLINE_PRESETS, PANEL_HEIGHT_FIELD,
-  PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, SEND_PRESETS,
-  newSessionId,
-  type ComposerUxSettings, type MenuField, type SettingsField,
+  MENU_ITEMS, MENU_NATIVE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
+  PANEL_HEIGHT_FIELD,
+  PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_LABEL_MAX,
+  QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
+  newQuickPromptId, newSessionId,
+  type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
+  type SettingsField,
 } from '../settings-contract.ts'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
@@ -33,8 +36,8 @@ export interface SettingsSectionInjected {
     live: SnapshotStore<ComposerUxSettings>
   }
   actions: {
-    /** 写一个字段（键位为规范串，开关为布尔，尺寸为数字）。 */
-    setField: (field: SettingsField, value: boolean | string | number) => void
+    /** 写一个字段（键位为规范串，开关为布尔，尺寸为数字，快捷指令为数组）。 */
+    setField: (field: SettingsField, value: unknown) => void
     /** 清空一个字段（回落到 schema 默认）。 */
     clearField: (field: SettingsField) => void
     /** 全部恢复默认（清空用户覆盖，回落到 schema 默认）。 */
@@ -306,6 +309,125 @@ function TextFieldRow(props: {
   )
 }
 
+/** 快捷指令编辑区：本地草稿 + 显式保存（避免每敲一个字就写一次配置文件）。 */
+function QuickPromptsEditor(props: {
+  items: readonly QuickPrompt[]
+  onSave: (next: readonly QuickPrompt[]) => void
+}) {
+  const [rows, setRows] = useState(() => props.items.map(item => ({ ...item })))
+  const [dirty, setDirty] = useState(false)
+
+  const update = (id: string, patch: Partial<QuickPrompt>): void => {
+    setDirty(true)
+    setRows(current => current.map(row => (row.id === id ? { ...row, ...patch } : row)))
+  }
+  const remove = (id: string): void => {
+    setDirty(true)
+    setRows(current => current.filter(row => row.id !== id))
+  }
+  const add = (): void => {
+    if (rows.length >= QUICK_PROMPT_MAX) return
+    setDirty(true)
+    setRows(current => current.concat([{
+      id: newQuickPromptId(), label: '', prompt: '', always: false,
+    }]))
+  }
+  const move = (index: number, delta: number): void => {
+    const target = index + delta
+    if (target < 0 || target >= rows.length) return
+    setDirty(true)
+    setRows((current) => {
+      const next = [...current]
+      const [row] = next.splice(index, 1)
+      next.splice(target, 0, row!)
+      return next
+    })
+  }
+  const save = (): void => {
+    // 名称留空时用正文开头兜底（净化端也会这么做，这里先给用户一个可见的落点）。
+    const cleaned = rows
+      .map(row => ({
+        ...row,
+        prompt: row.prompt.trim(),
+        label: row.label.trim() === '' ? row.prompt.trim().slice(0, 12) : row.label.trim(),
+      }))
+      .filter(row => row.prompt !== '')
+    props.onSave(cleaned)
+    setRows(cleaned)
+    setDirty(false)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.map((row, index) => (
+        <div
+          key={row.id}
+          style={{
+            display: 'flex', flexDirection: 'column', gap: 6,
+            padding: 8, borderRadius: 8,
+            border: '0.5px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-layer-1)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="text"
+              value={row.label}
+              placeholder="名称，如：仅说明原因"
+              maxLength={QUICK_LABEL_MAX}
+              spellCheck={false}
+              onChange={event => { update(row.id, { label: event.target.value }) }}
+              style={{ ...textInput, flex: '0 0 150px' }}
+            />
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...rowDesc, margin: 0, flex: '0 0 auto' }}>
+              <input
+                type="checkbox"
+                checked={row.always}
+                style={{ margin: 0, cursor: 'pointer' }}
+                onChange={event => { update(row.id, { always: event.target.checked }) }}
+              />
+              默认插入
+            </label>
+            <span style={{ flex: 1 }} />
+            <button type="button" style={pill} title="上移" onClick={() => { move(index, -1) }}>↑</button>
+            <button type="button" style={pill} title="下移" onClick={() => { move(index, 1) }}>↓</button>
+            <button type="button" style={pill} title="删除这条" onClick={() => { remove(row.id) }}>✕</button>
+          </div>
+          <textarea
+            value={row.prompt}
+            placeholder="提示词正文：点击该条目时插入输入框；勾了「默认插入」则在发送时自动附加到消息末尾"
+            maxLength={QUICK_TEXT_MAX}
+            spellCheck={false}
+            rows={Math.min(4, Math.max(2, Math.ceil(row.prompt.length / 46)))}
+            onChange={event => { update(row.id, { prompt: event.target.value }) }}
+            style={{ ...textInput, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+          />
+        </div>
+      ))}
+
+      {rows.length === 0 && (
+        <p style={rowDesc}>还没有条目。点下面的「+ 添加一条」开始建自己的快捷指令。</p>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={pill} onClick={add}>+ 添加一条</button>
+        <button
+          type="button"
+          style={dirty ? pillActive : pill}
+          onClick={save}
+          disabled={!dirty}
+        >
+          {dirty ? '保存修改' : '已保存'}
+        </button>
+        <span style={rowDesc}>
+          共 {rows.length} / {QUICK_PROMPT_MAX} 条 · 勾了「默认插入」的：
+          {rows.filter(row => row.always).length} 条
+        </span>
+      </div>
+    </div>
+  )
+}
+
 /** 设置页主体。 */
 export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
   const settings = useLive(item => item)
@@ -337,6 +459,10 @@ export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
   const headerSummary = settings.headerEnabled
     ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
     : '未启用'
+  const alwaysCount = settings.quickPrompts.filter(item => item.always).length
+  const quickSummary = `${settings.quickPrompts.length} 条`
+    + ` · 默认插入 ${alwaysCount} 条`
+    + ` · 优化档位 ${OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.label ?? '高级'}`
   const headerStatusText = settings.headerEnabled
     ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
     : '未启用（打开上方开关即写入）'
@@ -440,6 +566,58 @@ export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
           </button>
         </div>
         </>)}
+      </FoldCard>
+
+      <FoldCard name="快捷指令" summary={quickSummary}>
+        <p style={bodyLead}>
+          输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框；
+          条目右侧勾上「默认插入」，则在你**点发送时**把这条提示词自动附加到消息**末尾**
+          一起发出去（多条按列表顺序拼接，输入框里不提前显示）。
+          「优化提示词」会用另一个 AI 把输入框里的话整理成一条能直接发出去的清晰指令，
+          结果直接写回输入框（Ctrl+Z 可还原）——不会污染当前对话，也不占你的对话轮次。
+        </p>
+        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+          <div style={rowText}>
+            <div style={rowTitle}>优化强度</div>
+            <div style={rowDesc}>
+              {OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.hint ?? ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {OPTIMIZER_TIERS.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                title={item.hint}
+                style={settings.optimizerTier === item.id ? pillActive : pill}
+                onClick={() => { actions.setField(OPTIMIZER_TIER_FIELD, item.id as OptimizerTier) }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+          <div style={rowText}>
+            <div style={rowTitle}>快捷指令清单</div>
+            <div style={rowDesc}>
+              内置 9 条可以直接用；改完记得点「保存修改」。
+            </div>
+          </div>
+          <QuickPromptsEditor
+            items={settings.quickPrompts}
+            onSave={next => { actions.setField(QUICK_PROMPTS_FIELD, next) }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              style={pill}
+              onClick={() => { actions.clearField(QUICK_PROMPTS_FIELD) }}
+            >
+              恢复内置 9 条
+            </button>
+          </div>
+        </div>
       </FoldCard>
 
       <FoldCard name="设置面板" summary={panelSummary}>

@@ -2,21 +2,25 @@
 
 > **English summary** — A DeepSeek Harness **Web** plugin that upgrades the composer (chat input) experience:
 > configurable **send / newline keys**, a native-style **7-item right-click context menu**, a resizable &
-> scrollable **settings panel with persisted size**, a **global on/off switch**, and automatic
-> **`x-opencode-session` request-header injection** so OpenCode (Go) routes work inside DSH.
+> scrollable **settings panel with persisted size**, a **global on/off switch**, a **quick-command panel**
+> (built-in prompts, click-to-insert, per-item "always append on send"), a **prompt optimizer** that runs a
+> separate model call before you send, and automatic **`x-opencode-session` request-header injection** so
+> OpenCode (Go) routes work inside DSH.
 > Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
 > ships in this repository, so there is **no build step and no build authorization**. License: MIT.
 
 DeepSeek Harness Web 输入体验增强插件：
 
-0. **全局开关**：设置页顶部「启用输入增强」总开关——关闭后键位、右键菜单、设置面板滚动/缩放全部停用（输入框恢复 DSH 原生行为），设置页保留用于一键恢复；开关状态持久保存。
+0. **全局开关**：设置页顶部「启用输入增强」总开关——关闭后键位、右键菜单、快捷指令、设置面板滚动/缩放全部停用（输入框恢复 DSH 原生行为），设置页保留用于一键恢复；开关状态持久保存。
 1. **设置 → 输入体验**（设置页新增条目）
-   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下四个栏目为**可折叠卡片**（标题行只放标题 + 一句动态概览，长说明与控件都在展开后的内容区），**默认全部折叠、不记忆展开状态**，可同时展开多个。
+   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下五个栏目为**可折叠卡片**（标题行只放标题 + 一句动态概览，长说明与控件都在展开后的内容区），**默认全部折叠、不记忆展开状态**，可同时展开多个。
    - **键位**：分别配置「发送键」「换行键」——常用预设（Enter / Ctrl+Enter / Alt+Enter / Shift+Enter）+ 点击「自定义…」后直接按任意组合键录制（Esc 取消，Backspace 清除），支持清空为「无」；发送与换行不能设为相同按键；可一键恢复默认。
    - **右键菜单**：输入框右键菜单的 7 个条目（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）可单独开关；可切换「使用系统原生菜单」（浏览器自带菜单，粘贴免授权）。
+   - **快捷指令**：清单增删改 / 上下移 / 「默认插入」勾选 / 优化强度三档（详见下节）。
    - **设置面板**：导航可滚动开关；边缘拖拽调整面板大小（尺寸记忆持久化）与尺寸预设。
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
-2. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
+2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
+3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
 
 ## 安装
 
@@ -68,6 +72,24 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
 - 样式与系统编辑器菜单一致（深色圆角、三分组、快捷键右对齐）；未选中文本时「剪切 / 复制 / 删除」置灰；被关闭的条目不显示（分隔线自动合并）。
 - 撤销 / 重做 / 剪切 / 复制 / 删除 / 全选 走标准编辑命令；**粘贴 读取剪贴板后在光标处插入纯文本**——这是浏览器的安全限制：首次使用可能出现一次授权提示，被拒绝或无响应时会提示「请用 Ctrl+V 粘贴」。
 - 菜单打开时点击外部、Esc、滚动或窗口变化都会关闭。
+
+## 快捷指令与提示词优化
+
+输入框工具行里、「展开」按钮的左侧有一个同款胶囊按钮「快捷指令」（槽位 `conversation.input.right`，order 89 < 官方「展开」的 90）。点开展开面板：
+
+- **快捷指令清单**：点条目把内容插入输入框（原有内容保留、另起一行）。内置 9 条，可在 设置 → 输入体验 → 快捷指令 里增删改、上下移、恢复内置。
+- **「默认插入」**：条目右侧的勾选框。勾上后，在你**点发送时**（Enter 或官方发送按钮）勾选的提示词会自动拼到消息**末尾**一起发出，输入框里不提前显示；多条按列表顺序拼接、条目间空一行。原文为空时不附加（交还官方原语义）。
+- **优化提示词**：把输入框里的话交给**另一个 AI** 整理成一条能直接发给工作 AI 的清晰指令，结果**直接写回输入框**（Ctrl+Z 可还原）。三档强度：普通 / 高级（默认）/ 极端。
+
+### 为什么优化要走宿主的 HTTP 接口
+
+出网请求由宿主的模型适配器发出，浏览器侧碰不到模型路由；宿主半与客户端半之间也没有别的受支持通道。所以「优化提示词」是一次往返：浏览器 `POST /composer-ux/optimize` → 宿主用 `ctx.get('llm').stream(...)` 独立跑一次模型调用 → 把优化后的正文回给浏览器填进输入框。这条路径与 [WestFox-AwA/dsh-prompt-optimizer](https://github.com/WestFox-AwA/dsh-prompt-optimizer) 同构，系统提示词也逐字提取自它（BSD-3-Clause，作者「啃轮胎的西狐」），落在 `src/optimizer-prompt.ts` 并保留署名。
+
+优化用的模型**跟随你当前的默认模型**（`agentDefaultModel.currentSelection()`），不额外配置；每次优化会花一次模型调用，但**不占对话轮次、不进会话历史**。
+
+### 「发送时附加」为什么不自造提交
+
+Enter 那一路沿用既有的合成 Enter 回放；**官方发送按钮**那一路在捕获阶段认下点击、先把附加内容写回编辑器、再用同一个按钮重放一次点击。这样官方对「发送 / 排队 / 打断」的判定原样生效，本插件不做第二套提交语义。发送键与停止键共用同一个位置，靠图形区分——停止渲染 `<rect>`（方块），发送渲染 `<path>`（箭头），与界面文案、语言无关。
 
 ## OpenCode 请求头
 

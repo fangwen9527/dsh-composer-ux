@@ -60,8 +60,24 @@ async function boot(seed) {
       }
     },
   }
+  const services = {
+    settings,
+    /** Cordis 的 ctx.effect：执行一次并登记清理函数。 */
+    effect: (fn) => {
+      const dispose = fn()
+      return () => { if (typeof dispose === 'function') dispose() }
+    },
+    get: (name) => services[name],
+  }
   const ctx = {
-    inject: (_deps, callback) => { callback({ settings }) },
+    // 只在该服务确实挂载时才进入回调 —— 与 Cordis 的 inject 语义一致。
+    // 本用例不提供 webServer/llm，因此「提示词优化接口」那一段会被跳过，
+    // 请求头镜像的行为不受影响（路由本身在 test/quick-commands.mjs 里单独验）。
+    inject: (deps, callback) => {
+      if (!deps.every(dep => services[dep] !== undefined)) return
+      callback(services)
+    },
+    effect: services.effect,
     on: (name, listener) => { listeners.push({ name, listener }) },
   }
   apply(ctx)

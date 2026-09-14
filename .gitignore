@@ -6,3 +6,5 @@ package-lock.json
 
 # 本地路径相关的开发用覆盖层（含本机绝对路径，不随仓库发布）
 cordis.dev.patch.yml
+# 测试用 esbuild 中间产物
+test/.build/

@@ -16,6 +16,7 @@
 import {
   chordToInit, encodeChord, isEnterFamily, type ChordEvent,
 } from './chords.ts'
+import { applyAlwaysPrompts, isSendButton } from './quick-commands.ts'
 import type { ComposerUxSettings, MenuState } from '../settings-contract.ts'
 
 export interface InterceptorDeps {
@@ -43,6 +44,9 @@ function overlayOpen(): boolean {
 
 /** 回放进行中标志：合成事件回到捕获监听器时跳过自身拦截。 */
 let replaying = false
+
+/** 官方发送按钮的「先写回、再重放」标志（避免合成点击被自己再拦一次）。 */
+let replayingSendClick = false
 
 /** 右键时预读成功的剪贴板文本缓存（null = 未预读/预读失败）。 */
 let pasteCache: string | null = null
@@ -100,6 +104,10 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
     if (event.repeat) return
 
     if (gesture === 'send') {
+      // 「默认插入」：先把勾选的提示词写回编辑器末尾，再回放发送手势 ——
+      // 官方手势照旧（含运行中「排队 / 打断」的判定），本插件不做第二套判断。
+      // 原文为空时 applyAlwaysPrompts 返回 false，一切照旧。
+      applyAlwaysPrompts(settings.quickPrompts)
       dispatchKey(root, chordToInit('Enter'))
     } else if (gesture === 'newline') {
       dispatchKey(root, chordToInit('Shift+Enter'))
@@ -133,11 +141,36 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
     prefetchClipboard()
   }
 
+  /**
+   * 官方「发送」按钮上的「默认插入」。
+   *
+   * 官方主按钮走的是包内部的 keyboard.submit（没有对外的拦截钩子），所以只能在
+   * 捕获阶段认下这次点击。认下之后不去自己调 submit —— 而是先把附加内容写回编辑器、
+   * 再用同一个按钮重放一次点击，让官方的 primarySubmitMode（发送 / 排队 / 打断）
+   * 原样生效。中止键是方块图标，与发送键（箭头）不共用判定，见 isSendButton。
+   */
+  const onClickSend = (event: MouseEvent): void => {
+    if (replayingSendClick) return
+    if (!isSendButton(event.target)) return
+    if (!applyAlwaysPrompts(deps.settings().quickPrompts)) return
+    const button = event.target as HTMLElement
+    event.preventDefault()
+    event.stopPropagation()
+    replayingSendClick = true
+    try {
+      button.click()
+    } finally {
+      replayingSendClick = false
+    }
+  }
+
   window.addEventListener('keydown', onKeyDown, true)
   window.addEventListener('contextmenu', onContextMenu, true)
+  window.addEventListener('click', onClickSend, true)
   return () => {
     window.removeEventListener('keydown', onKeyDown, true)
     window.removeEventListener('contextmenu', onContextMenu, true)
+    window.removeEventListener('click', onClickSend, true)
   }
 }
 

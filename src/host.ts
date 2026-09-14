@@ -16,13 +16,17 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import {
-  DEFAULT_HEADER_NAME, DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_APPLIED_NAME_FIELD,
+  DEFAULT_HEADER_NAME, DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
+  HEADER_APPLIED_NAME_FIELD,
   HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
-  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD,
-  PANEL_WIDTH_FIELD, SEND_KEY_FIELD, newSessionId, parseRouteList,
+  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZER_API_PATH,
+  OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD,
+  PANEL_WIDTH_FIELD, QUICK_LABEL_MAX, QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX,
+  QUICK_TEXT_MAX, SEND_KEY_FIELD, newSessionId, parseRouteList, DEFAULT_OPTIMIZER_TIER,
 } from './settings-contract.ts'
+import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser } from './optimizer-prompt.ts'
 
 export const name = 'composer-ux'
 
@@ -247,6 +251,15 @@ export function apply(ctx: Context): void {
         [HEADER_APPLIED_NAME_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedName),
         [HEADER_APPLIED_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedValue),
         [HEADER_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.headerStatus),
+        // 快捷指令列表：结构固定为 {id,label,prompt,always}，逐条自带默认值，
+        // 让旧设置文档（没有这个键）在读取时直接得到内置 9 条。
+        [QUICK_PROMPTS_FIELD]: z.array(z.object({
+          id: z.string().default(''),
+          label: z.string().default(''),
+          prompt: z.string().default(''),
+          always: z.boolean().default(false),
+        })).default(DEFAULT_QUICK_PROMPTS.map(item => ({ ...item }))),
+        [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
       }),
     )
 
@@ -280,5 +293,150 @@ export function apply(ctx: Context): void {
     ctx.on('settings/updated' as never, onSettingsUpdated as never)
     // 启动即对齐一次：启用状态下的头即使在别处被抹掉，也会在此补回。
     sync()
+  })
+
+  // ── 提示词优化接口 ────────────────────────────────────────────────────────
+  //
+  // 为什么必须在宿主半：出网请求由宿主的模型适配器发出，浏览器侧碰不到模型路由。
+  // 所以「优化提示词」是一次「浏览器 POST 原文 -> 宿主独立跑一次模型调用 ->
+  // 把优化后的正文回给浏览器填进输入框」的往返。这与
+  // WestFox-AwA/dsh-prompt-optimizer 的架构一致（它的系统提示词也已提取到
+  // ./optimizer-prompt.ts）。
+  ctx.inject(['webServer', 'llm'], (optCtx) => {
+    /** 单次优化的墙钟上限：够慢模型跑完，但不会让请求永远挂着。 */
+    const LLM_TIMEOUT_MS = 180_000
+    /** 请求体上限（输入框里的原文，正常都是几 KB）。 */
+    const BODY_MAX_BYTES = 1_000_000
+    /** 直接送去优化的原文长度上限。 */
+    const TEXT_MAX = QUICK_TEXT_MAX * 2
+
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(payload))
+    }
+
+    const readBody = async (req: AsyncIterable<unknown>): Promise<string> => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+        total += buf.length
+        if (total > BODY_MAX_BYTES) throw new Error('请求体过大')
+        chunks.push(buf)
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    }
+
+    /** 解析本次优化用哪条路由：请求体优先，其次当前默认模型。 */
+    const resolveRoute = (payload: Record<string, unknown>): { provider: string; model: string } => {
+      const provider = textOf(payload.provider)
+      const model = textOf(payload.model)
+      if (provider !== '' && model !== '') return { provider, model }
+      try {
+        const selector = optCtx.get('agentDefaultModel') as
+          { currentSelection?: () => { provider?: unknown; model?: unknown } } | undefined
+        const current = selector?.currentSelection?.()
+        return { provider: textOf(current?.provider), model: textOf(current?.model) }
+      } catch {
+        return { provider: '', model: '' }
+      }
+    }
+
+    const handle = async (
+      req: { method?: string; [key: string]: unknown },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): Promise<void> => {
+      if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 POST' })
+        return
+      }
+      let payload: Record<string, unknown>
+      try {
+        payload = objectOf(JSON.parse(await readBody(req as unknown as AsyncIterable<unknown>)))
+          ?? {}
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: `请求体不是合法 JSON：${errorText(error)}` })
+        return
+      }
+
+      const text = textOf(payload.text).trim()
+      if (text === '') {
+        sendJson(res, 400, { ok: false, error: '输入框是空的，没有可优化的内容' })
+        return
+      }
+      if (text.length > TEXT_MAX) {
+        sendJson(res, 400, { ok: false, error: `原文过长（上限 ${TEXT_MAX} 字符）` })
+        return
+      }
+
+      const tier = textOf(payload.tier) === '' ? DEFAULT_OPTIMIZER_TIER : textOf(payload.tier)
+      const route = resolveRoute(payload)
+      if (route.provider === '' || route.model === '') {
+        sendJson(res, 200, { ok: false, error: '拿不到当前的模型路由，无法优化（请先在输入框旁的模型选择器里选一个模型）' })
+        return
+      }
+
+      const controller = new AbortController()
+      const timer = setTimeout(() => { controller.abort() }, LLM_TIMEOUT_MS)
+      let out = ''
+      let failure = ''
+      try {
+        const stream = optCtx.llm.stream({
+          provider: route.provider,
+          model: route.model,
+          system: buildOptimizeSystem(tier),
+          temperature: buildOptimizeTemperature(tier),
+          signal: controller.signal,
+          messages: [{
+            id: `optimize-${Date.now().toString(36)}`,
+            role: 'user',
+            content: [{ type: 'text', text: buildOptimizeUser(text) }],
+            source: { kind: 'user' },
+          }],
+        })
+        for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
+          if (chunk.type === 'text-delta') {
+            out += String(chunk.text ?? '')
+            if (out.length > OPTIMIZE_OUTPUT_MAX) break
+          } else if (chunk.type === 'finish') {
+            const reason = objectOf(chunk.reason)
+            if (reason?.kind === 'error' || reason?.kind === 'aborted') {
+              const detail = objectOf(reason.failure)
+              failure = textOf(detail?.message) || (reason.kind === 'aborted' ? '优化被中断' : '模型返回错误')
+            }
+          }
+        }
+      } catch (error: unknown) {
+        failure = errorText(error)
+      } finally {
+        clearTimeout(timer)
+      }
+
+      const optimized = out.trim()
+      if (optimized === '') {
+        sendJson(res, 200, {
+          ok: false,
+          error: failure === '' ? '模型没有产出任何内容' : `优化失败：${failure}`,
+        })
+        return
+      }
+      sendJson(res, 200, {
+        ok: true,
+        text: optimized.slice(0, OPTIMIZE_OUTPUT_MAX),
+        truncated: out.length > OPTIMIZE_OUTPUT_MAX,
+        provider: route.provider,
+        model: route.model,
+      })
+    }
+
+    optCtx.effect(() => optCtx.webServer.register({
+      kind: 'exact',
+      path: OPTIMIZER_API_PATH,
+      handler: handle as never,
+    }), 'composer-ux: prompt optimizer route')
   })
 }

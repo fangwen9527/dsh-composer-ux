@@ -180,3 +180,229 @@ export const menuNote: CSSProperties = {
   lineHeight: 1.4,
   padding: '4px 10px 2px',
 }
+
+// ── 快捷指令：输入卡片里的入口按钮（形状对齐官方「展开」胶囊） ─────────────
+
+/** 入口按钮（静止态）。 */
+export const quickButton: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  height: 26,
+  padding: '0 10px',
+  borderRadius: 999,
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  fontSize: 12,
+  lineHeight: 1,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  flex: '0 0 auto',
+}
+
+/** 入口按钮（面板已展开）。 */
+export const quickButtonActive: CSSProperties = {
+  ...quickButton,
+  color: 'var(--dsw-alias-button-primary-fill)',
+  borderColor: 'var(--dsw-alias-button-primary-fill)',
+  background: 'var(--dsw-alias-interactive-bg-hover)',
+}
+
+/** 入口按钮里的图标。 */
+export const quickButtonIcon: CSSProperties = {
+  flex: '0 0 auto',
+}
+
+// ── 快捷指令：展开面板 ─────────────────────────────────────────────────────
+
+/** 面板容器（fixed 定位，锚点在入口按钮上方）。 */
+export const quickPanel: CSSProperties = {
+  position: 'fixed',
+  zIndex: 9999,
+  width: 420,
+  maxWidth: 'calc(100vw - 24px)',
+  maxHeight: 'min(60vh, 520px)',
+  display: 'flex',
+  flexDirection: 'column',
+  background: 'var(--dsw-specific-menu)',
+  border: '0.5px solid var(--dsw-alias-border-l1)',
+  borderRadius: 12,
+  boxShadow: 'var(--dsw-elevation-prominent)',
+  pointerEvents: 'auto',
+  overflow: 'hidden',
+}
+
+/** 面板顶部区（标题 + 档位 + 优化按钮）。 */
+export const quickPanelHead: CSSProperties = {
+  padding: '10px 12px 8px',
+  borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+}
+
+/** 面板标题行。 */
+export const quickPanelTitleRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+/** 面板标题。 */
+export const quickPanelTitle: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 13,
+  fontWeight: 600,
+}
+
+/** 档位分段控件。 */
+export const quickTierRow: CSSProperties = {
+  display: 'inline-flex',
+  gap: 2,
+  padding: 2,
+  borderRadius: 999,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+}
+
+/** 单个档位按钮。 */
+export const quickTierButton: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  lineHeight: 1,
+  padding: '4px 8px',
+  borderRadius: 999,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+/** 选中档位。 */
+export const quickTierButtonActive: CSSProperties = {
+  ...quickTierButton,
+  background: 'var(--dsw-alias-button-primary-fill)',
+  color: '#fff',
+}
+
+/** 主行动按钮（优化提示词）。 */
+export const quickPrimaryButton: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  width: '100%',
+  padding: '7px 12px',
+  borderRadius: 8,
+  border: '0.5px solid var(--dsw-alias-button-primary-fill)',
+  background: 'var(--dsw-alias-button-primary-fill)',
+  color: '#fff',
+  fontSize: 12,
+  cursor: 'pointer',
+}
+
+/** 主行动按钮（不可用）。 */
+export const quickPrimaryButtonDisabled: CSSProperties = {
+  ...quickPrimaryButton,
+  opacity: 0.5,
+  cursor: 'default',
+}
+
+/** 条目列表容器（可滚动）。 */
+export const quickList: CSSProperties = {
+  overflowY: 'auto',
+  padding: '6px 6px 8px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+}
+
+/** 一条快捷指令。 */
+export const quickItem: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '5px 8px',
+  borderRadius: 7,
+  cursor: 'pointer',
+  background: 'transparent',
+  border: 'none',
+  width: '100%',
+  textAlign: 'left',
+}
+
+/** 条目名称。 */
+export const quickItemLabel: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  flex: '0 0 auto',
+  whiteSpace: 'nowrap',
+}
+
+/** 条目内容预览。 */
+export const quickItemPreview: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  flex: '1 1 auto',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+/** 「默认插入」勾选区。 */
+export const quickAlwaysLabel: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  flex: '0 0 auto',
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+}
+
+/** 勾选框。 */
+export const quickAlwaysBox: CSSProperties = {
+  margin: 0,
+  cursor: 'pointer',
+}
+
+/** 面板底部提示条。 */
+export const quickPanelFoot: CSSProperties = {
+  padding: '5px 12px 7px',
+  borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+/** 面板里的提示文字。 */
+export const quickNotice: CSSProperties = {
+  color: 'var(--dsw-alias-state-warn-label)',
+  fontSize: 11,
+  lineHeight: 1.4,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+/** 面板里的次要说明。 */
+export const quickFootHint: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  whiteSpace: 'nowrap',
+  flex: '0 0 auto',
+}
+
+/** 空列表占位。 */
+export const quickEmpty: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 12,
+  lineHeight: 1.6,
+  padding: '14px 10px',
+  textAlign: 'center',
+}

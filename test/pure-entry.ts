@@ -13,3 +13,5 @@ export { alwaysPrompts, isSendButton, withAlwaysPrompts } from '../src/client/qu
 export {
   OPTIMIZER_SPECS, buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser,
 } from '../src/optimizer-prompt.ts'
+/** 样式表也当数据测：实色按钮的「填充 + 前景」必须成对（见测试第 7 节）。 */
+export * as styles from '../src/client/styles.ts'

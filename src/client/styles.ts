@@ -280,14 +280,18 @@ export const quickTierButton: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-/** 选中档位。 */
+/** 选中档位。
+ *  前景必须用配对令牌 `label-primary-foreground`：`button-primary-fill` 取自
+ *  `brand-primary`，浅色主题下是墨色/深色，**深色主题下它是白**——此时写死
+ *  `#fff` 就是白底白字（0.2.0 真踩过）。官方 ui-primitives/Button 的成对写法
+ *  就是 fill + label-primary-foreground。 */
 export const quickTierButtonActive: CSSProperties = {
   ...quickTierButton,
   background: 'var(--dsw-alias-button-primary-fill)',
-  color: '#fff',
+  color: 'var(--dsw-alias-label-primary-foreground)',
 }
 
-/** 主行动按钮（优化提示词）。 */
+/** 主行动按钮（优化提示词）。同上：fill 与前景必须成对。 */
 export const quickPrimaryButton: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -298,15 +302,15 @@ export const quickPrimaryButton: CSSProperties = {
   borderRadius: 8,
   border: '0.5px solid var(--dsw-alias-button-primary-fill)',
   background: 'var(--dsw-alias-button-primary-fill)',
-  color: '#fff',
+  color: 'var(--dsw-alias-label-primary-foreground)',
   fontSize: 12,
   cursor: 'pointer',
 }
 
-/** 主行动按钮（不可用）。 */
+/** 主行动按钮（不可用）：与官方 .primary:disabled 一致用 0.4。 */
 export const quickPrimaryButtonDisabled: CSSProperties = {
   ...quickPrimaryButton,
-  opacity: 0.5,
+  opacity: 0.4,
   cursor: 'default',
 }
 
@@ -319,7 +323,10 @@ export const quickList: CSSProperties = {
   gap: 2,
 }
 
-/** 一条快捷指令。 */
+/** 一条快捷指令。
+ *  注意：这一行里还有「默认插入」勾选框，所以按钮必须可被压缩
+ *  （flex 1 1 auto + minWidth 0），否则长预览会把勾选框挤出面板
+ *  （width:100% 会吃满整行，0.2.0 真踩过）。 */
 export const quickItem: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -329,7 +336,8 @@ export const quickItem: CSSProperties = {
   cursor: 'pointer',
   background: 'transparent',
   border: 'none',
-  width: '100%',
+  flex: '1 1 auto',
+  minWidth: 0,
   textAlign: 'left',
 }
 

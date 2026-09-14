@@ -404,5 +404,36 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
   check('空列表是合法值（被尊重，不回落）', empty.quickPrompts.length === 0)
 }
 
+// ══════════════ 7. 样式：实色按钮的「填充 + 前景」必须成对 ═══════════════════
+//
+// 这一节是一次真实事故的回归护栏：`--dsw-alias-button-primary-fill` 取自
+// `--dsw-alias-brand-primary`，浅色主题是墨色（深），**深色主题却是白**。
+// 一旦给它配写死的 `#fff`，暗色主题下就是白底白字 —— 组件渲染不出来，
+// 任何行为测试都发现不了，只有把样式对象当数据查才能提前拦住。
+console.log('7. 样式配对（fill 必须配 label-primary-foreground）')
+{
+  const FILL = 'var(--dsw-alias-button-primary-fill)'
+  const FOREGROUND = 'var(--dsw-alias-label-primary-foreground)'
+  const solid = Object.entries(pure.styles)
+    .filter(([, style]) => typeof style?.background === 'string' && style.background.includes(FILL))
+
+  check('确实存在用到该填充的样式（防止本测试空跑）', solid.length >= 2, `命中 ${solid.length} 条`)
+  for (const [name, style] of solid) {
+    check(`${name}: 前景用配对令牌而非写死白`, style.color === FOREGROUND, String(style.color))
+  }
+
+  // 反向：整个样式表里不该再出现写死的 #fff（本插件没有需要固定白字的实色块）。
+  const hardWhite = Object.entries(pure.styles)
+    .filter(([, style]) => typeof style?.color === 'string' && /^#fff(f{0,2})?$/i.test(style.color.trim()))
+    .map(([name]) => name)
+  check('没有样式把文字写死成 #fff', hardWhite.length === 0, hardWhite.join(', '))
+
+  // 列表行必须可压缩，否则「默认插入」勾选框会被长预览挤出面板。
+  const item = pure.styles.quickItem
+  check('条目按钮可被压缩（flex 1 1 auto + minWidth 0）',
+    item.flex === '1 1 auto' && item.minWidth === 0, `flex=${item.flex} minWidth=${item.minWidth}`)
+  check('条目按钮不再吃满整行（width 已移除）', item.width === undefined, String(item.width))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

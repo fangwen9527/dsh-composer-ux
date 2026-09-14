@@ -30,12 +30,22 @@
 - 原文为空时**不附加**（没有「你的消息」可附加，交还官方原语义）；一条都没勾时同样不碰事件。
 - 数据存进本插件既有的 `composer-ux` 设置命名空间（跟另外 8 项设置同一处），换机器也在；净化端逐条收窄形状、按 id 去重、限 60 条 / 4000 字符。
 
+### 开发中修掉的两个渲染 bug（实测截图发现，均未流出）
+
+1. **档位选中态与「优化提示词」按钮白底白字。** 我用了 `--dsw-alias-button-primary-fill` 当填充，却把文字**写死成 `#fff`**。该令牌定义为 `--dsw-alias-brand-primary`：浅色主题下是墨色（深），**深色主题下它是白** —— 于是暗色主题里白底配白字，字完全看不见（用户截图里那个「空白白色按钮」就是它）。
+   ✅ 正解：填充与前景**必须成对**，官方 `ui-primitives/Button.module.css` 的写法是 `background: var(--dsw-alias-button-primary-fill)` + `color: var(--dsw-alias-label-primary-foreground)`；后者在浅色是 `neutral-bluish-00`、深色是 `neutral-bluish-1000`，自动翻转。禁用态改用官方的 `opacity: .4`。
+   注：`button-primary-fill` 本身没错 —— 本插件另有两处把**它当文字色**用在中性底上（`pillActive` / `quickButtonActive`），那是 ink 的正确语义，故保留。
+2. **列表行长预览把「默认插入」勾选框挤出面板。** 条目按钮写了 `width: 100%`，在 flex 行里吃满整行，右侧勾选框被面板的 `overflow: hidden` 裁掉 —— 截图里 `交接文档`、`提交代码` 两行看不到勾选框。
+   ✅ 正解：按钮改 `flex: 1 1 auto; minWidth: 0`，让预览可被压缩。
+
+**新增回归护栏**：`test/quick-commands.mjs` 第 7 节把样式表**当数据**检查 —— 凡是用 `button-primary-fill` 当背景的样式，前景必须是配对令牌；并断言样式表里不再出现写死的 `#fff`；再断言条目按钮可压缩（`flex` / `minWidth` / 无 `width`）。已用「把 bug 放回去」验证过它真的会红（2 项失败并点名到具体样式）。
+
 ### 测试
 
-- 新增 `test/quick-commands.mjs`（**69 项**）：设置净化、末尾拼接语义、发送键图形判别（最小假 DOM，含父链）、三档提示词资产、用假 `webServer` + 假 `llm` 驱动 `lib/index.js` 跑通整条优化往返（200 / 405 / 400 / 模型报错 / 无路由），以及**宿主半真实注册的那个 settings schema** 的默认值解析（旧设置文档必须回落内置 9 条，否则升级后面板会是空的）。
+- 新增 `test/quick-commands.mjs`（**76 项**）：设置净化、末尾拼接语义、发送键图形判别（最小假 DOM，含父链）、三档提示词资产、用假 `webServer` + 假 `llm` 驱动 `lib/index.js` 跑通整条优化往返（200 / 405 / 400 / 模型报错 / 无路由）、宿主半真实注册的那个 settings schema 的默认值解析，以及第 7 节的**样式配对护栏**。
 - 新增 `test/client-registration.mjs`（**29 项**）：直接执行 `lib/client.js`，用最小 window/document/React 桩跑一遍 `apply(ctx)`，断言 5 个槽位条目、order=89、拦截器三类监听、以及注入面字段与组件取用的名字一致 —— 这类接线错误构建期看不出来。
 - `test/host-header-mirror.mjs` 的假 ctx 改为遵循 Cordis 的 inject 语义（只在该服务确实挂载时进入回调），35 项保持全绿。
-- 合计 **133 passed, 0 failed**；两个产物经市场「装前体检」同款正则扫描，风险特征 **0 命中**。
+- 合计 **140 passed, 0 failed**；两个产物经市场「装前体检」同款正则扫描，风险特征 **0 命中**。
 
 ## [0.1.5] — 2026-09-13
 

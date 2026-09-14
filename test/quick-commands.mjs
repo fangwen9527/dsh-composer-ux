@@ -10,7 +10,7 @@
  *
  *   node test/quick-commands.mjs
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { build } from 'esbuild'
 import { apply } from '../lib/index.js'
 
@@ -470,6 +470,63 @@ console.log('7. 样式配对（fill 必须配 label-primary-foreground）')
   check('入口按钮的旧行内样式已删除',
     pure.styles.quickButton === undefined && pure.styles.quickButtonActive === undefined
     && pure.styles.quickButtonIcon === undefined)
+}
+
+// ══════════════ 8. 设置面板尺寸手柄：层叠上下文陷阱的护栏 ═══════════════════
+//
+// 背景（0.2.0 整段功能失效）：手柄原先渲染在 shell.overlay 里、用视口坐标对准
+// 面板画。但 shell.overlay 被官方封在
+// `.overlayLayer { position:absolute; inset:0; z-index:20 }` —— position + z-index
+// 使它自成层叠上下文，里面的 z-index 再大也出不去，永远排在设置弹窗
+// （.overlay z-index:1000）下面，被全屏遮罩吃掉鼠标。
+// 修法：把手柄 createPortal 到面板内部。下面的断言守住这个修法。
+console.log('8. 设置面板尺寸手柄（挂进面板内部，不比层叠）')
+{
+  const SOURCE = readFileSync('src/client/PanelResizeHandles.tsx', 'utf8')
+
+  check('手柄通过 createPortal 挂进面板', SOURCE.includes('createPortal('))
+
+  // 反例：靠"大 z-index"压在弹窗上是无效的（层叠上下文封死了），必须不许再出现。
+  const zIndexEscapes = SOURCE.match(/zIndex:\s*\d{3,}/g) ?? []
+  check('不再靠大 z-index 压弹窗（层叠上下文里无效）', zIndexEscapes.length === 0, zIndexEscapes.join(','))
+
+  // 定位必须相对面板，而不是视口坐标。
+  const boxes = ['left', 'right', 'top', 'bottom', 'br'].map(edge => [edge, pure.handleBox(edge)])
+  check('五个位置都有定位盒', boxes.length === 5)
+  const malformed = boxes.filter(([edge, box]) => {
+    const anchors = ['left', 'right', 'top', 'bottom'].filter(k => typeof box[k] === 'number')
+    const hasSize = typeof box.width === 'number' || typeof box.height === 'number'
+    return anchors.length === 0 || !hasSize || typeof box.cursor !== 'string' || box.cursor === ''
+  }).map(([edge]) => String(edge))
+  check('每个手柄都有锚边 + 尺寸 + 光标', malformed.length === 0, malformed.join(', '))
+  const huge = boxes.flatMap(([edge, box]) => Object.entries(box)
+    .filter(([key, value]) => key !== 'cursor' && typeof value === 'number' && value > 40)
+    .map(([key, value]) => `${edge}.${key}=${value}`))
+  check('定位是面板内相对值（没有视口级大坐标）', huge.length === 0, huge.join(', '))
+  check('四边各自贴对应的一边', pure.handleBox('left').left === 0 && pure.handleBox('right').right === 0
+    && pure.handleBox('top').top === 0 && pure.handleBox('bottom').bottom === 0)
+  check('四边带对应方向的缩放光标',
+    pure.handleBox('left').cursor === 'ew-resize' && pure.handleBox('right').cursor === 'ew-resize'
+    && pure.handleBox('top').cursor === 'ns-resize' && pure.handleBox('bottom').cursor === 'ns-resize')
+  check('右下角抓手带对角缩放光标', pure.handleBox('br').cursor === 'nwse-resize')
+
+  // 描边：贴面板圆角、纯视觉、不吃指针。
+  const outline = pure.RESIZE_OUTLINE_STYLE
+  check('描边圆角跟随面板（inherit，不写死数字）', outline.borderRadius === 'inherit', String(outline.borderRadius))
+  check('描边铺满面板且不吃指针', outline.inset === 0 && outline.pointerEvents === 'none')
+
+  // 指针事件的开关方向必须对：层不吃指针、手柄才吃。写反了会让整个面板点不动。
+  const PANEL_SRC = readFileSync('src/client/panel.ts', 'utf8')
+  const layerRule = PANEL_SRC.match(new RegExp(`\\.\\$\\{RESIZE_LAYER_CLASS\\}[^}]*\\}`))?.[0] ?? ''
+  check('手柄层 pointer-events: none（否则整块面板点不动）',
+    layerRule.includes('pointer-events: none'), layerRule.replace(/\s+/g, ' ').slice(0, 90))
+  const interactiveRule = PANEL_SRC.match(/\.\$\{RESIZE_EDGE_CLASS\}, \.\$\{RESIZE_GRIP_CLASS\}[^}]*\}/)?.[0] ?? ''
+  check('手柄自身 pointer-events: auto', interactiveRule.includes('pointer-events: auto'),
+    interactiveRule.replace(/\s+/g, ' ').slice(0, 90))
+
+  // 面板选择器得对得上官方面板结构（role/aria + 直接子 nav）。
+  check('面板选择器仍是官方面板结构',
+    pure.PANEL_SELECTOR === '[role="dialog"][aria-modal="true"]:has(> nav)', pure.PANEL_SELECTOR)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

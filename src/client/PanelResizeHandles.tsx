@@ -1,15 +1,30 @@
 /**
- * 设置面板边缘拖拽手柄：注册进 shell.overlay（root 级），仅在设置对话框
- * 打开且「边缘调整大小」开关开启时渲染 8 条手柄（四边 + 四角）。
- * 拖拽只改对话框内联 width/height（面板由 overlay flex 居中，无需移动
- * 定位）；松手时把尺寸写入设置持久化。
+ * 设置面板尺寸手柄：四边可拖 + 右下角抓手。
+ *
+ * **为什么用 `createPortal` 挂进面板内部，而不是在 `shell.overlay` 里对准坐标画**
+ * （0.2.0 整段功能失效的原因，务必别改回去）：
+ *   `shell.overlay` 被官方封在 `ui-layout` 的
+ *   `.overlayLayer { position:absolute; inset:0; z-index:20 }` 里。`position` +
+ *   `z-index` 让它**自成层叠上下文**，里面的元素无论 z-index 写多大都出不去，
+ *   永远排在设置弹窗（`.overlay` z-index:1000）下面，被全屏遮罩
+ *   （`.mask { position:absolute; inset:0 }`）吃掉鼠标 ⇒ 手柄根本抓不到。
+ *   挂进面板内部就完全不需要比层叠：它在最高那一层的**里面**。
+ *
+ * 附带好处：定位由「视口坐标 + 轮询重算」变成「面板内的绝对定位」，面板移动/
+ * 滚动/改尺寸都自动跟随，不再需要 250ms 的矩形重算（轮询只用来发现面板出现）。
+ *
+ * 本组件仍注册在 `shell.overlay`——它只是**渲染出口**在那里（为了拿到
+ * `useLive` 与写入动作），实际 DOM 通过 portal 落在面板内。
  */
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { PANEL_HEIGHT_FIELD, PANEL_WIDTH_FIELD, type ComposerUxSettings } from '../settings-contract.ts'
 import {
-  clampPanelHeight, clampPanelWidth, findSettingsPanel,
+  RESIZE_EDGE_CLASS, RESIZE_GRIP_CLASS, RESIZE_LAYER_CLASS, RESIZE_OUTLINE_CLASS,
+  RESIZE_OUTLINE_STYLE, clampPanelHeight, clampPanelWidth, findSettingsPanel, handleBox,
+  type ResizeEdge,
 } from './panel.ts'
 
 export interface PanelResizeInjected {
@@ -22,42 +37,21 @@ export interface PanelResizeInjected {
 
 export type PanelResizeProps = PropsRuntime<'shell.overlay'> & InjectFace<PanelResizeInjected>
 
-type Edge = 'left' | 'right' | 'top' | 'bottom' | 'tl' | 'tr' | 'bl' | 'br'
-
-interface StripRect {
+/** 拖拽起始状态（move/up 闭包共享）。 */
+interface DragStart {
+  readonly edge: ResizeEdge
+  readonly x: number
+  readonly y: number
   readonly left: number
   readonly top: number
   readonly width: number
   readonly height: number
-  readonly cursor: string
 }
 
-function stripRect(edge: Edge, rect: DOMRect): StripRect {
-  const horizontal = (left: number, width: number): StripRect => ({
-    left, top: rect.top + 12, width, height: Math.max(0, rect.height - 24), cursor: 'ew-resize',
-  })
-  const vertical = (top: number, height: number): StripRect => ({
-    left: rect.left + 16, top, width: Math.max(0, rect.width - 32), height, cursor: 'ns-resize',
-  })
-  const corner = (left: number, top: number, horizontalCursor: string, verticalCursor: string): StripRect => ({
-    left, top, width: 18, height: 18, cursor: horizontalCursor,
-  })
-  const corners: Record<'tl' | 'tr' | 'bl' | 'br', string> = {
-    tl: 'nwse-resize', tr: 'nesw-resize', bl: 'nesw-resize', br: 'nwse-resize',
-  }
-  switch (edge) {
-    case 'left': return horizontal(rect.left - 4, 8)
-    case 'right': return horizontal(rect.right - 4, 8)
-    case 'top': return vertical(rect.top - 4, 8)
-    case 'bottom': return vertical(rect.bottom - 4, 8)
-    case 'tl': return corner(rect.left - 6, rect.top - 6, corners.tl, 'nwse')
-    case 'tr': return corner(rect.right - 12, rect.top - 6, corners.tr, 'nesw')
-    case 'bl': return corner(rect.left - 6, rect.bottom - 14, corners.bl, 'nesw')
-    case 'br': return corner(rect.right - 12, rect.bottom - 14, corners.br, 'nwse')
-  }
-}
+/** 可拖拽的四边 + 右下角。 */
+const EDGES: readonly ResizeEdge[] = ['left', 'right', 'top', 'bottom', 'br']
 
-/** 渲染设置面板边缘手柄；无面板、总开关关闭或开关关闭时返回 null。 */
+/** 渲染设置面板尺寸手柄；无面板或开关关闭时不渲染。 */
 export function PanelResizeHandles({ useLive, actions }: PanelResizeProps) {
   const settings = useLive(value => ({
     enabled: value.enabled,
@@ -65,128 +59,129 @@ export function PanelResizeHandles({ useLive, actions }: PanelResizeProps) {
     panelWidth: value.panelWidth,
     panelHeight: value.panelHeight,
   }))
-  // 探测轮询闭包只挂在 enabled 上，需经 ref 读最新值，避免捕获陈旧快照。
-  const settingsRef = useRef(settings)
-  settingsRef.current = settings
   const enabled = settings.enabled === true && settings.panelResize === true
-  const [rect, setRect] = useState<DOMRect | null>(null)
-  const appliedRef = useRef(false)
+  const [panel, setPanel] = useState<HTMLElement | null>(null)
+  const [active, setActive] = useState<ResizeEdge | null>(null)
+  const dragRef = useRef<DragStart | null>(null)
 
-  // 探测设置对话框出现/消失（250ms 轮询足够便宜，且规避 React 无法感知
-  // 的 shell 元素挂载事件）；窗口尺寸变化时同步刷新。
+  // 发现/失去设置对话框（官方 shell 元素挂载 React 感知不到，故轮询；
+  // 只在「有没有面板」真的变化时才 setState，避免无谓重渲染）。
   useEffect(() => {
     if (!enabled) {
-      setRect(null)
+      setPanel(null)
       return
     }
+    let current: HTMLElement | null = null
     const probe = (): void => {
-      const panel = findSettingsPanel()
-      if (panel === null) {
-        appliedRef.current = false
-        setRect(current => (current === null ? null : null))
-        return
-      }
-      // 打开瞬间套用一次持久化尺寸。
-      if (!appliedRef.current) {
-        appliedRef.current = true
-        const width = settingsRef.current.panelWidth
-        const height = settingsRef.current.panelHeight
-        if (width !== undefined) panel.style.width = `${clampPanelWidth(width)}px`
-        if (height !== undefined) panel.style.height = `${clampPanelHeight(height)}px`
-      }
-      setRect(panel.getBoundingClientRect())
+      const found = findSettingsPanel()
+      if (found === current) return
+      current = found
+      setPanel(found)
     }
     probe()
     const timer = setInterval(probe, 250)
-    const onResize = (): void => { setRect(current => current === null ? null : findSettingsPanel()?.getBoundingClientRect() ?? null) }
-    window.addEventListener('resize', onResize)
-    return () => { clearInterval(timer); window.removeEventListener('resize', onResize) }
+    return () => { clearInterval(timer) }
   }, [enabled])
 
-  if (!enabled || rect === null) return null
+  // 套用持久化尺寸：面板出现时、以及**尺寸设置变化时**（这样设置页里点
+  // 「尺寸预设」当场就变，不必关掉设置再重开）。设置被清空时移除内联样式，
+  // 回落到官方默认 800。
+  useEffect(() => {
+    if (panel === null) return
+    const width = settings.panelWidth
+    const height = settings.panelHeight
+    if (width === undefined) panel.style.removeProperty('width')
+    else panel.style.width = `${clampPanelWidth(width)}px`
+    if (height === undefined) panel.style.removeProperty('height')
+    else panel.style.height = `${clampPanelHeight(height)}px`
+  }, [panel, settings.panelWidth, settings.panelHeight])
 
-  const onPointerDown = (edge: Edge, event: React.PointerEvent): void => {
+  if (!enabled || panel === null) return null
+
+  const onPointerDown = (edge: ResizeEdge, event: React.PointerEvent): void => {
     event.preventDefault()
     event.stopPropagation()
-    const panel = findSettingsPanel()
-    if (panel === null) return
-    const start = {
-      edge,
-      startX: event.clientX,
-      startY: event.clientY,
-      startWidth: panel.clientWidth,
-      startHeight: panel.clientHeight,
+    const el = panel
+    const rect = el.getBoundingClientRect()
+    // 把「居中 flex 子项」转成固定定位后再拖：居中的元素一改宽度会**两侧同时
+    // 伸缩**，拖右边左边也跟着动，手感是错的。转成 fixed 之后拖哪边就只动哪边。
+    el.style.position = 'fixed'
+    el.style.margin = '0'
+    el.style.left = `${rect.left}px`
+    el.style.top = `${rect.top}px`
+    el.style.width = `${rect.width}px`
+    el.style.height = `${rect.height}px`
+
+    const start: DragStart = {
+      edge, x: event.clientX, y: event.clientY,
+      left: rect.left, top: rect.top, width: rect.width, height: rect.height,
     }
+    dragRef.current = start
+    setActive(edge)
+    document.body.style.cursor = String(handleBox(edge).cursor ?? 'default')
+    document.body.style.userSelect = 'none'
+
     const onMove = (move: PointerEvent): void => {
-      if (dragStartRef.current !== start || dragStartRef.current === null) return
+      if (dragRef.current !== start) return
       move.preventDefault()
-      const panelEl = findSettingsPanel()
-      if (panelEl === null) return
-      const dx = move.clientX - start.startX
-      const dy = move.clientY - start.startY
-      let width = start.startWidth
-      let height = start.startHeight
-      if (edge === 'left' || edge === 'right' || edge === 'tl' || edge === 'bl' || edge === 'tr' || edge === 'br') {
-        width = start.startWidth + (edge === 'left' || edge === 'tl' || edge === 'bl' ? -dx : dx)
+      const dx = move.clientX - start.x
+      const dy = move.clientY - start.y
+      let { left, top, width, height } = start
+      if (edge === 'right' || edge === 'br') width = clampPanelWidth(start.width + dx)
+      if (edge === 'bottom' || edge === 'br') height = clampPanelHeight(start.height + dy)
+      if (edge === 'left') {
+        width = clampPanelWidth(start.width - dx)
+        left = start.left + (start.width - width)
       }
-      if (edge === 'top' || edge === 'bottom' || edge === 'tl' || edge === 'bl' || edge === 'tr' || edge === 'br') {
-        height = start.startHeight + (edge === 'top' || edge === 'tl' || edge === 'tr' ? -dy : dy)
+      if (edge === 'top') {
+        height = clampPanelHeight(start.height - dy)
+        top = start.top + (start.height - height)
       }
-      panelEl.style.width = `${Math.round(clampPanelWidth(width))}px`
-      panelEl.style.height = `${Math.round(clampPanelHeight(height))}px`
-      setRect(panelEl.getBoundingClientRect())
+      el.style.left = `${Math.round(left)}px`
+      el.style.top = `${Math.round(top)}px`
+      el.style.width = `${Math.round(width)}px`
+      el.style.height = `${Math.round(height)}px`
     }
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      dragStartRef.current = null
-      const panelEl = findSettingsPanel()
-      if (panelEl !== null) {
-        actions.setField(PANEL_WIDTH_FIELD, Math.round(clampPanelWidth(panelEl.clientWidth)))
-        actions.setField(PANEL_HEIGHT_FIELD, Math.round(clampPanelHeight(panelEl.clientHeight)))
-      }
+      dragRef.current = null
+      setActive(null)
+      const box = el.getBoundingClientRect()
+      actions.setField(PANEL_WIDTH_FIELD, Math.round(clampPanelWidth(box.width)))
+      actions.setField(PANEL_HEIGHT_FIELD, Math.round(clampPanelHeight(box.height)))
       document.body.style.removeProperty('cursor')
       document.body.style.removeProperty('user-select')
     }
-    dragStartRef.current = start
-    document.body.style.cursor = stripRect(edge, rect).cursor
-    document.body.style.userSelect = 'none'
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
 
-  const edges: readonly Edge[] = ['left', 'right', 'top', 'bottom', 'tl', 'tr', 'bl', 'br']
-
-  return (
-    <>
-      {edges.map(edge => {
-        const pos = stripRect(edge, rect)
-        return (
-          <div
-            key={edge}
-            onPointerDown={event => { onPointerDown(edge, event) }}
-            onPointerEnter={event => { event.currentTarget.style.background = 'var(--dsw-alias-state-business-primary)'; event.currentTarget.style.opacity = '0.75' }}
-            onPointerLeave={event => { event.currentTarget.style.background = 'transparent'; event.currentTarget.style.opacity = '0' }}
-            style={{
-              position: 'fixed',
-              zIndex: 9998,
-              left: pos.left,
-              top: pos.top,
-              width: pos.width,
-              height: pos.height,
-              cursor: pos.cursor,
-              background: 'transparent',
-              opacity: 0,
-              borderRadius: 6,
-              pointerEvents: 'auto',
-              touchAction: 'none',
-            }}
-          />
-        )
-      })}
-    </>
+  return createPortal(
+    <div className={RESIZE_LAYER_CLASS} data-composer-ux-resize>
+      <div className={RESIZE_OUTLINE_CLASS} style={RESIZE_OUTLINE_STYLE} />
+      {EDGES.map(edge => (
+        <div
+          key={edge}
+          className={edge === 'br' ? RESIZE_GRIP_CLASS : RESIZE_EDGE_CLASS}
+          data-active={active === edge ? 'true' : undefined}
+          title={edge === 'br' ? '拖动改面板大小' : undefined}
+          style={handleBox(edge)}
+          onPointerDown={event => { onPointerDown(edge, event) }}
+        >
+          {edge === 'br' && (
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+              <path
+                d="M11 1 1 11M11 6 6 11"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+        </div>
+      ))}
+    </div>,
+    panel,
   )
 }
-
-/** 拖拽起始状态（onMove/onUp 闭包共享）。 */
-const dragStartRef: { current: null | { edge: Edge; startX: number; startY: number; startWidth: number; startHeight: number } } = { current: null }

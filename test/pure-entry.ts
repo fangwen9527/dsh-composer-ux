@@ -17,3 +17,8 @@ export {
 export * as styles from '../src/client/styles.ts'
 /** 入口按钮的注入样式表：只取类名常量（installX 会碰 document，不在 node 里跑）。 */
 export { QUICK_BUTTON_CLASS } from '../src/client/quick-style.ts'
+/** 设置面板尺寸手柄的定位/描边（纯函数与样式对象，无 DOM 副作用）。 */
+export {
+  PANEL_SELECTOR, RESIZE_EDGE_CLASS, RESIZE_GRIP_CLASS, RESIZE_LAYER_CLASS,
+  RESIZE_OUTLINE_CLASS, RESIZE_OUTLINE_STYLE, handleBox,
+} from '../src/client/panel.ts'

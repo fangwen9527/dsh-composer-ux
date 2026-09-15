@@ -43,14 +43,47 @@ export const QUICK_PROMPTS_FIELD = 'quickPrompts'
 /** 优化强度档位字段名。 */
 export const OPTIMIZER_TIER_FIELD = 'optimizerTier'
 
-/** 列表条数上限（防脏数据把设置文档撑爆）。 */
+/** 单个分类内的条数上限。 */
 export const QUICK_PROMPT_MAX = 60
+
+/** 分类数上限。 */
+export const QUICK_CATEGORY_MAX = 20
+
+/** 分类名的字符上限。 */
+export const QUICK_CATEGORY_NAME_MAX = 40
 
 /** 单条「名称」的字符上限。 */
 export const QUICK_LABEL_MAX = 40
 
-/** 单条「提示词」的字符上限。 */
-export const QUICK_TEXT_MAX = 4000
+/**
+ * 单条「提示词」的字符上限。
+ *
+ * 0.3.0 起快捷指令改存 `$DSH_HOME/quick-prompts.json`，不再受设置文档的体积约束，
+ * 所以这里从 4000 提到 20 万——只做「别把几百 MB 塞进来」的防呆，正常提示词不再被截断。
+ */
+export const QUICK_TEXT_MAX = 200_000
+
+/**
+ * 送去「优化提示词」的原文上限。
+ *
+ * 与原 `QUICK_TEXT_MAX * 2`（= 8000）等值：抬高等快捷指令的存储上限时**不能**
+ * 顺带把优化请求的输入上限也抬上去，否则超长文本会被丢给模型。
+ */
+export const OPTIMIZE_TEXT_MAX = 8_000
+
+/**
+ * 快捷指令存储的 HTTP 路径（宿主半注册，客户端半读写）。
+ *
+ * 为什么存储也必须走 HTTP：浏览器侧没有文件系统，而「用户内容」需要一份
+ * 全局、与会话/项目无关的落点，只有宿主半能提供。
+ */
+export const QUICK_PROMPTS_API_PATH = '/composer-ux/prompts'
+
+/** 文件格式版本；与 lnyuqian/dsh-quick-prompts 的 v2 对齐（见 bookToFile 注释）。 */
+export const QUICK_BOOK_VERSION = 2
+
+/** 迁移/兜底分类名。 */
+export const DEFAULT_CATEGORY_NAME = '默认'
 
 /** 优化结果长度上限（超过视为异常产出，截断并提示）。 */
 export const OPTIMIZE_OUTPUT_MAX = 12000
@@ -126,6 +159,168 @@ export const DEFAULT_QUICK_PROMPTS: readonly QuickPrompt[] = [
 /** 生成一条新快捷指令的 id（时间戳 + 随机后缀，避免与既有 id 碰撞）。 */
 export function newQuickPromptId(): string {
   return `qp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// ── 快捷指令：分类结构与文件映射 ─────────────────────────────────────────────
+//
+// 0.3.0 起快捷指令不再存在设置文档里，而是存在 `$DSH_HOME/quick-prompts.json`。
+// 原因是设置文档对**数组**是「整份替换」、且受 schema 长度上限约束（旧 4000 字会静默
+// 截断），而快捷指令是用户内容、会写很长的提示词。专用文件还便于单独备份与迁移。
+//
+// 文件字段名与 lnyuqian/dsh-quick-prompts 对齐（categories / name / title / text /
+// autoSend / order），这样同一个文件两边都读得懂：内部用 label/prompt/always，
+// 只在文件边界映射（见 bookToFile / asPromptRow）。
+// ⚠️ 但**不要同时装两个插件**——同一个文件两个写者会互相覆盖，而它那边是非原子写。
+
+/** 生成一个新分类 id。 */
+export function newQuickCategoryId(): string {
+  return `qc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 一个分类：名字 + 它自己的条目列表（顺序即显示顺序）。 */
+export interface QuickPromptCategory {
+  readonly id: string
+  readonly name: string
+  readonly prompts: readonly QuickPrompt[]
+}
+
+/** 全局快捷指令本：分类两级结构，落盘成一份 JSON 文件。 */
+export interface QuickPromptBook {
+  readonly version: number
+  readonly categories: readonly QuickPromptCategory[]
+}
+
+/** 内置默认本：一个「默认」分类装那 9 条。 */
+export function defaultQuickBook(): QuickPromptBook {
+  return {
+    version: QUICK_BOOK_VERSION,
+    categories: [{ id: 'cat-default', name: DEFAULT_CATEGORY_NAME, prompts: DEFAULT_QUICK_PROMPTS }],
+  }
+}
+
+/** 文件里的分类形状（写盘用；与参考实现同名字段）。 */
+export interface QuickCategoryFileRow {
+  readonly id: string
+  readonly name: string
+  readonly prompts: readonly {
+    readonly id: string
+    readonly title: string
+    readonly text: string
+    readonly autoSend: boolean
+    readonly order: number
+  }[]
+}
+
+/** 收窄一条：内部字段名（label/prompt/always）与文件字段名（title/text/autoSend）都认。 */
+function asPromptRow(value: unknown): { readonly prompt: QuickPrompt; readonly order?: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const row = value as Record<string, unknown>
+  const either = (first: unknown, second: unknown): string => {
+    const picked = typeof first === 'string' && first !== '' ? first : second
+    return typeof picked === 'string' ? picked : ''
+  }
+  const prompt = either(row.prompt, row.text).slice(0, QUICK_TEXT_MAX).trim()
+  if (prompt === '') return undefined
+  const label = either(row.label, row.title).slice(0, QUICK_LABEL_MAX).trim()
+  const id = typeof row.id === 'string' && row.id !== '' ? row.id.slice(0, 64) : newQuickPromptId()
+  const order = typeof row.order === 'number' && Number.isFinite(row.order)
+    ? Math.max(1, Math.round(row.order))
+    : undefined
+  return {
+    prompt: { id, label: label === '' ? prompt.slice(0, 12) : label, prompt, always: row.always === true || row.autoSend === true },
+    order,
+  }
+}
+
+/** 收窄一个列表：按 id 去重保序、按 order 升序（没有 order 的保持原相对位置）、限量。 */
+function toPromptList(values: readonly unknown[]): readonly QuickPrompt[] {
+  const rows: { prompt: QuickPrompt; order?: number; index: number }[] = []
+  for (const value of values) {
+    const row = asPromptRow(value)
+    if (row !== undefined) rows.push({ ...row, index: rows.length })
+  }
+  rows.sort((a, b) => {
+    const left = a.order ?? Number.MAX_SAFE_INTEGER
+    const right = b.order ?? Number.MAX_SAFE_INTEGER
+    return left === right ? a.index - b.index : left - right
+  })
+  const seen = new Set<string>()
+  const out: QuickPrompt[] = []
+  for (const row of rows) {
+    if (out.length >= QUICK_PROMPT_MAX) break
+    if (seen.has(row.prompt.id)) continue
+    seen.add(row.prompt.id)
+    out.push(row.prompt)
+  }
+  return out
+}
+
+/**
+ * 把任意来源收窄成一本（文件内容、HTTP 请求体都走这里）。
+ * @param value 任意值。
+ * @returns 收窄后的本；**认不出的形状返回 undefined** —— 调用方必须把它当成损坏，
+ *          绝不能回退成空本再写回去（那会把用户数据抹掉）。
+ */
+export function sanitizeBook(value: unknown): QuickPromptBook | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const source = value as Record<string, unknown>
+
+  // v1 平铺（裸数组，或 { prompts: [...] }）：升级成一个「默认」分类。
+  const flat = Array.isArray(value) ? value : (Array.isArray(source.prompts) ? source.prompts : undefined)
+  if (flat !== undefined) {
+    const prompts = toPromptList(flat)
+    return {
+      version: QUICK_BOOK_VERSION,
+      categories: prompts.length === 0
+        ? []
+        : [{ id: 'cat-default', name: DEFAULT_CATEGORY_NAME, prompts }],
+    }
+  }
+
+  if (!Array.isArray(source.categories)) return undefined
+  const seen = new Set<string>()
+  const categories: QuickPromptCategory[] = []
+  for (const raw of source.categories) {
+    if (categories.length >= QUICK_CATEGORY_MAX) break
+    if (typeof raw !== 'object' || raw === null) continue
+    const row = raw as Record<string, unknown>
+    const prompts = toPromptList(Array.isArray(row.prompts) ? row.prompts : [])
+    if (prompts.length === 0) continue // 与参考实现一致：空分类不保留
+    const wanted = typeof row.id === 'string' && row.id !== '' ? row.id.slice(0, 64) : newQuickCategoryId()
+    const id = seen.has(wanted) ? newQuickCategoryId() : wanted
+    seen.add(id)
+    const name = (typeof row.name === 'string' ? row.name : '').slice(0, QUICK_CATEGORY_NAME_MAX).trim()
+    categories.push({ id, name: name === '' ? DEFAULT_CATEGORY_NAME : name, prompts })
+  }
+  return { version: QUICK_BOOK_VERSION, categories }
+}
+
+/** 内部结构 → 文件结构（写盘时用；顺序即 order）。 */
+export function bookToFile(book: QuickPromptBook): { version: number; categories: readonly QuickCategoryFileRow[] } {
+  return {
+    version: QUICK_BOOK_VERSION,
+    categories: book.categories.map(category => ({
+      id: category.id,
+      name: category.name,
+      prompts: category.prompts.map((prompt, index) => ({
+        id: prompt.id,
+        title: prompt.label,
+        text: prompt.prompt,
+        autoSend: prompt.always,
+        order: index + 1,
+      })),
+    })),
+  }
+}
+
+/** 跨分类拍平（面板列表、总条数统计用）。 */
+export function flattenQuickPrompts(book: QuickPromptBook): readonly QuickPrompt[] {
+  return book.categories.flatMap(category => category.prompts)
+}
+
+/** 只取勾了「默认插入」的那些（发送时自动附加；跨所有分类）。 */
+export function alwaysQuickPrompts(book: QuickPromptBook): readonly QuickPrompt[] {
+  return flattenQuickPrompts(book).filter(prompt => prompt.always)
 }
 
 // ── OpenCode 请求头 ─────────────────────────────────────────────────────────

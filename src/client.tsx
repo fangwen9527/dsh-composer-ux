@@ -9,9 +9,15 @@ import {
   HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_PROMPTS_FIELD, SEND_KEY_FIELD, sanitizeSettings,
+  alwaysQuickPrompts, defaultQuickBook,
   type ComposerUxSettings, type MenuState, type OptimizerTier, type QuickPrompt,
-  type SettingsField,
+  type QuickPromptBook, type SettingsField,
 } from './settings-contract.ts'
+import {
+  loadPromptBook, savePromptBook, withAlwaysToggled, withCategoryAdded, withCategoryMoved,
+  withCategoryRemoved, withCategoryRenamed, withPromptAdded, withPromptMoved, withPromptPatched,
+  withPromptRemoved,
+} from './client/prompt-book.ts'
 import { installInterceptors, runMenuAction } from './client/interceptors.ts'
 import { installPanelStyle } from './client/panel.ts'
 import { installSettingsCardStyle } from './client/settings-style.ts'
@@ -58,20 +64,90 @@ export function apply(ctx: any): void {
       console.error('[composer-ux] settings clear failed', error)
     })
   }
+
+  // ── 快捷指令存储（分类结构；真相在 $DSH_HOME/quick-prompts.json） ──────────
+  //
+  // 读：apply 时拉一次。写：先乐观更新本地快照让界面立刻响应，再把整本 POST 上去；
+  // 失败就以磁盘为准回滚——不让「界面显示的」和「文件里的」长期不一致。
+  const book = createSnapshotStore<QuickPromptBook>(defaultQuickBook())
+  /** '' = 正常；'saving' = 正在写；其余 = 上一次的错误文案。 */
+  const bookStatus = createSnapshotStore<string>('')
+
+  const reloadBook = async (): Promise<void> => {
+    const reply = await loadPromptBook()
+    if (reply.ok && reply.book !== undefined) {
+      book.set(reply.book)
+      bookStatus.set('')
+      return
+    }
+    bookStatus.set(reply.error ?? '读取快捷指令失败')
+  }
+
+  const commitBook = (next: QuickPromptBook): void => {
+    book.set(next)
+    bookStatus.set('saving')
+    void savePromptBook(next).then(
+      (reply) => {
+        if (reply.ok && reply.book !== undefined) {
+          // 用宿主回读的**磁盘真实内容**覆盖本地：任何被收窄/丢弃的字段立刻可见。
+          book.set(reply.book)
+          bookStatus.set('')
+          return
+        }
+        bookStatus.set(reply.error ?? '保存失败')
+        void reloadBook()
+      },
+      (error: unknown) => {
+        bookStatus.set(error instanceof Error ? error.message : String(error))
+        void reloadBook()
+      },
+    )
+  }
+
+  void reloadBook()
+
+  const bookActions = {
+    reload: (): void => { void reloadBook() },
+    addCategory: (name: string): void => { commitBook(withCategoryAdded(book.getSnapshot(), name)) },
+    renameCategory: (id: string, name: string): void => {
+      commitBook(withCategoryRenamed(book.getSnapshot(), id, name))
+    },
+    removeCategory: (id: string): void => { commitBook(withCategoryRemoved(book.getSnapshot(), id)) },
+    moveCategory: (id: string, delta: number): void => {
+      commitBook(withCategoryMoved(book.getSnapshot(), id, delta))
+    },
+    addPrompt: (categoryId: string): void => { commitBook(withPromptAdded(book.getSnapshot(), categoryId)) },
+    patchPrompt: (categoryId: string, id: string, patch: { label?: string; prompt?: string }): void => {
+      commitBook(withPromptPatched(book.getSnapshot(), categoryId, id, patch))
+    },
+    removePrompt: (categoryId: string, id: string): void => {
+      commitBook(withPromptRemoved(book.getSnapshot(), categoryId, id))
+    },
+    movePrompt: (categoryId: string, id: string, delta: number): void => {
+      commitBook(withPromptMoved(book.getSnapshot(), categoryId, id, delta))
+    },
+    resetBook: (): void => { commitBook(defaultQuickBook()) },
+    /** 设置页「保存」：把编辑器里的整本一次写回（而不是每敲一个字就写盘）。 */
+    saveBook: (next: QuickPromptBook): void => { commitBook(next) },
+  }
+
   const resetAll = (): void => {
     // 注意：宿主半的记账字段（HOST_OWNED_FIELDS）故意不在名单里——清掉它们会让
     // 已经写入 llm-pi-ai 的请求头失去记账，从而永远撤销不掉。
+    // 快捷指令也不在名单里：它的真相已经搬到 quick-prompts.json（见 bookActions.resetBook），
+    // 而设置文档里那份 0.2.x 的旧值是**迁移的种子**，故意留着不清——万一回滚到旧版还能看到。
     void scope.mutate(
       [
         ENABLED_FIELD, SEND_KEY_FIELD, NEWLINE_KEY_FIELD, ...MENU_FIELDS,
         MENU_NATIVE_FIELD,
         PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
         HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_VALUE_FIELD, HEADER_ROUTES_FIELD,
-        QUICK_PROMPTS_FIELD, OPTIMIZER_TIER_FIELD,
+        OPTIMIZER_TIER_FIELD,
       ].map(field => ({ op: 'unset', path: [field] })),
     ).catch((error: unknown) => {
       console.error('[composer-ux] settings reset failed', error)
     })
+    bookActions.resetBook()
   }
 
   // ── 快捷指令与提示词优化 ──────────────────────────────────────────────────
@@ -87,11 +163,6 @@ export function apply(ctx: any): void {
   ctx.effect(() => () => {
     if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   }, 'composer-ux: quick notice timer')
-
-  /** 写回整份快捷指令列表（编辑「默认插入」用；读当前值再改一条，避免覆盖并发编辑）。 */
-  const writeQuickPrompts = (next: readonly QuickPrompt[]): void => {
-    setField(QUICK_PROMPTS_FIELD, next)
-  }
 
   const quickActions = {
     toggle: (anchor: { left: number; bottom: number; width: number }): void => {
@@ -137,10 +208,12 @@ export function apply(ctx: any): void {
       )
     },
     setTier: (tier: OptimizerTier): void => { setField(OPTIMIZER_TIER_FIELD, tier) },
+    /**
+     * 「默认插入」勾选：按 id 跨分类找那一条，直接写盘。
+     * 这个标记就是「点发送时自动附加到消息末尾」的依据（见 interceptors.ts）。
+     */
     setAlways: (id: string, value: boolean): void => {
-      writeQuickPrompts(live.getSnapshot().quickPrompts.map(
-        item => (item.id === id ? { ...item, always: value } : item),
-      ))
+      commitBook(withAlwaysToggled(book.getSnapshot(), id, value))
     },
   }
 
@@ -151,8 +224,13 @@ export function apply(ctx: any): void {
     order: 40,
     label: '输入体验',
     inject: () => ({
-      hooks: { live },
-      actions: { setField, clearField, resetAll },
+      hooks: { live, book, bookStatus },
+      actions: {
+        setField, clearField, resetAll,
+        saveBook: bookActions.saveBook,
+        reloadBook: bookActions.reload,
+        resetBook: bookActions.resetBook,
+      },
     }),
   }, SettingsSection))
 
@@ -198,8 +276,21 @@ export function apply(ctx: any): void {
     name: 'shell.overlay',
     id: 'composer-ux-quick-panel',
     inject: () => ({
-      hooks: { live, panel, busy: optimizing, notice: panelNotice },
-      actions: quickActions,
+      hooks: { live, panel, busy: optimizing, notice: panelNotice, book, bookStatus },
+      actions: {
+        toggle: quickActions.toggle,
+        close: quickActions.close,
+        insert: quickActions.insert,
+        optimize: quickActions.optimize,
+        setTier: quickActions.setTier,
+        setAlways: quickActions.setAlways,
+        toggleAlways: quickActions.setAlways,
+        addCategory: bookActions.addCategory,
+        renameCategory: bookActions.renameCategory,
+        removeCategory: bookActions.removeCategory,
+        moveCategory: bookActions.moveCategory,
+        reloadBook: bookActions.reload,
+      },
     }),
   }, QuickCommandsPanel))
 
@@ -229,6 +320,7 @@ export function apply(ctx: any): void {
       if (enabled && dispose === null) {
         dispose = installInterceptors({
           settings: () => live.getSnapshot(),
+          alwaysPrompts: () => alwaysQuickPrompts(book.getSnapshot()),
           setMenu: state => { menu.set(state) },
           menuOpen: () => menu.getSnapshot() !== null,
         })

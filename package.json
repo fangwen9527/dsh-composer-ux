@@ -1,7 +1,7 @@
 {
     "name": "dsh-composer-ux",
-    "version": "0.2.0",
-    "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + OpenCode 会话请求头（含设置页）",
+    "version": "0.3.0",
+    "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 默认插入 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头（含设置页）",
     "type": "module",
     "main": "./lib/index.js",
     "exports": {
@@ -47,7 +47,7 @@
     },
     "scripts": {
         "build": "node build.mjs",
-        "test": "node test/host-header-mirror.mjs && node test/quick-commands.mjs && node test/client-registration.mjs"
+        "test": "node test/host-header-mirror.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/client-registration.mjs"
     },
     "devDependencies": {
         "esbuild": "^0.25.0"

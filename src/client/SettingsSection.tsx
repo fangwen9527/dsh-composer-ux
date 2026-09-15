@@ -11,16 +11,21 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
-  DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
-  HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
+  DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
+  HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   MENU_ITEMS, MENU_NATIVE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
-  PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_LABEL_MAX,
+  PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
+  QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
   newQuickPromptId, newSessionId,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
-  type SettingsField,
+  type QuickPromptBook, type SettingsField,
 } from '../settings-contract.ts'
+import {
+  bookCounts, withCategoryAdded, withCategoryMoved, withCategoryRemoved, withCategoryRenamed,
+  withPromptAdded, withPromptMoved, withPromptPatched, withPromptRemoved,
+} from './prompt-book.ts'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -34,14 +39,24 @@ export interface SettingsSectionInjected {
   hooks: {
     /** 当前解析后的设置快照。 */
     live: SnapshotStore<ComposerUxSettings>
+    /** 快捷指令本（真相在磁盘那份 quick-prompts.json；这里只是它的客户端快照）。 */
+    book: SnapshotStore<QuickPromptBook>
+    /** '' = 正常；'saving' = 正在写；其余 = 上一次的错误文案。 */
+    bookStatus: SnapshotStore<string>
   }
   actions: {
-    /** 写一个字段（键位为规范串，开关为布尔，尺寸为数字，快捷指令为数组）。 */
+    /** 写一个字段（键位为规范串，开关为布尔，尺寸为数字）。 */
     setField: (field: SettingsField, value: unknown) => void
     /** 清空一个字段（回落到 schema 默认）。 */
     clearField: (field: SettingsField) => void
-    /** 全部恢复默认（清空用户覆盖，回落到 schema 默认）。 */
+    /** 全部恢复默认（清空用户覆盖，回落到 schema 默认；快捷指令另见 resetBook）。 */
     resetAll: () => void
+    /** 整本写回（编辑器里的「保存修改」）。 */
+    saveBook: (next: QuickPromptBook) => void
+    /** 从磁盘重新读取（别的窗口改过时的兜底）。 */
+    reloadBook: () => void
+    /** 恢复内置 9 条（写回默认本）。 */
+    resetBook: () => void
   }
 }
 
@@ -310,127 +325,191 @@ function TextFieldRow(props: {
 }
 
 /** 快捷指令编辑区：本地草稿 + 显式保存（避免每敲一个字就写一次配置文件）。 */
+/**
+ * 快捷指令编辑器（0.3.0 起的分类两级结构）。
+ *
+ * 编辑在**本地草稿**上做：草稿用 `prompt-book.ts` 那套纯函数改（与服务端同一套逻辑），
+ * 只有点「保存修改」才整本写回 —— 否则每敲一个字就是一次 HTTP + 一次原子写。
+ *
+ * 保存后宿主会回读磁盘真实内容并覆盖本地快照，草稿跟着它走：于是「空正文的条目被
+ * 净化丢弃」这类收窄会在界面上立刻显现，而不是等到下次打开设置才发现不一样。
+ */
 function QuickPromptsEditor(props: {
-  items: readonly QuickPrompt[]
-  onSave: (next: readonly QuickPrompt[]) => void
+  book: QuickPromptBook
+  status: string
+  onSave: (next: QuickPromptBook) => void
+  onReset: () => void
+  onReload: () => void
 }) {
-  const [rows, setRows] = useState(() => props.items.map(item => ({ ...item })))
+  const [draft, setDraft] = useState<QuickPromptBook>(() => props.book)
+  const [activeId, setActiveId] = useState(() => props.book.categories[0]?.id ?? '')
   const [dirty, setDirty] = useState(false)
+  const [newName, setNewName] = useState('')
 
-  const update = (id: string, patch: Partial<QuickPrompt>): void => {
+  // 本地没有未保存修改时跟随外部快照。
+  useEffect(() => {
+    if (dirty) return
+    setDraft(props.book)
+    if (!props.book.categories.some(category => category.id === activeId)) {
+      setActiveId(props.book.categories[0]?.id ?? '')
+    }
+  }, [props.book, dirty, activeId])
+
+  const edit = (next: QuickPromptBook): void => {
     setDirty(true)
-    setRows(current => current.map(row => (row.id === id ? { ...row, ...patch } : row)))
+    setDraft(next)
   }
-  const remove = (id: string): void => {
-    setDirty(true)
-    setRows(current => current.filter(row => row.id !== id))
-  }
-  const add = (): void => {
-    if (rows.length >= QUICK_PROMPT_MAX) return
-    setDirty(true)
-    setRows(current => current.concat([{
-      id: newQuickPromptId(), label: '', prompt: '', always: false,
-    }]))
-  }
-  const move = (index: number, delta: number): void => {
-    const target = index + delta
-    if (target < 0 || target >= rows.length) return
-    setDirty(true)
-    setRows((current) => {
-      const next = [...current]
-      const [row] = next.splice(index, 1)
-      next.splice(target, 0, row!)
-      return next
-    })
-  }
-  const save = (): void => {
-    // 名称留空时用正文开头兜底（净化端也会这么做，这里先给用户一个可见的落点）。
-    const cleaned = rows
-      .map(row => ({
-        ...row,
-        prompt: row.prompt.trim(),
-        label: row.label.trim() === '' ? row.prompt.trim().slice(0, 12) : row.label.trim(),
-      }))
-      .filter(row => row.prompt !== '')
-    props.onSave(cleaned)
-    setRows(cleaned)
-    setDirty(false)
+  const current = draft.categories.find(category => category.id === activeId) ?? draft.categories[0]
+  const counts = bookCounts(draft)
+  const saving = props.status === 'saving'
+  const failed = props.status !== '' && props.status !== 'saving'
+
+  const rowBox: CSSProperties = {
+    display: 'flex', flexDirection: 'column', gap: 6,
+    padding: 8, borderRadius: 8,
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    background: 'var(--dsw-alias-bg-layer-1)',
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {rows.map((row, index) => (
-        <div
-          key={row.id}
-          style={{
-            display: 'flex', flexDirection: 'column', gap: 6,
-            padding: 8, borderRadius: 8,
-            border: '0.5px solid var(--dsw-alias-border-l2)',
-            background: 'var(--dsw-alias-bg-layer-1)',
+      {/* 分类切换 + 新增 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        {draft.categories.map(category => (
+          <button
+            key={category.id}
+            type="button"
+            style={category.id === current?.id ? pillActive : pill}
+            onClick={() => { setActiveId(category.id) }}
+          >
+            {category.name}（{category.prompts.length}）
+          </button>
+        ))}
+        <input
+          type="text"
+          value={newName}
+          placeholder="新分类名"
+          maxLength={QUICK_CATEGORY_NAME_MAX}
+          spellCheck={false}
+          onChange={event => { setNewName(event.target.value) }}
+          style={{ ...textInput, flex: '0 0 110px' }}
+        />
+        <button
+          type="button"
+          style={pill}
+          disabled={draft.categories.length >= QUICK_CATEGORY_MAX}
+          onClick={() => {
+            edit(withCategoryAdded(draft, newName === '' ? DEFAULT_CATEGORY_NAME : newName))
+            setNewName('')
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          + 加分类
+        </button>
+      </div>
+
+      {current === undefined && (
+        <p style={rowDesc}>还没有分类。先加一个分类，再往里放条目。</p>
+      )}
+
+      {current !== undefined && (
+        <>
+          {/* 当前分类：改名 / 换位 / 删除 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <input
               type="text"
-              value={row.label}
-              placeholder="名称，如：仅说明原因"
-              maxLength={QUICK_LABEL_MAX}
+              value={current.name}
+              aria-label="分类名"
+              maxLength={QUICK_CATEGORY_NAME_MAX}
               spellCheck={false}
-              onChange={event => { update(row.id, { label: event.target.value }) }}
+              onChange={event => { edit(withCategoryRenamed(draft, current.id, event.target.value)) }}
               style={{ ...textInput, flex: '0 0 150px' }}
             />
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...rowDesc, margin: 0, flex: '0 0 auto' }}>
-              <input
-                type="checkbox"
-                checked={row.always}
-                style={{ margin: 0, cursor: 'pointer' }}
-                onChange={event => { update(row.id, { always: event.target.checked }) }}
-              />
-              默认插入
-            </label>
-            <span style={{ flex: 1 }} />
-            <button type="button" style={pill} title="上移" onClick={() => { move(index, -1) }}>↑</button>
-            <button type="button" style={pill} title="下移" onClick={() => { move(index, 1) }}>↓</button>
-            <button type="button" style={pill} title="删除这条" onClick={() => { remove(row.id) }}>✕</button>
+            <button type="button" style={pill} title="分类上移" onClick={() => { edit(withCategoryMoved(draft, current.id, -1)) }}>↑</button>
+            <button type="button" style={pill} title="分类下移" onClick={() => { edit(withCategoryMoved(draft, current.id, 1)) }}>↓</button>
+            <button
+              type="button"
+              style={pill}
+              title="删除这个分类（连同它里面的条目）"
+              onClick={() => { edit(withCategoryRemoved(draft, current.id)) }}
+            >
+              ✕ 删除分类
+            </button>
+            <span style={rowDesc}>{current.prompts.length} / {QUICK_PROMPT_MAX} 条</span>
           </div>
-          <textarea
-            value={row.prompt}
-            placeholder="提示词正文：点击该条目时插入输入框；勾了「默认插入」则在发送时自动附加到消息末尾"
-            maxLength={QUICK_TEXT_MAX}
-            spellCheck={false}
-            rows={Math.min(4, Math.max(2, Math.ceil(row.prompt.length / 46)))}
-            onChange={event => { update(row.id, { prompt: event.target.value }) }}
-            style={{ ...textInput, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
-          />
-        </div>
-      ))}
 
-      {rows.length === 0 && (
-        <p style={rowDesc}>还没有条目。点下面的「+ 添加一条」开始建自己的快捷指令。</p>
+          {current.prompts.map(prompt => (
+            <div key={prompt.id} style={rowBox}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="text"
+                  value={prompt.label}
+                  placeholder="名称，如：仅说明原因"
+                  maxLength={QUICK_LABEL_MAX}
+                  spellCheck={false}
+                  onChange={event => { edit(withPromptPatched(draft, current.id, prompt.id, { label: event.target.value })) }}
+                  style={{ ...textInput, flex: '0 0 150px' }}
+                />
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...rowDesc, margin: 0, flex: '0 0 auto' }}>
+                  <input
+                    type="checkbox"
+                    checked={prompt.always}
+                    style={{ margin: 0, cursor: 'pointer' }}
+                    onChange={event => { edit(withPromptPatched(draft, current.id, prompt.id, { always: event.target.checked })) }}
+                  />
+                  默认插入
+                </label>
+                <span style={{ flex: 1 }} />
+                <button type="button" style={pill} title="上移" onClick={() => { edit(withPromptMoved(draft, current.id, prompt.id, -1)) }}>↑</button>
+                <button type="button" style={pill} title="下移" onClick={() => { edit(withPromptMoved(draft, current.id, prompt.id, 1)) }}>↓</button>
+                <button type="button" style={pill} title="删除这条" onClick={() => { edit(withPromptRemoved(draft, current.id, prompt.id)) }}>✕</button>
+              </div>
+              <textarea
+                value={prompt.prompt}
+                placeholder="提示词正文：点击该条目时插入输入框；勾了「默认插入」则在发送时自动附加到消息末尾"
+                maxLength={QUICK_TEXT_MAX}
+                spellCheck={false}
+                rows={Math.min(4, Math.max(2, Math.ceil(prompt.prompt.length / 46)))}
+                onChange={event => { edit(withPromptPatched(draft, current.id, prompt.id, { prompt: event.target.value })) }}
+                style={{ ...textInput, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+              />
+            </div>
+          ))}
+
+          <div>
+            <button type="button" style={pill} onClick={() => { edit(withPromptAdded(draft, current.id)) }}>+ 添加一条</button>
+          </div>
+        </>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <button type="button" style={pill} onClick={add}>+ 添加一条</button>
         <button
           type="button"
           style={dirty ? pillActive : pill}
-          onClick={save}
-          disabled={!dirty}
+          disabled={!dirty || saving}
+          onClick={() => { props.onSave(draft); setDirty(false) }}
         >
-          {dirty ? '保存修改' : '已保存'}
+          {saving ? '保存中…' : (dirty ? '保存修改' : '已保存')}
         </button>
+        <button type="button" style={pill} onClick={() => { props.onReload() }}>重新读取</button>
+        <button type="button" style={pill} onClick={() => { props.onReset() }}>恢复内置 9 条</button>
         <span style={rowDesc}>
-          共 {rows.length} / {QUICK_PROMPT_MAX} 条 · 勾了「默认插入」的：
-          {rows.filter(row => row.always).length} 条
+          共 {counts.categories} 个分类 · {counts.prompts} 条 · 默认插入 {counts.always} 条
+          {failed ? ` · ${props.status}` : ''}
         </span>
       </div>
+      <p style={rowDesc}>
+        数据存在 <code>~/.dsh/quick-prompts.json</code>（与会话、项目无关，可单独备份或手工编辑，
+        改完点「重新读取」即可加载）。
+      </p>
     </div>
   )
 }
 
 /** 设置页主体。 */
-export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
+export function SettingsSection({ useLive, useBook, useBookStatus, actions }: SettingsSectionProps) {
   const settings = useLive(item => item)
+  const book = useBook(item => item)
+  const bookStatus = useBookStatus(item => item)
   const [conflict, setConflict] = useState<string | null>(null)
 
   const setKey = (side: 'send' | 'newline', chord: string): void => {
@@ -459,9 +538,9 @@ export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
   const headerSummary = settings.headerEnabled
     ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
     : '未启用'
-  const alwaysCount = settings.quickPrompts.filter(item => item.always).length
-  const quickSummary = `${settings.quickPrompts.length} 条`
-    + ` · 默认插入 ${alwaysCount} 条`
+  const quickCounts = bookCounts(book)
+  const quickSummary = `${quickCounts.categories} 个分类 · ${quickCounts.prompts} 条`
+    + ` · 默认插入 ${quickCounts.always} 条`
     + ` · 优化档位 ${OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.label ?? '高级'}`
   const headerStatusText = settings.headerEnabled
     ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
@@ -601,22 +680,16 @@ export function SettingsSection({ useLive, actions }: SettingsSectionProps) {
           <div style={rowText}>
             <div style={rowTitle}>快捷指令清单</div>
             <div style={rowDesc}>
-              内置 9 条可以直接用；改完记得点「保存修改」。
+              分类在这里管理（面板里只做切换）；内置 9 条可以直接用，改完记得点「保存修改」。
             </div>
           </div>
           <QuickPromptsEditor
-            items={settings.quickPrompts}
-            onSave={next => { actions.setField(QUICK_PROMPTS_FIELD, next) }}
+            book={book}
+            status={bookStatus}
+            onSave={next => { actions.saveBook(next) }}
+            onReload={() => { actions.reloadBook() }}
+            onReset={() => { actions.resetBook() }}
           />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              style={pill}
-              onClick={() => { actions.clearField(QUICK_PROMPTS_FIELD) }}
-            >
-              恢复内置 9 条
-            </button>
-          </div>
         </div>
       </FoldCard>
 

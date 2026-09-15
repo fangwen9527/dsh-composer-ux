@@ -17,11 +17,18 @@ import {
   chordToInit, encodeChord, isEnterFamily, type ChordEvent,
 } from './chords.ts'
 import { applyAlwaysPrompts, sendButtonOf } from './quick-commands.ts'
-import type { ComposerUxSettings, MenuState } from '../settings-contract.ts'
+import type { ComposerUxSettings, MenuState, QuickPrompt } from '../settings-contract.ts'
 
 export interface InterceptorDeps {
   /** 同步读取当前解析后的设置（拦截器非 React 环境）。 */
   readonly settings: () => ComposerUxSettings
+  /**
+   * 同步读取「默认插入」的条目（跨分类）。
+   *
+   * 0.3.0 起快捷指令存在 quick-prompts.json 里，不再属于设置文档，所以这里单独要一个
+   * 取值函数，而不是从 `settings.quickPrompts` 拿。
+   */
+  readonly alwaysPrompts: () => readonly QuickPrompt[]
   /** 打开 / 关闭右键菜单。 */
   readonly setMenu: (state: MenuState | null) => void
   /** 自定义菜单当前是否打开（原生菜单模式下需要清掉）。 */
@@ -107,7 +114,7 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
       // 「默认插入」：先把勾选的提示词写回编辑器末尾，再回放发送手势 ——
       // 官方手势照旧（含运行中「排队 / 打断」的判定），本插件不做第二套判断。
       // 原文为空时 applyAlwaysPrompts 返回 false，一切照旧。
-      applyAlwaysPrompts(settings.quickPrompts)
+      applyAlwaysPrompts(deps.alwaysPrompts())
       dispatchKey(root, chordToInit('Enter'))
     } else if (gesture === 'newline') {
       dispatchKey(root, chordToInit('Shift+Enter'))
@@ -160,7 +167,7 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
     if (replayingSendClick) return
     const button = sendButtonOf(event.target)
     if (button === null) return
-    if (!applyAlwaysPrompts(deps.settings().quickPrompts)) return
+    if (!applyAlwaysPrompts(deps.alwaysPrompts())) return
     event.preventDefault()
     event.stopPropagation()
     replayingSendClick = true

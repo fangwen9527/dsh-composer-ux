@@ -299,6 +299,13 @@ async function bootHost(options = {}) {
   return { routes, llmCalls, schema: () => schema }
 }
 
+/**
+ * 宿主半现在注册两条 exact 路由（提示词优化 + 快捷指令存储），
+ * 所以按**路径**取用，不要再按下标——加一条路由不该让别的用例集体改下标。
+ */
+const optimizerRoute = host => host.routes.find(route => route.path === pure.OPTIMIZER_API_PATH)
+const storeRoute = host => host.routes.find(route => route.path === pure.QUICK_PROMPTS_API_PATH)
+
 /** 假请求：可被 for-await 读取的 body。 */
 function makeReq(method, body) {
   return {
@@ -324,10 +331,11 @@ const json = res => JSON.parse(res.captured.body)
 
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
-  check('注册了一条 exact 路由', host.routes.length === 1 && host.routes[0].kind === 'exact', JSON.stringify(host.routes.map(r => r.kind)))
-  check('路由路径与客户端约定一致', host.routes[0].path === pure.OPTIMIZER_API_PATH, host.routes[0].path)
+  check('注册了两条 exact 路由（优化 + 快捷指令存储）', host.routes.length === 2 && host.routes.every(route => route.kind === 'exact'), JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
+  check('优化路由路径与客户端约定一致', optimizerRoute(host)?.path === pure.OPTIMIZER_API_PATH, optimizerRoute(host)?.path)
+  check('存储路由路径与客户端约定一致', storeRoute(host)?.path === pure.QUICK_PROMPTS_API_PATH, storeRoute(host)?.path)
 
-  const handler = host.routes[0].handler
+  const handler = optimizerRoute(host).handler
   const res = makeRes()
   await handler(makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
   const body = json(res)
@@ -344,7 +352,7 @@ const json = res => JSON.parse(res.captured.body)
 }
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
-  const handler = host.routes[0].handler
+  const handler = optimizerRoute(host).handler
   const res = makeRes()
   await handler(makeReq('POST', JSON.stringify({ text: 'x', tier: 'basic' })), res)
   check('basic 档温度 0.2', host.llmCalls[0].temperature === 0.2)
@@ -354,15 +362,15 @@ const json = res => JSON.parse(res.captured.body)
   const host = await bootHost({
     model: { currentSelection: () => ({ provider: 'default', model: 'default-model' }) },
   })
-  const handler = host.routes[0].handler
+  const handler = optimizerRoute(host).handler
   const res = makeRes()
   await handler(makeReq('POST', JSON.stringify({ text: 'x', provider: 'explicit', model: 'explicit-model' })), res)
   check('请求体里的路由优先于默认模型', host.llmCalls[0].provider === 'explicit' && host.llmCalls[0].model === 'explicit-model')
 }
 {
   const host = await bootHost()
-  check('拿不到默认模型时路由为空', host.routes.length === 1)
-  const handler = host.routes[0].handler
+  check('没有默认模型时路由照常注册（失败发生在调用时）', optimizerRoute(host) !== undefined)
+  const handler = optimizerRoute(host).handler
   const res = makeRes()
   await handler(makeReq('POST', JSON.stringify({ text: 'x' })), res)
   const body = json(res)
@@ -371,7 +379,7 @@ const json = res => JSON.parse(res.captured.body)
 }
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
-  const handler = host.routes[0].handler
+  const handler = optimizerRoute(host).handler
 
   const getRes = makeRes()
   await handler(makeReq('GET'), getRes)
@@ -398,7 +406,7 @@ const json = res => JSON.parse(res.captured.body)
     ],
   })
   const res = makeRes()
-  await host.routes[0].handler(makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  await optimizerRoute(host).handler(makeReq('POST', JSON.stringify({ text: '原文' })), res)
   const body = json(res)
   check('模型报错但已有文本 → 仍返回该文本', body.ok === true && body.text === '写了一半', JSON.stringify(body))
 }
@@ -408,7 +416,7 @@ const json = res => JSON.parse(res.captured.body)
     chunks: [{ type: 'finish', reason: { kind: 'error', failure: { message: '上游 502', code: 'upstream' } } }],
   })
   const res = makeRes()
-  await host.routes[0].handler(makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  await optimizerRoute(host).handler(makeReq('POST', JSON.stringify({ text: '原文' })), res)
   const body = json(res)
   check('模型零产出 → ok:false 并带原因', body.ok === false && body.error.includes('上游 502'), JSON.stringify(body))
 }

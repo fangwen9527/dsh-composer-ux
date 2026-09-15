@@ -387,3 +387,47 @@ export const quickEmpty: CSSProperties = {
   padding: '14px 10px',
   textAlign: 'center',
 }
+
+// ── 快捷指令：分类（0.3.0 起的两级结构） ───────────────────────────────────
+
+/** 分类切换行（面板里在档位行下方）。 */
+export const quickCategoryRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  flexWrap: 'wrap',
+}
+
+/** 单个分类标签。 */
+export const quickCategoryTab: CSSProperties = {
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  lineHeight: 1,
+  padding: '4px 8px',
+  borderRadius: 999,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  maxWidth: 160,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+/** 选中的分类标签。
+ *  只改边框与文字色，**不用实色填充**：这样不需要填/前景成对令牌，
+ *  也就不会重演 0.2.0 那次「深色主题白底白字」。 */
+export const quickCategoryTabActive: CSSProperties = {
+  ...quickCategoryTab,
+  border: '0.5px solid var(--dsw-alias-brand-primary)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontWeight: 600,
+}
+
+/** 「＋ 分类」小按钮。 */
+export const quickCategoryAdd: CSSProperties = {
+  ...quickCategoryTab,
+  color: 'var(--dsw-alias-label-tertiary)',
+  padding: '4px 7px',
+  cursor: 'pointer',
+}

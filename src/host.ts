@@ -21,12 +21,13 @@ import {
   HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
-  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZER_API_PATH,
-  OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD,
-  PANEL_WIDTH_FIELD, QUICK_LABEL_MAX, QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX,
-  QUICK_TEXT_MAX, SEND_KEY_FIELD, newSessionId, parseRouteList, DEFAULT_OPTIMIZER_TIER,
+  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
+  OPTIMIZER_API_PATH, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
+  PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
+  SEND_KEY_FIELD, newSessionId, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
 } from './settings-contract.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser } from './optimizer-prompt.ts'
+import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 
 export const name = 'composer-ux'
 
@@ -307,8 +308,13 @@ export function apply(ctx: Context): void {
     const LLM_TIMEOUT_MS = 180_000
     /** 请求体上限（输入框里的原文，正常都是几 KB）。 */
     const BODY_MAX_BYTES = 1_000_000
-    /** 直接送去优化的原文长度上限。 */
-    const TEXT_MAX = QUICK_TEXT_MAX * 2
+    /**
+     * 直接送去优化的原文长度上限。
+     *
+     * 与旧实现等值（旧 `QUICK_TEXT_MAX * 2` = 8000）：快捷指令的存储上限已经提到
+     * 20 万，但**优化请求**的输入上限必须留在原地，否则超长文本会被丢给模型。
+     */
+    const TEXT_MAX = OPTIMIZE_TEXT_MAX
 
     const sendJson = (
       res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
@@ -438,5 +444,119 @@ export function apply(ctx: Context): void {
       path: OPTIMIZER_API_PATH,
       handler: handle as never,
     }), 'composer-ux: prompt optimizer route')
+  })
+
+  // ── 快捷指令的全局存储 ────────────────────────────────────────────────────
+  //
+  // 0.3.0 起快捷指令不再写入 settings 文档，改存 `$DSH_HOME/quick-prompts.json`：
+  // 设置文档对数组是整份替换、且受 schema 长度上限截断，而快捷指令是**用户内容**
+  // （长提示词是常态），并且需要一份与会话、项目无关、可以单独备份的落点。
+  //
+  // 本块只负责「读、迁移、整本写回」；原子写、写锁、坏文件隔离都在
+  // ./quick-store.ts，客户端半通过这条路由读写（见 client/prompt-book.ts）。
+  ctx.inject(['webServer'], (storeCtx) => {
+    /** 请求体上限：整本快捷指令都在里面，给足余量（正常只有几十 KB）。 */
+    const BODY_MAX_BYTES = 8_000_000
+
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(payload))
+    }
+
+    const readBody = async (req: AsyncIterable<unknown>): Promise<string> => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+        total += buf.length
+        if (total > BODY_MAX_BYTES) throw new Error('请求体过大')
+        chunks.push(buf)
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    }
+
+    /**
+     * 迁移种子：0.2.x 存在 settings 里的平铺列表。
+     *
+     * 取不到就是 undefined —— 那时用内置 9 条初始化（见 quick-store 的 ensureQuickBook）。
+     * 旧值**保留在设置文档里、不清空**：万一回滚到旧版本，用户还能看到自己那几条。
+     */
+    const legacyPrompts = (): readonly unknown[] | undefined => {
+      try {
+        const settings = storeCtx.get('settings') as SettingsLike | undefined
+        const row = objectOf(settings?.get(NAMESPACE))
+        const list = row?.[QUICK_PROMPTS_FIELD]
+        return Array.isArray(list) ? list as readonly unknown[] : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    const handle = async (
+      req: { method?: string; [key: string]: unknown },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): Promise<void> => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+
+      const file = quickStorePath()
+      // 每次请求都尝试一次「缺失即迁移」；文件存在时它什么也不做。
+      const outcome = await ensureQuickBook(legacyPrompts(), file)
+      if (outcome.kind === 'broken') {
+        // 坏文件已被改名隔离，这里**不做任何写入**，如实把原因交给 UI 显示。
+        sendJson(res, 200, {
+          ok: false,
+          file,
+          error: `快捷指令文件读不了：${outcome.error}`,
+          quarantined: outcome.quarantined ?? '',
+        })
+        return
+      }
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, file, book: outcome.book })
+        return
+      }
+
+      let payload: Record<string, unknown>
+      try {
+        payload = objectOf(JSON.parse(await readBody(req as unknown as AsyncIterable<unknown>))) ?? {}
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: `请求体不是合法 JSON：${errorText(error)}` })
+        return
+      }
+
+      const candidate = payload.book !== undefined ? payload.book : payload
+      const next = sanitizeBook(candidate)
+      if (next === undefined) {
+        sendJson(res, 400, {
+          ok: false,
+          error: '提交的结构认不出（期望 { book: { categories: [...] } } 或 { categories: [...] }）',
+        })
+        return
+      }
+      try {
+        await writeQuickBook(next, file)
+      } catch (error: unknown) {
+        sendJson(res, 500, { ok: false, error: `写入失败：${errorText(error)}` })
+        return
+      }
+      // 写完重读一遍：回给客户端的是**磁盘上的真实内容**，不是我们以为写进去的东西，
+      // 这样任何被收窄/丢弃的字段都会立刻在 UI 上暴露出来。
+      const verified = await readQuickBook(file)
+      sendJson(res, 200, { ok: true, file, book: verified.kind === 'ok' ? verified.book : next })
+    }
+
+    storeCtx.effect(() => storeCtx.webServer.register({
+      kind: 'exact',
+      path: QUICK_PROMPTS_API_PATH,
+      handler: handle as never,
+    }), 'composer-ux: quick prompt store route')
   })
 }

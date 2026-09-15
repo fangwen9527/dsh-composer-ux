@@ -285,7 +285,9 @@ export function sanitizeBook(value: unknown): QuickPromptBook | undefined {
     if (typeof raw !== 'object' || raw === null) continue
     const row = raw as Record<string, unknown>
     const prompts = toPromptList(Array.isArray(row.prompts) ? row.prompts : [])
-    if (prompts.length === 0) continue // 与参考实现一致：空分类不保留
+    // 空分类**保留**（这点与参考实现不同）：面板的「＋」只是新建一个分类，用户接下来
+    // 才会往里放条目；若在这里丢掉，点「＋」就会看起来毫无反应（0.3.0 真机上踩到）。
+    // 空分类在文件里也是合法状态，数量上限由 QUICK_CATEGORY_MAX 兜住。
     const wanted = typeof row.id === 'string' && row.id !== '' ? row.id.slice(0, 64) : newQuickCategoryId()
     const id = seen.has(wanted) ? newQuickCategoryId() : wanted
     seen.add(id)

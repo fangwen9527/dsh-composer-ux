@@ -283,7 +283,13 @@ console.log('6. 收窄边界')
   check('重复 id 会被重新分配（分类与条目各去重）', dup.body.book.categories.length === 2 && dup.body.book.categories[0].id !== dup.body.book.categories[1].id, JSON.stringify(dup.body.book.categories.map(c => c.id)))
 
   const blank = await callPost(host, { book: { categories: [{ id: 'c', name: '空分类', prompts: [] }] } })
-  check('空分类被丢掉（与参考实现一致）', blank.body.book.categories.length === 0, JSON.stringify(blank.body.book.categories))
+  check(
+    '空分类被保留（面板「＋」新建后、还没放条目的中间态）',
+    blank.body.book.categories.length === 1 && blank.body.book.categories[0].prompts.length === 0,
+    JSON.stringify(blank.body.book.categories),
+  )
+  const blankAgain = await callGet(host)
+  check('空分类能往返（不会被二次丢掉）', blankAgain.body.book.categories.length === 1, JSON.stringify(blankAgain.body.book.categories.map(c => c.name)))
 }
 
 // ══════════════ 7. 并发写 ═══════════════════════════════════════════════════

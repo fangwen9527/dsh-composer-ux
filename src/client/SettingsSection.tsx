@@ -345,6 +345,8 @@ function QuickPromptsEditor(props: {
   const [activeId, setActiveId] = useState(() => props.book.categories[0]?.id ?? '')
   const [dirty, setDirty] = useState(false)
   const [newName, setNewName] = useState('')
+  /** 上一次保存时跳过空条目的说明（空串 = 无）。 */
+  const [note, setNote] = useState('')
 
   // 本地没有未保存修改时跟随外部快照。
   useEffect(() => {
@@ -486,7 +488,21 @@ function QuickPromptsEditor(props: {
           type="button"
           style={dirty ? pillActive : pill}
           disabled={!dirty || saving}
-          onClick={() => { props.onSave(draft); setDirty(false) }}
+          onClick={() => {
+            // 先把正文为空的条目剔掉**并说明**：净化端也会丢它们，但若让用户自己发现
+            // 「我加的这条怎么没了」，那是一次说不清的静默丢失。
+            const next: QuickPromptBook = {
+              version: draft.version,
+              categories: draft.categories.map(category => ({
+                ...category,
+                prompts: category.prompts.filter(prompt => prompt.prompt.trim() !== ''),
+              })),
+            }
+            const skipped = counts.prompts - bookCounts(next).prompts
+            setNote(skipped > 0 ? `已跳过 ${String(skipped)} 条正文为空的条目` : '')
+            props.onSave(next)
+            setDirty(false)
+          }}
         >
           {saving ? '保存中…' : (dirty ? '保存修改' : '已保存')}
         </button>
@@ -494,6 +510,7 @@ function QuickPromptsEditor(props: {
         <button type="button" style={pill} onClick={() => { props.onReset() }}>恢复内置 9 条</button>
         <span style={rowDesc}>
           共 {counts.categories} 个分类 · {counts.prompts} 条 · 默认插入 {counts.always} 条
+          {note === '' ? '' : ` · ${note}`}
           {failed ? ` · ${props.status}` : ''}
         </span>
       </div>

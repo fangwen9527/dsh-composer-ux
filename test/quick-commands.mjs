@@ -83,6 +83,29 @@ console.log('1. 快捷指令的净化（防脏数据）')
   check('未知档位回落到高级', clean.optimizerTier === 'advanced', clean.optimizerTier)
   check('合法档位原样保留', pure.sanitizeSettings({ optimizerTier: 'extreme' }).optimizerTier === 'extreme')
 }
+{
+  // 0.5.0：右键菜单从布尔 menuNative 换成三档字符串 menuMode。
+  // 这里钉住迁移的每种情形——尤其「文档里根本没有这个键」与「明确关掉过旧开关」必须分开：
+  // 前者落到新默认档（官方不介入），后者要保持用户当初选的自定义菜单。
+  check('新字段合法 → 原样',
+    pure.sanitizeSettings({ menuMode: 'browser' }).menuMode === 'browser')
+  check('新字段优先于旧布尔（两者都在时听新字段）',
+    pure.sanitizeSettings({ menuMode: 'official', menuNative: true }).menuMode === 'official')
+  check('旧布尔 true → 浏览器档',
+    pure.sanitizeSettings({ menuNative: true }).menuMode === 'browser')
+  check('旧布尔 false（明确关过那个开关）→ 自定义档',
+    pure.sanitizeSettings({ menuNative: false }).menuMode === 'custom')
+  check('两个键都没有（从没设过）→ 新默认档「官方不介入」',
+    pure.sanitizeSettings({}).menuMode === 'official')
+  check('新字段是脏数据 → 落回旧布尔',
+    pure.sanitizeSettings({ menuMode: 'nonsense', menuNative: true }).menuMode === 'browser')
+  check('三档元数据齐全且顺序为 官方 / 浏览器 / 自定义',
+    pure.MENU_MODES.map(item => item.id).join(',') === 'official,browser,custom',
+    pure.MENU_MODES.map(item => item.id).join(','))
+  check('每档都有给用户看的一句话说明',
+    pure.MENU_MODES.every(item => typeof item.label === 'string' && item.label !== ''
+      && typeof item.hint === 'string' && item.hint.length > 10))
+}
 
 // ══════════════ 2. 发送时的末尾拼接语义 ════════════════════════════════════
 //

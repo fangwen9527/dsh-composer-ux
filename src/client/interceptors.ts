@@ -131,16 +131,26 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
   const onContextMenu = (event: MouseEvent): void => {
     const root = findComposerRoot(event.target)
     if (root === null) return
-    // 原生菜单模式：不让第三方插件（如 dsh-paste-input-plus 的「只有复制」菜单）
-    // 吃掉 contextmenu——我们排在 capture 阶段先执行，stopImmediatePropagation 后
+    const mode = deps.settings().menuMode
+    // 官方档：本插件**完全不介入** —— 既不 preventDefault 也不 stopImmediatePropagation，
+    // DSH 官方与其它插件自己的右键处理原样生效。（DSH 官方输入框本身没有右键菜单，
+    // 所以通常看到的就是浏览器菜单。）已打开的自定义菜单由 client.tsx 在切档时关掉。
+    if (mode === 'official') return
+    // 浏览器档：不让第三方插件（如 dsh-paste-input-plus 的「只有复制」菜单）吃掉
+    // contextmenu——我们排在 capture 阶段先执行，stopImmediatePropagation 后
     // 事件到不了 bubble 阶段的插件监听器；但不 preventDefault，浏览器原生菜单照常出现。
-    if (deps.settings().menuNative) {
+    if (mode === 'browser') {
       if (deps.menuOpen()) deps.setMenu(null)
       event.stopImmediatePropagation()
       event.stopPropagation()
       return
     }
+    // 自定义档：两件事都做——preventDefault 掉浏览器菜单（改由本插件接管），
+    // 并且和「浏览器」档一样 stopImmediatePropagation 挡住同一层里其它插件的捕获监听。
+    // 否则两边会各弹一个菜单。拦到的是**别的插件**，不影响我们自己：本插件的菜单组件
+    // 只监听 pointerdown / keydown / scroll / resize（见 ContextMenuHost）。
     event.preventDefault()
+    event.stopImmediatePropagation()
     event.stopPropagation()
     const selection = window.getSelection()
     const hasSelection = selection !== null

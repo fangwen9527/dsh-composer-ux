@@ -32,8 +32,60 @@ export const MENU_FIELDS = [
 
 export type MenuField = (typeof MENU_FIELDS)[number]
 
-/** 右键菜单模式字段名：true = 浏览器原生菜单（粘贴免授权），false = 自定义菜单。 */
+/**
+ * 右键菜单模式字段名（0.5.0 起三档）。
+ *
+ * 0.2.x～0.4.0 用的是布尔 `menuNative`：true = 浏览器原生菜单、false = 自定义菜单。
+ * 布尔只有两位，表达不了「插件完全不介入」（不挡别的插件的菜单）这一档，所以换成
+ * 字符串三档。旧字段**只作为迁移线索保留**：本字段为空时按旧字段推断（见 `menuModeFrom`）。
+ */
+export const MENU_MODE_FIELD = 'menuMode'
+
+/** 0.2.x～0.4.0 的旧字段名：迁移线索，0.5.0 起不再写它。 */
 export const MENU_NATIVE_FIELD = 'menuNative'
+
+/** 右键菜单模式：官方不介入 / 浏览器菜单 / 自定义菜单。 */
+export type MenuMode = 'official' | 'browser' | 'custom'
+
+/** 三档的元数据（数组顺序即界面顺序）。 */
+export const MENU_MODES: readonly {
+  readonly id: MenuMode
+  readonly label: string
+  readonly hint: string
+}[] = [
+  {
+    id: 'official',
+    label: '官方',
+    hint: '本插件完全不介入：DSH 与其它插件自己的右键处理原样生效（DSH 官方输入框本身没有右键菜单，通常看到的就是浏览器的菜单）',
+  },
+  {
+    id: 'browser',
+    label: '浏览器',
+    hint: '固定使用浏览器自带的菜单，并在本插件这一层挡住其它插件的菜单；粘贴免授权、零配置',
+  },
+  {
+    id: 'custom',
+    label: '自定义',
+    hint: '使用本插件的固定样式菜单；未选中文本时「剪切 / 复制 / 删除」置灰，粘贴需要浏览器剪贴板授权',
+  },
+]
+
+/**
+ * 定出右键菜单模式：新字段优先，其次按旧布尔推断，都没有就用默认档。
+ *
+ * 三种情况判断得出来，是因为宿主半把旧字段声明成**可选**（没有 `.default(false)`）：
+ * 「从没碰过那个开关」与「明确关了它」在文档里长得不一样（键不存在 / 键为 false），
+ * 前者落到新默认档（官方不介入），后者保持原来的自定义菜单。
+ * @param storedMode - 文档里的新字段值（可能是脏数据）。
+ * @param legacyNative - 文档里的旧布尔值（可能不存在）。
+ * @returns 三档之一。
+ */
+export function menuModeFrom(storedMode: unknown, legacyNative: unknown): MenuMode {
+  if (storedMode === 'official' || storedMode === 'browser' || storedMode === 'custom') return storedMode
+  if (legacyNative === true) return 'browser'
+  if (legacyNative === false) return 'custom'
+  return DEFAULT_SETTINGS.menuMode
+}
 
 // ── 快捷指令与提示词优化 ─────────────────────────────────────────────────────
 
@@ -452,6 +504,7 @@ export type SettingsField =
   | typeof PANEL_WIDTH_FIELD
   | typeof PANEL_HEIGHT_FIELD
   | typeof MENU_NATIVE_FIELD
+  | typeof MENU_MODE_FIELD
   | typeof HEADER_ENABLED_FIELD
   | typeof HEADER_NAME_FIELD
   | typeof HEADER_VALUE_FIELD
@@ -486,8 +539,11 @@ export interface ComposerUxSettings {
   menuPaste: boolean
   menuDelete: boolean
   menuSelectAll: boolean
-  /** true = 浏览器原生右键菜单（粘贴免授权）；false = 自定义菜单。 */
-  menuNative: boolean
+  /**
+   * 右键菜单模式（官方不介入 / 浏览器菜单 / 自定义菜单）。
+   * 文档里没有这个字段时按旧布尔 `menuNative` 推断，见 `menuModeFrom`。
+   */
+  menuMode: MenuMode
   /** 设置面板：条目过多时导航列可滚动。 */
   panelScroll: boolean
   /** 设置面板：允许拖拽边缘调整大小。 */
@@ -527,7 +583,7 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   menuPaste: true,
   menuDelete: true,
   menuSelectAll: true,
-  menuNative: false,
+  menuMode: 'official',
   panelScroll: true,
   panelResize: true,
   headerEnabled: false,
@@ -645,7 +701,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     menuPaste: asBool('menuPaste'),
     menuDelete: asBool('menuDelete'),
     menuSelectAll: asBool('menuSelectAll'),
-    menuNative: asBool(MENU_NATIVE_FIELD),
+    menuMode: menuModeFrom(source[MENU_MODE_FIELD], source[MENU_NATIVE_FIELD]),
     panelScroll: asBool(PANEL_SCROLL_FIELD),
     panelResize: asBool(PANEL_RESIZE_FIELD),
     panelWidth: asSize(PANEL_WIDTH_FIELD),

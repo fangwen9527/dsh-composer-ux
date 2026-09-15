@@ -6,7 +6,7 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
-  HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE,
+  HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, SEND_KEY_FIELD, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
@@ -143,6 +143,8 @@ export function apply(ctx: any): void {
     void scope.mutate(
       [
         ENABLED_FIELD, SEND_KEY_FIELD, NEWLINE_KEY_FIELD, ...MENU_FIELDS,
+        MENU_MODE_FIELD,
+        // 旧的布尔字段也一并清掉：它只是迁移线索，留着会把「恢复默认」后的档位又拉回旧值。
         MENU_NATIVE_FIELD,
         PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
         HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_VALUE_FIELD, HEADER_ROUTES_FIELD,
@@ -338,8 +340,8 @@ export function apply(ctx: any): void {
         menu.set(null)
         panel.set(null)
       }
-      // 原生菜单模式启用瞬间：清掉可能还开着的自定义菜单。
-      if (live.getSnapshot().menuNative) menu.set(null)
+      // 只要不是「自定义」档，就清掉可能还开着的自定义菜单（官方 / 浏览器两档都不该留下它）。
+      if (live.getSnapshot().menuMode !== 'custom') menu.set(null)
       // 总开关关掉时按钮本身也会消失（组件里按 enabled 返回 null），
       // 浮层必须跟着一起收，否则会留下一个没有锚点的面板。
       if (!live.getSnapshot().enabled) panel.set(null)

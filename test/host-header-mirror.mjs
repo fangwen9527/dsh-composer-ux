@@ -49,9 +49,11 @@ async function boot(seed) {
   const state = structuredClone(seed)
   const calls = []
   const listeners = []
+  /** 注册进来的 schema：右键菜单那三个「可选键」的语义就是靠它保证的，见第 6 节。 */
+  let schema = null
   const settings = {
     get: ns => state[ns],
-    register: () => {},
+    register: (ns, registered) => { schema = registered },
     mutate: async (ns, ops) => {
       calls.push({ ns, ops })
       for (const op of ops) {
@@ -85,6 +87,8 @@ async function boot(seed) {
   return {
     state,
     calls,
+    /** 本插件注册的设置 schema（可当函数调用，得到解析后的值）。 */
+    get schema() { return schema },
     /** 模拟设置变更事件，触发宿主半重新对齐。 */
     async touch(ns) {
       calls.length = 0
@@ -280,6 +284,36 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
   }
   const app = await boot(seed)
   check('含 opencode.ai 的裸串仍写入', typeof headersOf(app.state, 'weird')?.['x-opencode-session'] === 'string')
+}
+
+{
+  console.log('15. 右键菜单那几个「可选键」的解析语义（迁移全靠它）')
+  // 0.5.0 把右键菜单从布尔 menuNative 换成三档 menuMode，迁移要能分清三件事：
+  //   ① 文档里根本没有这些键（从没设过 → 新默认档）
+  //   ② 明确写成 false（用户关过旧开关 → 保持自定义菜单）
+  //   ③ 明确写了新字段（照它来）
+  // 这三件事分得清，前提是 schema 把它们声明成**可选且无默认值**。所以这里用
+  // 插件真正注册进去的那个 schema 来验，而不是验我们的注释。
+  const app = await boot({ [NAMESPACE]: baseOwn({}) })
+  const schema = app.schema
+  check('插件确实注册了 schema', schema !== null && typeof schema === 'function')
+
+  const empty = schema({})
+  check('两个键都没有 → 解析后仍然没有（「从没设过」可辨）',
+    empty.menuMode === undefined && empty.menuNative === undefined,
+    JSON.stringify({ menuMode: empty.menuMode, menuNative: empty.menuNative }))
+
+  const off = schema({ menuNative: false })
+  check('明确写 false → 保留 false（「关过旧开关」可辨）', off.menuNative === false)
+
+  const on = schema({ menuNative: true })
+  check('明确写 true → 保留 true（旧档位不是浏览器菜单）', on.menuNative === true)
+
+  const mode = schema({ menuMode: 'custom' })
+  check('新字段写了就照它来', mode.menuMode === 'custom')
+
+  const other = schema({})
+  check('其它字段的默认值照旧生效（可选键没把整张表带坏）', other.enabled === true)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

@@ -13,7 +13,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  MENU_ITEMS, MENU_NATIVE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
+  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
@@ -29,6 +29,7 @@ import {
 } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
+import { PillChoice } from './PillChoice.tsx'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -548,9 +549,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
 
   const menuEnabled = MENU_ITEMS.filter(item => settings[item.field]).length
   const keySummary = `发送 ${displayChord(settings.sendKey)} · 换行 ${displayChord(settings.newlineKey)}`
-  const menuSummary = settings.menuNative
-    ? '当前：系统原生菜单（粘贴免授权）'
-    : `当前：自定义菜单 · ${menuEnabled} / ${MENU_ITEMS.length} 项开启`
+  // 三档各自的摘要：一眼看出右键会弹哪一种菜单，以及自定义档当前开了几项。
+  const menuSummary = settings.menuMode === 'official'
+    ? '当前：官方不介入'
+    : settings.menuMode === 'browser'
+      ? '当前：浏览器菜单（粘贴免授权）'
+      : `当前：自定义菜单 · ${menuEnabled} / ${MENU_ITEMS.length} 项开启`
   const panelSummary = `导航滚动 ${settings.panelScroll ? '开' : '关'}`
     + ` · 边缘缩放 ${settings.panelResize ? '开' : '关'}`
     + ` · ${settings.panelWidth}×${settings.panelHeight}`
@@ -633,19 +637,36 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
 
       <FoldCard name="右键菜单" summary={menuSummary}>
         <p style={bodyLead}>
-          右键点击输入框时的行为。系统原生模式下由浏览器弹出自己的菜单（样式随浏览器而变化，
-          粘贴免授权、零配置）；自定义模式使用固定样式菜单（未选中文本时「剪切 / 复制 / 删除」置灰，
-          粘贴需要浏览器剪贴板授权，Firefox 要在 about:config 中设置
-          permissions.default.clipboard-read = 1 才能免弹窗）。
+          右键点击输入框时弹出哪一种菜单。只影响右键，不影响键位与其它功能。
         </p>
-        <ToggleRow
-          first
-          label="使用系统原生菜单"
-          desc="打开后右键粘贴免授权（点击浏览器菜单的粘贴直接成功）；关闭后恢复自定义菜单"
-          checked={settings.menuNative}
-          onChange={next => { actions.setField(MENU_NATIVE_FIELD, next) }}
-        />
-        {!settings.menuNative && (<>
+        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+          <div style={rowText}>
+            <div style={rowTitle}>菜单来源</div>
+            <div style={rowDesc}>
+              {MENU_MODES.find(item => item.id === settings.menuMode)?.hint ?? ''}
+            </div>
+          </div>
+          <PillChoice
+            items={MENU_MODES}
+            value={settings.menuMode}
+            onChange={mode => { actions.setField(MENU_MODE_FIELD, mode) }}
+            ariaLabel="右键菜单来源"
+          />
+        </div>
+        <p style={hintInfo}>
+          官方：本插件完全不介入，DSH 与其它插件自己的右键处理原样生效（DSH 官方输入框本身没有
+          右键菜单，所以通常看到的就是浏览器的菜单）。
+        </p>
+        <p style={hintInfo}>
+          浏览器：固定用浏览器自带的菜单（样子随浏览器而变），并在本插件这一层挡住其它插件的菜单；
+          好处是粘贴免授权、零配置。
+        </p>
+        <p style={hintInfo}>
+          自定义：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）；「粘贴」需要
+          浏览器剪贴板授权，Firefox 要把 about:config 里的 permissions.default.clipboard-read
+          设为 1 才不弹授权窗。
+        </p>
+        {settings.menuMode === 'custom' && (<>
         {MENU_ITEMS.map(item => (
           <ToggleRow
             key={item.field}
@@ -670,9 +691,9 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
       <FoldCard name="快捷指令" summary={quickSummary}>
         <p style={bodyLead}>
           输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框。
-          每条右侧的三选一决定**发送时怎么附加**：
-          「关」= 只插入不附加；「每次」= 每次发送都附加到消息**末尾**；
-          「仅首次」= 只在**这个会话的第一条消息**上附加（之后不再附加，刷新页面也不会重复）。
+          每条右侧的三选一决定<strong>发送时怎么附加</strong>：
+          「关」= 只插入不附加；「每次」= 每次发送都附加到消息<strong>末尾</strong>；
+          「仅首次」= 只在<strong>这个会话的第一条消息</strong>上附加（之后不再附加，刷新页面也不会重复）。
           多条按列表顺序拼接，输入框里不提前显示。
           「优化提示词」会用另一个 AI 把输入框里的话整理成一条能直接发出去的清晰指令，
           结果直接写回输入框（Ctrl+Z 可还原）——不会污染当前对话，也不占你的对话轮次。

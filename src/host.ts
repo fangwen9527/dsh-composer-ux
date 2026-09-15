@@ -20,7 +20,7 @@ import {
   HEADER_APPLIED_NAME_FIELD,
   HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  LLM_NAMESPACE, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
+  LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZER_API_PATH, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
@@ -238,7 +238,13 @@ export function apply(ctx: Context): void {
           field,
           z.boolean().default(DEFAULT_SETTINGS[field]),
         ])),
-        [MENU_NATIVE_FIELD]: z.boolean().default(DEFAULT_SETTINGS.menuNative),
+        // 右键菜单模式（0.5.0 起三档）。**故意不给默认值、且声明成可选**：
+        // 「文档里没有这个键」本身就是迁移要用的信息——净化据此按旧布尔 menuNative
+        // 推断（见 menuModeFrom）。给了默认值就再也分不出「从没设置过」与「明确设成了它」。
+        [MENU_MODE_FIELD]: z.string().required(false),
+        // 旧的布尔字段：只作迁移线索，故同样不给默认值——旧文档里的 true / false
+        // 都要保住原意（true = 浏览器菜单、false = 明确选过自定义菜单）。
+        [MENU_NATIVE_FIELD]: z.boolean().required(false),
         [PANEL_SCROLL_FIELD]: z.boolean().default(DEFAULT_SETTINGS.panelScroll),
         [PANEL_RESIZE_FIELD]: z.boolean().default(DEFAULT_SETTINGS.panelResize),
         // schemastery 无 .optional()：可选键用 .required(false)。

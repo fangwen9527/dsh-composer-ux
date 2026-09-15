@@ -26,6 +26,21 @@ function check(label, condition, detail) {
 
 // ── 最小 DOM / React 桩 ─────────────────────────────────────────────────────
 const listeners = []
+/** 每种事件的**最新**处理函数：拦截器会在设置变化时重装，永远用最后装的那个。 */
+const handlers = new Map()
+
+/** 让拦截器里的 `target instanceof Element` 成立。 */
+globalThis.Element = class Element {}
+
+/** 假的输入框根节点：closest 只认输入框那个选择器（与拦截器一致）。 */
+function makeComposerRoot() {
+  return Object.assign(new globalThis.Element(), {
+    closest: (selector) => (selector === '[data-composer-input]' ? root : null),
+    contains: () => true,
+    focus: () => {},
+  })
+}
+const root = makeComposerRoot()
 
 function makeStyleTag() {
   return {
@@ -41,10 +56,11 @@ function makeStyleTag() {
 globalThis.window = {
   innerWidth: 1440,
   innerHeight: 900,
-  addEventListener: (type) => { listeners.push(type) },
+  addEventListener: (type, handler) => { listeners.push(type); if (typeof handler === 'function') handlers.set(type, handler) },
   removeEventListener: () => {},
   setTimeout: (fn) => setTimeout(fn, 0),
   clearTimeout: (handle) => clearTimeout(handle),
+  getSelection: () => null,
   __ModuleLoader__: null,
 }
 
@@ -125,10 +141,16 @@ const scopeValue = {
   quickPrompts: [{ id: 'a', label: '甲', prompt: '内容甲', always: true }],
   optimizerTier: 'extreme',
 }
+/** 设置变化的订阅者：三档行为测试要靠它把新值推进插件（真实插件就是靠这个 sync）。 */
+const settingsSubscribers = new Set()
+
 const settingsScope = {
   bind: () => ({
     getSnapshot: () => ({ status: 'ready', value: scopeValue }),
-    subscribe: () => () => {},
+    subscribe: (listener) => {
+      settingsSubscribers.add(listener)
+      return () => { settingsSubscribers.delete(listener) }
+    },
     set: async () => {},
     unset: async () => {},
     mutate: async () => {},
@@ -205,6 +227,53 @@ for (const name of ['close', 'insert', 'optimize', 'setTier', 'setInsertMode', '
 check('面板不再拿到会造成矛盾状态的 setAlways', panelInject.actions.setAlways === undefined)
 for (const name of ['live', 'panel', 'busy', 'notice', 'book', 'bookStatus']) {
   check(`面板拿到 ${name} 钩子`, typeof panelInject.hooks[name]?.getSnapshot === 'function')
+}
+
+console.log('6. 右键菜单三档（派发真实 contextmenu，看实际行为而不是看源码文本）')
+{
+  /** 派发一次 contextmenu，返回这次事件被怎么对待。 */
+  const fireContextMenu = () => {
+    const event = {
+      target: root,
+      prevented: false,
+      stopped: false,
+      immediate: false,
+      preventDefault() { this.prevented = true },
+      stopPropagation() { this.stopped = true },
+      stopImmediatePropagation() { this.immediate = true },
+    }
+    const handler = handlers.get('contextmenu')
+    if (typeof handler !== 'function') throw new Error('contextmenu 拦截器没有装上')
+    handler(event)
+    return event
+  }
+  /** 改档并让插件重新同步（真实插件走的就是这个订阅回放）。 */
+  const setMenuMode = (mode) => {
+    scopeValue.menuMode = mode
+    for (const listener of settingsSubscribers) listener()
+  }
+
+  // 初始设置里没有 menuMode：应当落到默认档。
+  const initial = fireContextMenu()
+  check('没设过档位 → 默认「官方不介入」：不 preventDefault、也不拦事件',
+    !initial.prevented && !initial.immediate && !initial.stopped, JSON.stringify(initial))
+
+  setMenuMode('official')
+  const official = fireContextMenu()
+  check('官方档：插件完全不介入（别的插件的右键处理拿得到事件）',
+    !official.prevented && !official.immediate && !official.stopped, JSON.stringify(official))
+
+  setMenuMode('browser')
+  const browser = fireContextMenu()
+  check('浏览器档：挡住别的插件（stopImmediatePropagation）但不 preventDefault（浏览器菜单照常弹）',
+    browser.immediate && browser.stopped && !browser.prevented, JSON.stringify(browser))
+
+  setMenuMode('custom')
+  const custom = fireContextMenu()
+  // 自定义档：preventDefault 掉浏览器菜单、由本插件接管，同时挡住同一层里其它插件的
+  // 捕获监听（否则两边会各弹一个菜单；浏览器档同样这么做）。
+  check('自定义档：preventDefault 掉浏览器菜单、并挡住同层其它捕获监听',
+    custom.prevented && custom.stopped && custom.immediate, JSON.stringify(custom))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

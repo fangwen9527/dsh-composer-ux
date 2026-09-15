@@ -662,9 +662,22 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           好处是粘贴免授权、零配置。
         </p>
         <p style={hintInfo}>
-          自定义：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）；「粘贴」需要
-          浏览器剪贴板授权，Firefox 要把 about:config 里的 permissions.default.clipboard-read
-          设为 1 才不弹授权窗。
+          自定义：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）。这一档的「粘贴」
+          要读剪贴板，浏览器会先要一次授权——三家浏览器的处理不一样：
+        </p>
+        <p style={hintInfo}>
+          · Chrome / Edge（谷歌 / 微软浏览器）：弹出后点「允许」即可，之后会记住这个站点、不再问。
+          要改或撤销授权：点地址栏最左边的网站图标 → 网站设置（Edge 叫「此站点的权限」）→ 剪贴板；
+          也可以直接在地址栏输入 chrome://settings/content/clipboard（Edge 输入
+          edge://settings/content/clipboard）。
+        </p>
+        <p style={hintInfo}>
+          · Firefox：每次点「粘贴」都会问。想一次免掉：地址栏输入 about:config（点「接受风险并继续」）
+          → 在上方搜索框输入 permissions.default.clipboard-read → 右键「新建」→「整数」→ 值填 1。
+        </p>
+        <p style={hintInfo}>
+          注意：about:config、chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
+          或复制上面那串粘贴到地址栏。
         </p>
         {settings.menuMode === 'custom' && (<>
         {MENU_ITEMS.map(item => (

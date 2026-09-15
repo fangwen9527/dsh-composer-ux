@@ -398,6 +398,15 @@ console.log('9. 原子写的实现形状')
     /<FoldCard name="OpenCode 请求头"[\s\S]{0,800}?<p style=\{hintError\}>[\s\S]{0,300}?不要用 DSH 自带的 API 地址配置[\s\S]{0,300}?一旦发送图片就会报错/.test(sectionSrc),
     'SettingsSection 的 OpenCode 请求头区块应有一段 hintError 样式的地址警告',
   )
+  check(
+    '自定义档的粘贴授权说明写清了三家浏览器与 about:config 的入口',
+    // 用户要求的原话是「写明要在哪里找 about:config，以及谷歌/微软浏览器怎么办」；
+    // 这段说明是给人照着做的，缺一家就等于没写。
+    /自定义：[\s\S]{0,240}?Chrome \/ Edge[\s\S]{0,900}?about:config[\s\S]{0,400}?permissions\.default\.clipboard-read/.test(sectionSrc)
+    && sectionSrc.includes('edge://settings/content/clipboard')
+    && sectionSrc.includes('chrome://settings/content/clipboard'),
+    'SettingsSection 里应写清 Chrome/Edge（含设置页地址）与 Firefox（about:config → permissions.default.clipboard-read）各自的办法',
+  )
 }
 
 // ══════════════ 10. 客户端纯编辑函数（不可变） ═══════════════════════════════

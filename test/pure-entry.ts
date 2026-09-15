@@ -15,7 +15,15 @@ export {
   alwaysQuickPrompts, appendBatchForSend, bookToFile, defaultQuickBook, firstOnlyQuickPrompts,
   flattenQuickPrompts, insertModeOf, newQuickCategoryId, sanitizeBook,
 } from '../src/settings-contract.ts'
-export { alwaysPrompts, sendButtonOf, withAlwaysPrompts } from '../src/client/quick-commands.ts'
+/**
+ * 发送路径的三个函数一起出口：`appendBatchForSend`（决定这一批有谁）+ `publishInputBridge`
+ * / `applyPromptsForSend`（真正写回编辑器的那一步）能在 node 里串起来跑，才测得到
+ * 「点发送时到底写进去了什么」—— 0.4.0 的「仅首次」就是在这两步之间被过滤掉的，
+ * 而当时的护栏只匹配了调用处文本，所以没报警。
+ */
+export {
+  applyPromptsForSend, publishInputBridge, sendButtonOf, withPromptsAppended,
+} from '../src/client/quick-commands.ts'
 export {
   bookCounts, findPrompt, promptsElsewhere,
   withAlwaysToggled, withCategoryAdded, withCategoryMoved, withCategoryRemoved,

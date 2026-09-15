@@ -1,11 +1,16 @@
 /**
- * 快捷指令与「默认插入」的运行时桥接。
+ * 快捷指令与「发送时附加条目」的运行时桥接。
  *
  * 为什么需要这个模块：输入框拦截器（interceptors.ts）活在纯 DOM / 捕获阶段里，
  * 拿不到 React 槽位才有的 `inputActions` 与 InputState 草稿；而「点发送时自动把
  * 提示词附加到消息末尾」两样都要用 —— 得知道当前草稿是什么，再把附加后的整段写
  * 回编辑器。于是由 `conversation.input.right` 的按钮组件在每次渲染时把这两样东西
  * 投递到这里，拦截器同步读取。
+ *
+ * 注意分工：**「哪些条目该附加」不在这里判断**，由调用方
+ * `appendBatchForSend(book, currentBlankSession())` 决定（「每次」全带上，
+ * 「仅首次」只在会话还没有消息时带上）；本模块只负责把那一批拼上去、写回去。
+ * 0.4.0 曾在一个函数里判断了两次，见 `withPromptsAppended` 的说明。
  *
  * 本模块零 React 依赖，可被拦截器与组件共用。
  */
@@ -91,28 +96,30 @@ export function currentSessionId(): string {
   return state.sessionId
 }
 
-/** 取「默认插入」条目（保持列表顺序，丢掉空内容）。 */
-export function alwaysPrompts(prompts: readonly QuickPrompt[]): readonly QuickPrompt[] {
-  return prompts.filter(item => item.always === true && item.prompt.trim() !== '')
-}
-
 /**
- * 把勾了「默认插入」的条目拼到原文**末尾**。
+ * 把这一次要附加的条目拼到原文**末尾**。
  *
  * 规则（与用户确认过的语义一致）：
  *  - 多条按列表顺序拼接，条目之间空一行；
  *  - 原文为空时**不附加** —— 没有「你的消息」可附加，此时应当交还官方原语义
  *    （空输入的 Enter 在官方那里是别的动作，抢过来会让人意外）；
- *  - 一条都没勾时返回 null；
+ *  - 批次为空时返回 null；
  *  - **已经以同一段后缀结尾时返回 null（幂等）** —— 万一发送那一步没成，第二次
  *    点击不会把同一段提示词再叠一遍，而是直接放行官方发送（0.2.0 的失控症状就是
  *    「一直点一直插入」，这条护栏让它变成「再点一次就发出去」）。
+ *
+ * ⚠️ **这里绝不能再按插入模式过滤一遍**：这一批里该有谁，已由调用方
+ * `appendBatchForSend(book, blank)` 决定。0.4.0 就是在这里丢过功能的 —— 本函数当时
+ * 叫 `withAlwaysPrompts`，内部又按 `always === true` 过滤了一次，后果是：
+ *   · 新会话第一条里「仅首次」的条目被这层过滤丢掉，只剩「每次」的；
+ *   · 若一条「每次」都没有，`picked.length === 0` 直接返回 null，第一条什么都不附。
+ * 模式判断只允许有一处（`settings-contract.ts` 的 `insertModeOf`）。
  * @param draft - 当前草稿原文。
- * @param prompts - 完整快捷指令列表。
+ * @param prompts - 这一次要附加的条目（调用方已决定，含跨分类顺序）。
  * @returns 拼接后的完整草稿；无需附加时为 null。
  */
-export function withAlwaysPrompts(draft: string, prompts: readonly QuickPrompt[]): string | null {
-  const picked = alwaysPrompts(prompts)
+export function withPromptsAppended(draft: string, prompts: readonly QuickPrompt[]): string | null {
+  const picked = prompts.filter(item => item.prompt.trim() !== '')
   if (picked.length === 0) return null
   const base = draft.replace(/\s+$/, '')
   if (base === '') return null
@@ -122,17 +129,17 @@ export function withAlwaysPrompts(draft: string, prompts: readonly QuickPrompt[]
 }
 
 /**
- * 把「默认插入」写回编辑器。
+ * 把这一次要附加的条目写回编辑器。
  *
  * 只负责写入，不负责发送：发送动作交还官方手势（见 interceptors.ts 的两条路径），
  * 这样「发送 / 排队 / 打断」的语义完全由官方决定，本插件不做第二套判断。
- * @param prompts - 完整快捷指令列表。
+ * @param prompts - 这一次要附加的条目（来自 `deps.promptsForSend()`）。
  * @returns true = 已写入（调用方应继续走官方发送手势）；false = 无需附加。
  */
-export function applyAlwaysPrompts(prompts: readonly QuickPrompt[]): boolean {
+export function applyPromptsForSend(prompts: readonly QuickPrompt[]): boolean {
   const actions = state.actions
   if (actions === null) return false
-  const next = withAlwaysPrompts(currentDraft(), prompts)
+  const next = withPromptsAppended(currentDraft(), prompts)
   if (next === null) return false
   actions.setDraft(next)
   return true

@@ -16,7 +16,7 @@
 import {
   chordToInit, encodeChord, isEnterFamily, type ChordEvent,
 } from './chords.ts'
-import { applyAlwaysPrompts, sendButtonOf } from './quick-commands.ts'
+import { applyPromptsForSend, sendButtonOf } from './quick-commands.ts'
 import type { ComposerUxSettings, MenuState, QuickPrompt } from '../settings-contract.ts'
 
 export interface InterceptorDeps {
@@ -113,10 +113,12 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
     if (event.repeat) return
 
     if (gesture === 'send') {
-      // 「默认插入」：先把勾选的提示词写回编辑器末尾，再回放发送手势 ——
-      // 官方手势照旧（含运行中「排队 / 打断」的判定），本插件不做第二套判断。
-      // 原文为空时 applyAlwaysPrompts 返回 false，一切照旧。
-      applyAlwaysPrompts(deps.promptsForSend())
+      // 发送时附加条目：先把 promptsForSend() 给出的那一批写回编辑器末尾，再回放发送
+      // 手势 —— 官方手势照旧（含运行中「排队 / 打断」的判定），本插件不做第二套判断。
+      // 原文为空时 applyPromptsForSend 返回 false，一切照旧。
+      // ⚠️ 这一批里「该有谁」已由 promptsForSend()（= appendBatchForSend + blank）定好，
+      // 写回这一步不得再按插入模式过滤（0.4.0 在这里丢过「仅首次」）。
+      applyPromptsForSend(deps.promptsForSend())
       dispatchKey(root, chordToInit('Enter'))
     } else if (gesture === 'newline') {
       dispatchKey(root, chordToInit('Shift+Enter'))
@@ -151,7 +153,7 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
   }
 
   /**
-   * 官方「发送」按钮上的「默认插入」。
+   * 官方「发送」按钮上的条目附加。
    *
    * 官方主按钮走的是包内部的 keyboard.submit（没有对外的拦截钩子），所以只能在
    * 捕获阶段认下这次点击。认下之后不去自己调 submit —— 而是先把附加内容写回编辑器、
@@ -169,7 +171,7 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
     if (replayingSendClick) return
     const button = sendButtonOf(event.target)
     if (button === null) return
-    if (!applyAlwaysPrompts(deps.promptsForSend())) return
+    if (!applyPromptsForSend(deps.promptsForSend())) return
     event.preventDefault()
     event.stopPropagation()
     replayingSendClick = true

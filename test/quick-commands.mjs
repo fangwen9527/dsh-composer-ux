@@ -84,45 +84,51 @@ console.log('1. 快捷指令的净化（防脏数据）')
   check('合法档位原样保留', pure.sanitizeSettings({ optimizerTier: 'extreme' }).optimizerTier === 'extreme')
 }
 
-// ══════════════ 2. 「默认插入」的末尾拼接语义 ═══════════════════════════════
-console.log('2. 默认插入：发送时拼到消息末尾')
+// ══════════════ 2. 发送时的末尾拼接语义 ════════════════════════════════════
+//
+// 契约（0.4.0 修正后）：**「这一批里该有谁」由调用方决定**
+// （appendBatchForSend(book, blank)），本函数只把给它的这一批拼上去、并把空正文跳过。
+// 所以这里传进去的条目**带什么 always / firstOnly 都不影响结果** —— 这正是不该再有
+// 第二处模式过滤的意思；模式过滤本身在第 9 节按真实路径测（含「仅首次」）。
+console.log('2. 发送附加：把这一批拼到消息末尾')
 {
-  const list = [
-    { id: '1', label: '甲', prompt: '第一条', always: true },
-    { id: '2', label: '乙', prompt: '第二条', always: false },
-    { id: '3', label: '丙', prompt: '第三条', always: true },
+  const batch = [
+    { id: '1', label: '甲', prompt: '第一条', always: true, firstOnly: false },
+    { id: '2', label: '乙', prompt: '第二条', always: false, firstOnly: true },
+    { id: '3', label: '丙', prompt: '第三条', always: false, firstOnly: false },
   ]
-  const next = pure.withAlwaysPrompts('我的问题', list)
-  check('原文在前、勾选的按列表顺序在后', next === '我的问题\n\n第一条\n\n第三条', JSON.stringify(next))
-  check('未勾选的不参与', next.includes('第二条') === false)
+  const next = pure.withPromptsAppended('我的问题', batch)
+  check('原文在前、传入的按顺序在后', next === '我的问题\n\n第一条\n\n第二条\n\n第三条', JSON.stringify(next))
+  check('模式标志不再在这里过滤（哪怕标着「关」也照样附加）',
+    next.includes('第三条') && next.includes('第二条'))
 }
 {
-  const list = [{ id: '1', label: '甲', prompt: '甲', always: true }]
-  check('一条都没勾 → 不附加', pure.withAlwaysPrompts('原文', [{ ...list[0], always: false }]) === null)
-  check('原文为空 → 不附加（交还官方原语义）', pure.withAlwaysPrompts('', list) === null)
-  check('只有空白 → 不附加', pure.withAlwaysPrompts('   \n  ', list) === null)
-  check('原文尾部空白被规整', pure.withAlwaysPrompts('原文   \n\n', list) === '原文\n\n甲')
-  check('勾了但正文为空 → 不附加', pure.withAlwaysPrompts('原文', [{ id: '1', label: '甲', prompt: '  ', always: true }]) === null)
+  const list = [{ id: '1', label: '甲', prompt: '甲', always: true, firstOnly: false }]
+  check('批次为空 → 不附加', pure.withPromptsAppended('原文', []) === null)
+  check('原文为空 → 不附加（交还官方原语义）', pure.withPromptsAppended('', list) === null)
+  check('只有空白 → 不附加', pure.withPromptsAppended('   \n  ', list) === null)
+  check('原文尾部空白被规整', pure.withPromptsAppended('原文   \n\n', list) === '原文\n\n甲')
+  check('正文为空 → 不附加', pure.withPromptsAppended('原文', [{ id: '1', label: '甲', prompt: '  ', always: true, firstOnly: false }]) === null)
 }
 {
   const list = [
-    { id: '1', label: '甲', prompt: '甲', always: true },
-    { id: '2', label: '乙', prompt: '  ', always: true },
-    { id: '3', label: '丙', prompt: '丙', always: true },
+    { id: '1', label: '甲', prompt: '甲', always: true, firstOnly: false },
+    { id: '2', label: '乙', prompt: '  ', always: true, firstOnly: false },
+    { id: '3', label: '丙', prompt: '丙', always: true, firstOnly: false },
   ]
-  check('勾选区里的空正文被跳过、其余仍拼接', pure.withAlwaysPrompts('原文', list) === '原文\n\n甲\n\n丙')
+  check('批次里的空正文被跳过、其余仍拼接', pure.withPromptsAppended('原文', list) === '原文\n\n甲\n\n丙')
 }
 {
   // 幂等护栏：这是「一直点一直插入」那个 bug 的兜底。
   // 若发送那一步没成，第二次点击不能再叠一遍，而应放行官方发送。
-  const list = [{ id: '1', label: '甲', prompt: '甲', always: true }]
-  const once = pure.withAlwaysPrompts('原文', list)
+  const list = [{ id: '1', label: '甲', prompt: '甲', always: true, firstOnly: false }]
+  const once = pure.withPromptsAppended('原文', list)
   check('第一次正常附加', once === '原文\n\n甲')
-  check('已以同一后缀结尾 → 不再附加（幂等）', pure.withAlwaysPrompts(once, list) === null)
-  check('尾部有空白也算已附加', pure.withAlwaysPrompts(`${once}   \n`, list) === null)
-  check('中间出现同样文字不算已附加', pure.withAlwaysPrompts('甲\n\n原文', list) === '甲\n\n原文\n\n甲')
+  check('已以同一后缀结尾 → 不再附加（幂等）', pure.withPromptsAppended(once, list) === null)
+  check('尾部有空白也算已附加', pure.withPromptsAppended(`${once}   \n`, list) === null)
+  check('中间出现同样文字不算已附加', pure.withPromptsAppended('甲\n\n原文', list) === '甲\n\n原文\n\n甲')
   check('后缀相同但前面还有别的话 → 仍不再叠（结尾匹配）',
-    pure.withAlwaysPrompts('别的\n\n原文\n\n甲', list) === null)
+    pure.withPromptsAppended('别的\n\n原文\n\n甲', list) === null)
 }
 
 // ══════════════ 3. 发送键 / 停止键的图形判别 ════════════════════════════════

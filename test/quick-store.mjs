@@ -34,6 +34,19 @@ function check(label, condition, detail) {
 }
 
 /**
+ * 剥掉注释再匹配：护栏盯的必须是**代码**。
+ *
+ * 教训（0.4.0 当场踩到两次）：护栏匹配到注释里的字眼就会误报——先是面板里过时的注释
+ * 命中「默认插入」，接着修完「仅首次」后，我在说明里写的 `always === true` 又把新护栏
+ * 弄红了。注释里必须能自由记录踩过的坑，所以统一先剥注释。
+ * @param src - 源文件全文。
+ * @returns 去掉了块注释与行注释的文本（字符串里的 `//` 可能被误伤，本仓用不到那种写法）。
+ */
+function codeOnly(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+}
+
+/**
  * 兜底：变异测试（故意把 bug 放回去）时，断言链可能取到 undefined 而抛错。
  * 抛错要记成一条 ✗ 并正常收尾——**崩溃不是合格的失败报告**。
  */
@@ -357,6 +370,23 @@ console.log('9. 原子写的实现形状')
   check('面板已不再从设置里读条目列表', !/settings\.quickPrompts/.test(panelSrc))
   check('设置页已不再写旧的 quickPrompts 设置字段', !/setField\(QUICK_PROMPTS_FIELD/.test(sectionSrc))
   check('设置页的保存走整本写回', /actions\.saveBook\(/.test(sectionSrc))
+
+  // 0.4.0 的回归点：批次算对了，却在「写回编辑器」那一步被按插入模式**又过滤一遍**，
+  // 于是新会话第一条里只剩「每次」的。这里钉住两件事：写回处原样用这一批，
+  // 以及 quick-commands.ts 里不再存在第二处模式判断。
+  const adaptSrc = codeOnly(readFileSync(new URL('../src/client/interceptors.ts', import.meta.url), 'utf8'))
+  const qcSrc = codeOnly(readFileSync(new URL('../src/client/quick-commands.ts', import.meta.url), 'utf8'))
+  check(
+    '写回那一步原样使用 promptsForSend() 给的批次（未再过滤）',
+    /applyPromptsForSend\(deps\.promptsForSend\(\)\)/.test(adaptSrc),
+    'interceptors.ts 里应调用 applyPromptsForSend(deps.promptsForSend())',
+  )
+  check(
+    '写回路径里不存在按插入模式的二次过滤',
+    // 语义形态而不是精确代码形状：只要这里出现对 always / firstOnly 的判断，就是回退。
+    !/always\s*===\s*true/.test(qcSrc) && !/firstOnly\s*===\s*true/.test(qcSrc),
+    'quick-commands.ts 不得再按 always/firstOnly 过滤（该有谁已由 appendBatchForSend 决定）',
+  )
 }
 
 // ══════════════ 10. 客户端纯编辑函数（不可变） ═══════════════════════════════
@@ -545,6 +575,43 @@ console.log('12. 插入模式（关 / 每次 / 仅首次）')
   check('「关」的永远不进批次', !pure.appendBatchForSend(batch, true).some(p => p.id === 'none'))
   const bothTrue = { version: 2, categories: [{ id: 'c', name: 'x', prompts: [{ id: 'p', label: 'l', prompt: 't', always: true, firstOnly: true }] }] }
   check('两个标志都为真时只出现一次（不重复附加）', pure.appendBatchForSend(bothTrue, true).length === 1)
+
+  // ★ 端到端：批次算对 ≠ 写进去对。0.4.0 就是在这两步之间丢的「仅首次」，而当时的护栏
+  //   只匹配调用处文本，所以全绿。这里跑**拦截器点发送时真正调用的那个函数**
+  //   （applyPromptsForSend），断言最终写回编辑器的整段文本。
+  const writeSend = (book, blank, draft) => {
+    let written = null
+    pure.publishInputBridge({
+      actions: { setDraft: text => { written = text } },
+      draft,
+      sessionId: 's-insert-mode-test',
+      blank,
+    })
+    const wrote = pure.applyPromptsForSend(pure.appendBatchForSend(book, blank))
+    return { wrote, written }
+  }
+  const firstSend = writeSend(batch, true, '我的问题')
+  check('新会话第一条：写回编辑器的文本里「每次」和「仅首次」都在',
+    firstSend.wrote === true && firstSend.written === '我的问题\n\nE\n\nF\n\nF2',
+    JSON.stringify(firstSend.written))
+  const secondSend = writeSend(batch, false, '我的问题')
+  check('第二条起：写回的只有「每次」',
+    secondSend.wrote === true && secondSend.written === '我的问题\n\nE',
+    JSON.stringify(secondSend.written))
+  const onlyFirstBook = {
+    version: 2,
+    categories: [{ id: 'c', name: 'x', prompts: [
+      { id: 'first', label: '仅首次', prompt: 'F', always: false, firstOnly: true },
+    ] }],
+  }
+  const onlyFirstSend = writeSend(onlyFirstBook, true, '我的问题')
+  check('只有「仅首次」时，第一条仍然附加上（不因「没有每次条目」而被丢掉）',
+    onlyFirstSend.wrote === true && onlyFirstSend.written === '我的问题\n\nF',
+    JSON.stringify(onlyFirstSend.written))
+  const onlyFirstSecond = writeSend(onlyFirstBook, false, '我的问题')
+  check('只有「仅首次」时，第二条不写（也没有别的可附）',
+    onlyFirstSecond.wrote === false && onlyFirstSecond.written === null)
+  check('原文为空时一条都不写（交还官方发送语义）', writeSend(batch, true, '').wrote === false)
 
   // 接缝：blank 只能来自槽位快照；三选一控件两处共用
   const buttonSrc = readFileSync(new URL('../src/client/QuickCommandsButton.tsx', import.meta.url), 'utf8')

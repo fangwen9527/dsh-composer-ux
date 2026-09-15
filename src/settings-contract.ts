@@ -111,8 +111,42 @@ export interface QuickPrompt {
   readonly label: string
   /** 点击后插入输入框的提示词正文。 */
   readonly prompt: string
-  /** 默认插入：发送时自动附加到消息末尾。 */
+  /** 「每次」：每次发送都自动附加到消息末尾。与 `firstOnly` 互斥。 */
   readonly always: boolean
+  /**
+   * 「仅首次」：只在**这个会话的第一条消息**上附加。
+   *
+   * 判据是会话快照的 `blank`（会话还没有任何消息）——发完第一条它自己就变成 false，
+   * 所以不需要我们自己记「这次会话附加过没有」，刷新页面也不会重复附加。
+   * 与 `always` 互斥（界面上是三选一）。
+   */
+  readonly firstOnly: boolean
+}
+
+/** 插入模式：界面上那条三选一。 */
+export type InsertMode = 'never' | 'always' | 'first'
+
+/** 三选一的元数据（数组顺序即界面顺序）。 */
+export const INSERT_MODES: readonly {
+  readonly id: InsertMode
+  readonly label: string
+  readonly hint: string
+}[] = [
+  { id: 'never', label: '关', hint: '点条目只插入输入框，发送时不附加' },
+  { id: 'always', label: '每次', hint: '每次发送都把这条附加到消息末尾' },
+  { id: 'first', label: '仅首次', hint: '只在当前会话的第一条消息上附加' },
+]
+
+/**
+ * 读一条的插入模式。
+ *
+ * 两个标志都是 true 时按「每次」处理（手工编辑的文件可能写成这样；「每次」本来就
+ * 包含第一次），并且下一次写盘会把互斥性修正回来。
+ */
+export function insertModeOf(prompt: Pick<QuickPrompt, 'always' | 'firstOnly'>): InsertMode {
+  if (prompt.always) return 'always'
+  if (prompt.firstOnly) return 'first'
+  return 'never'
 }
 
 /**
@@ -145,15 +179,15 @@ export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'advanced'
  * 所以从它们那里没有可提取的条目。
  */
 export const DEFAULT_QUICK_PROMPTS: readonly QuickPrompt[] = [
-  { id: 'builtin-1', label: '一问一答', prompt: '你不懂的就问我，一问一答；同时说清楚你为什么要问该问题；直到你对我的目标有明确认知后再开始干活。', always: false },
-  { id: 'builtin-2', label: '交接文档', prompt: '把这次任务、已完成内容、当前卡点、下一步计划、踩过的坑，整理成一份交接文档，写给新会话看。', always: false },
-  { id: 'builtin-3', label: '仅说明原因', prompt: '仅说明原因，不要做其他动作。', always: false },
-  { id: 'builtin-4', label: '分析后直接干', prompt: '分析原因，然后直接开始干活，不需要过问我。', always: false },
-  { id: 'builtin-5', label: '提交代码', prompt: '请帮我提交代码：检查当前 git 变更，生成规范的 commit message 并执行提交。', always: false },
-  { id: 'builtin-6', label: '给方案', prompt: '请针对上面的问题给出一个完整方案，包括思路、步骤、注意事项和风险。', always: false },
-  { id: 'builtin-7', label: '解释代码', prompt: '请解释这段代码的作用和实现思路。', always: false },
-  { id: 'builtin-8', label: '写测试', prompt: '请为下面的代码编写单元测试。', always: false },
-  { id: 'builtin-9', label: '代码审查', prompt: '请对下面的代码进行代码审查，指出问题并给出改进建议。', always: false },
+  { id: 'builtin-1', label: '一问一答', prompt: '你不懂的就问我，一问一答；同时说清楚你为什么要问该问题；直到你对我的目标有明确认知后再开始干活。', always: false, firstOnly: false },
+  { id: 'builtin-2', label: '交接文档', prompt: '把这次任务、已完成内容、当前卡点、下一步计划、踩过的坑，整理成一份交接文档，写给新会话看。', always: false, firstOnly: false },
+  { id: 'builtin-3', label: '仅说明原因', prompt: '仅说明原因，不要做其他动作。', always: false, firstOnly: false },
+  { id: 'builtin-4', label: '分析后直接干', prompt: '分析原因，然后直接开始干活，不需要过问我。', always: false, firstOnly: false },
+  { id: 'builtin-5', label: '提交代码', prompt: '请帮我提交代码：检查当前 git 变更，生成规范的 commit message 并执行提交。', always: false, firstOnly: false },
+  { id: 'builtin-6', label: '给方案', prompt: '请针对上面的问题给出一个完整方案，包括思路、步骤、注意事项和风险。', always: false, firstOnly: false },
+  { id: 'builtin-7', label: '解释代码', prompt: '请解释这段代码的作用和实现思路。', always: false, firstOnly: false },
+  { id: 'builtin-8', label: '写测试', prompt: '请为下面的代码编写单元测试。', always: false, firstOnly: false },
+  { id: 'builtin-9', label: '代码审查', prompt: '请对下面的代码进行代码审查，指出问题并给出改进建议。', always: false, firstOnly: false },
 ]
 
 /** 生成一条新快捷指令的 id（时间戳 + 随机后缀，避免与既有 id 碰撞）。 */
@@ -207,6 +241,8 @@ export interface QuickCategoryFileRow {
     readonly title: string
     readonly text: string
     readonly autoSend: boolean
+    /** 「仅首次」标志（我们的扩展键；参考实现会忽略它，写回时可能丢掉）。 */
+    readonly autoSendFirst?: boolean
     readonly order: number
   }[]
 }
@@ -227,7 +263,13 @@ function asPromptRow(value: unknown): { readonly prompt: QuickPrompt; readonly o
     ? Math.max(1, Math.round(row.order))
     : undefined
   return {
-    prompt: { id, label: label === '' ? prompt.slice(0, 12) : label, prompt, always: row.always === true || row.autoSend === true },
+    prompt: {
+      id,
+      label: label === '' ? prompt.slice(0, 12) : label,
+      prompt,
+      always: row.always === true || row.autoSend === true,
+      firstOnly: row.firstOnly === true || row.autoSendFirst === true,
+    },
     order,
   }
 }
@@ -309,6 +351,8 @@ export function bookToFile(book: QuickPromptBook): { version: number; categories
         title: prompt.label,
         text: prompt.prompt,
         autoSend: prompt.always,
+        // 「仅首次」是我们加的键，只在为真时写出来：文件形状尽量贴近参考实现。
+        ...(prompt.firstOnly ? { autoSendFirst: true } : {}),
         order: index + 1,
       })),
     })),
@@ -320,9 +364,27 @@ export function flattenQuickPrompts(book: QuickPromptBook): readonly QuickPrompt
   return book.categories.flatMap(category => category.prompts)
 }
 
-/** 只取勾了「默认插入」的那些（发送时自动附加；跨所有分类）。 */
+/** 只取「每次」的那些（每次发送都附加；跨所有分类）。 */
 export function alwaysQuickPrompts(book: QuickPromptBook): readonly QuickPrompt[] {
-  return flattenQuickPrompts(book).filter(prompt => prompt.always)
+  return flattenQuickPrompts(book).filter(prompt => insertModeOf(prompt) === 'always')
+}
+
+/** 只取「仅首次」的那些（跨所有分类）。 */
+export function firstOnlyQuickPrompts(book: QuickPromptBook): readonly QuickPrompt[] {
+  return flattenQuickPrompts(book).filter(prompt => insertModeOf(prompt) === 'first')
+}
+
+/**
+ * 这一次发送要附加的批次。
+ *
+ * @param book 当前这本。
+ * @param blank 会话快照的 `blank`：true = 这个会话还没有任何消息（也就是第一条）。
+ * @returns 顺序 = 「每次」的那些，再跟上「仅首次」的那些（仅首次只在第一条上出现）。
+ */
+export function appendBatchForSend(book: QuickPromptBook, blank: boolean): readonly QuickPrompt[] {
+  const every = alwaysQuickPrompts(book)
+  if (!blank) return every
+  return [...every, ...firstOnlyQuickPrompts(book)]
 }
 
 // ── OpenCode 请求头 ─────────────────────────────────────────────────────────
@@ -558,7 +620,13 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
       const id = typeof row.id === 'string' && row.id !== '' ? row.id.slice(0, 64) : newQuickPromptId()
       if (seen.has(id)) continue
       seen.add(id)
-      out.push({ id, label: label === '' ? prompt.slice(0, 12) : label, prompt, always: row.always === true })
+      out.push({
+        id,
+        label: label === '' ? prompt.slice(0, 12) : label,
+        prompt,
+        always: row.always === true,
+        firstOnly: row.firstOnly === true,
+      })
     }
     return out
   }

@@ -42,23 +42,33 @@ export type QuickCommandsButtonProps =
 
 /** 「快捷指令」入口按钮。 */
 export function QuickCommandsButton({
-  useInput, inputActions, sessionId, useLive, usePanel, actions,
+  useInput, inputActions, sessionId, useSession, useLive, usePanel, actions,
 }: QuickCommandsButtonProps) {
   const settings = useLive(item => item)
   const anchor = usePanel(item => item)
   const draft = useInput(state => state.draft)
+  /**
+   * 会话是不是还没有任何消息 —— 「仅首次插入」的判据。
+   *
+   * `useSession` 是 `conversation.input.right`（scope: session）的标准 props，与本组件
+   * 已经在用的 `useInput` 来自同一份契约，所以无条件调用它；选择器里再挡一层 undefined
+   * （选择器抛错会直接把 React 渲染打断，这里不值得冒险）。
+   */
+  const blank = useSession(state => state?.blank === true)
   const ref = useRef<HTMLButtonElement | null>(null)
 
-  // 每次渲染把官方输入动作与草稿投递给桥接：拦截器要在 React 之外读它们。
+  // 每次渲染把官方输入动作、草稿与「会话还是空的」投递给桥接：
+  // 拦截器要在 React 之外读它们，而这些只有槽位能拿到。
   useEffect(() => {
     const sid = typeof sessionId === 'string' ? sessionId : ''
     publishInputBridge({
       actions: (inputActions ?? null) as InputActionsLike | null,
       draft: typeof draft === 'string' ? draft : '',
       sessionId: sid,
+      blank: blank === true,
     })
     return () => { releaseInputBridge(sid) }
-  }, [inputActions, draft, sessionId])
+  }, [inputActions, draft, sessionId, blank])
 
   if (settings.enabled !== true) return null
 

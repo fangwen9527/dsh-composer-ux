@@ -18,15 +18,17 @@ import {
   PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
-  newQuickPromptId, newSessionId,
+  insertModeOf, newQuickPromptId, newSessionId,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from '../settings-contract.ts'
 import {
   bookCounts, withCategoryAdded, withCategoryMoved, withCategoryRemoved, withCategoryRenamed,
-  withPromptAdded, withPromptMoved, withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
+  withInsertMode, withPromptAdded, withPromptMoved, withPromptMovedToCategory, withPromptPatched,
+  withPromptRemoved,
 } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
+import { InsertModeControl } from './InsertModeControl.tsx'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -442,7 +444,7 @@ function QuickPromptsEditor(props: {
 
           {current.prompts.map(prompt => (
             <div key={prompt.id} style={rowBox}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <input
                   type="text"
                   value={prompt.label}
@@ -452,15 +454,11 @@ function QuickPromptsEditor(props: {
                   onChange={event => { edit(withPromptPatched(draft, current.id, prompt.id, { label: event.target.value })) }}
                   style={{ ...textInput, flex: '0 0 150px' }}
                 />
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...rowDesc, margin: 0, flex: '0 0 auto' }}>
-                  <input
-                    type="checkbox"
-                    checked={prompt.always}
-                    style={{ margin: 0, cursor: 'pointer' }}
-                    onChange={event => { edit(withPromptPatched(draft, current.id, prompt.id, { always: event.target.checked })) }}
-                  />
-                  默认插入
-                </label>
+                <InsertModeControl
+                  label={prompt.label}
+                  mode={insertModeOf(prompt)}
+                  onChange={mode => { edit(withInsertMode(draft, prompt.id, mode)) }}
+                />
                 <span style={{ flex: 1 }} />
                 <button type="button" style={pill} title="上移" onClick={() => { edit(withPromptMoved(draft, current.id, prompt.id, -1)) }}>↑</button>
                 <button type="button" style={pill} title="下移" onClick={() => { edit(withPromptMoved(draft, current.id, prompt.id, 1)) }}>↓</button>
@@ -514,7 +512,7 @@ function QuickPromptsEditor(props: {
         <button type="button" style={pill} onClick={() => { props.onReload() }}>重新读取</button>
         <button type="button" style={pill} onClick={() => { props.onReset() }}>恢复内置 9 条</button>
         <span style={rowDesc}>
-          共 {counts.categories} 个分类 · {counts.prompts} 条 · 默认插入 {counts.always} 条
+          共 {counts.categories} 个分类 · {counts.prompts} 条 · 每次 {counts.always} 条 · 仅首次 {counts.first} 条
           {note === '' ? '' : ` · ${note}`}
           {failed ? ` · ${props.status}` : ''}
         </span>
@@ -562,7 +560,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
     : '未启用'
   const quickCounts = bookCounts(book)
   const quickSummary = `${quickCounts.categories} 个分类 · ${quickCounts.prompts} 条`
-    + ` · 默认插入 ${quickCounts.always} 条`
+    + ` · 每次 ${quickCounts.always} · 仅首次 ${quickCounts.first}`
     + ` · 优化档位 ${OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.label ?? '高级'}`
   const headerStatusText = settings.headerEnabled
     ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
@@ -671,9 +669,11 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
 
       <FoldCard name="快捷指令" summary={quickSummary}>
         <p style={bodyLead}>
-          输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框；
-          条目右侧勾上「默认插入」，则在你**点发送时**把这条提示词自动附加到消息**末尾**
-          一起发出去（多条按列表顺序拼接，输入框里不提前显示）。
+          输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框。
+          每条右侧的三选一决定**发送时怎么附加**：
+          「关」= 只插入不附加；「每次」= 每次发送都附加到消息**末尾**；
+          「仅首次」= 只在**这个会话的第一条消息**上附加（之后不再附加，刷新页面也不会重复）。
+          多条按列表顺序拼接，输入框里不提前显示。
           「优化提示词」会用另一个 AI 把输入框里的话整理成一条能直接发出去的清晰指令，
           结果直接写回输入框（Ctrl+Z 可还原）——不会污染当前对话，也不占你的对话轮次。
         </p>

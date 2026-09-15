@@ -5,7 +5,8 @@
  *  - 顶部：「✨ 优化提示词」主按钮 + 三档强度分段控件；
  *  - 分类行：一个分类一个标签，点它切换；「＋ 新分类」直接加一个（改名/删除在设置页，
  *    面板保持轻量，避免在这里塞一套重命名 UI）；
- *  - 中部：当前分类的条目 —— 点条目把内容插入输入框，右侧勾选框是「默认插入」
+ *  - 中部：当前分类的条目 —— 点条目把内容插入输入框，右侧三选一是插入模式
+ *    （关 / 每次 / 仅首次）；列表最下边那一行「＋」负责新建与跨分类移动。
  *    （勾上后点发送时自动附加到消息末尾，**跨分类生效**）；
  *  - 底部：状态提示 + 指路设置页。
  */
@@ -13,11 +14,12 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
-  DEFAULT_CATEGORY_NAME, OPTIMIZER_TIERS, QUICK_CATEGORY_MAX,
-  type ComposerUxSettings, type OptimizerTier, type QuickPromptBook,
+  DEFAULT_CATEGORY_NAME, OPTIMIZER_TIERS, QUICK_CATEGORY_MAX, insertModeOf,
+  type ComposerUxSettings, type InsertMode, type OptimizerTier, type QuickPromptBook,
 } from '../settings-contract.ts'
 import { bookCounts } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
+import { InsertModeControl } from './InsertModeControl.tsx'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
 import {
   quickAlwaysBox, quickAlwaysLabel, quickCategoryAdd, quickCategoryRow, quickCategoryTab,
@@ -52,8 +54,8 @@ export interface QuickPanelInjected {
     optimize: () => void
     /** 切换优化档位。 */
     setTier: (tier: OptimizerTier) => void
-    /** 勾选/取消某条的「默认插入」（按 id 跨分类找）。 */
-    setAlways: (id: string, value: boolean) => void
+    /** 设置某条的插入模式（关 / 每次 / 仅首次；按 id 跨分类找）。 */
+    setInsertMode: (promptId: string, mode: InsertMode) => void
     /** 新增一个分类（名字由设置页再改）。 */
     addCategory: (name: string) => void
     /** 在当前分类里新建一条（占位正文，具体内容到设置页改）。 */
@@ -223,15 +225,12 @@ export function QuickCommandsPanel({
               <span style={quickItemLabel}>{item.label}</span>
               <span style={quickItemPreview}>{item.prompt.replace(/\s+/g, ' ')}</span>
             </button>
-            <label style={quickAlwaysLabel} title="勾上后，点发送时这条提示词会自动附加到你的消息末尾（对所有分类生效）">
-              <input
-                type="checkbox"
-                style={quickAlwaysBox}
-                checked={item.always}
-                onChange={event => { actions.setAlways(item.id, event.target.checked) }}
-              />
-              默认插入
-            </label>
+            <InsertModeControl
+              compact
+              label={item.label}
+              mode={insertModeOf(item)}
+              onChange={mode => { actions.setInsertMode(item.id, mode) }}
+            />
           </div>
         ))}
         {active !== undefined && (

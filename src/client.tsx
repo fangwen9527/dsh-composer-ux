@@ -9,13 +9,13 @@ import {
   HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_PROMPTS_FIELD, SEND_KEY_FIELD, sanitizeSettings,
-  alwaysQuickPrompts, defaultQuickBook,
-  type ComposerUxSettings, type MenuState, type OptimizerTier, type QuickPrompt,
+  alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
+  type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from './settings-contract.ts'
 import {
-  loadPromptBook, savePromptBook, withAlwaysToggled, withCategoryAdded, withCategoryMoved,
-  withCategoryRemoved, withCategoryRenamed, withPromptAdded, withPromptMoved,
+  loadPromptBook, savePromptBook, withCategoryAdded, withCategoryMoved,
+  withCategoryRemoved, withCategoryRenamed, withInsertMode, withPromptAdded, withPromptMoved,
   withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from './client/prompt-book.ts'
 import { installInterceptors, runMenuAction } from './client/interceptors.ts'
@@ -28,7 +28,7 @@ import { SettingsSection } from './client/SettingsSection.tsx'
 import { QuickCommandsButton, type QuickPanelAnchor } from './client/QuickCommandsButton.tsx'
 import { QuickCommandsPanel } from './client/QuickCommandsPanel.tsx'
 import {
-  focusComposer, insertIntoDraft, optimizeDraft, replaceDraft, currentDraft,
+  focusComposer, insertIntoDraft, optimizeDraft, replaceDraft, currentBlankSession, currentDraft,
 } from './client/quick-commands.ts'
 
 export const name = 'composer-ux'
@@ -213,11 +213,13 @@ export function apply(ctx: any): void {
     },
     setTier: (tier: OptimizerTier): void => { setField(OPTIMIZER_TIER_FIELD, tier) },
     /**
-     * 「默认插入」勾选：按 id 跨分类找那一条，直接写盘。
-     * 这个标记就是「点发送时自动附加到消息末尾」的依据（见 interceptors.ts）。
+     * 设置某条的插入模式（关 / 每次 / 仅首次）。
+     *
+     * 界面上只有这一个入口：两个互斥标志由 `withInsertMode` **一次写对**，
+     * 不给「又每次又仅首次」留缝。
      */
-    setAlways: (id: string, value: boolean): void => {
-      commitBook(withAlwaysToggled(book.getSnapshot(), id, value))
+    setInsertMode: (promptId: string, mode: InsertMode): void => {
+      commitBook(withInsertMode(book.getSnapshot(), promptId, mode))
     },
   }
 
@@ -287,8 +289,7 @@ export function apply(ctx: any): void {
         insert: quickActions.insert,
         optimize: quickActions.optimize,
         setTier: quickActions.setTier,
-        setAlways: quickActions.setAlways,
-        toggleAlways: quickActions.setAlways,
+        setInsertMode: quickActions.setInsertMode,
         addCategory: bookActions.addCategory,
         renameCategory: bookActions.renameCategory,
         removeCategory: bookActions.removeCategory,
@@ -326,7 +327,8 @@ export function apply(ctx: any): void {
       if (enabled && dispose === null) {
         dispose = installInterceptors({
           settings: () => live.getSnapshot(),
-          alwaysPrompts: () => alwaysQuickPrompts(book.getSnapshot()),
+          // 「仅首次」由这里决定是否算进这一批：会话还是空的（blank）才带上。
+          promptsForSend: () => appendBatchForSend(book.getSnapshot(), currentBlankSession()),
           setMenu: state => { menu.set(state) },
           menuOpen: () => menu.getSnapshot() !== null,
         })

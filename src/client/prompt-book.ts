@@ -12,8 +12,8 @@
 import {
   DEFAULT_CATEGORY_NAME, QUICK_CATEGORY_MAX, QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPTS_API_PATH, QUICK_PROMPT_MAX, QUICK_TEXT_MAX,
-  newQuickCategoryId, newQuickPromptId, sanitizeBook,
-  type QuickPrompt, type QuickPromptBook, type QuickPromptCategory,
+  insertModeOf, newQuickCategoryId, newQuickPromptId, sanitizeBook,
+  type InsertMode, type QuickPrompt, type QuickPromptBook, type QuickPromptCategory,
 } from '../settings-contract.ts'
 
 /** 路由应答（成功与失败都走同一形状，便于统一处理）。 */
@@ -85,13 +85,19 @@ export function findPrompt(
   return undefined
 }
 
-/** 统计（面板头部与设置页用）。 */
-export function bookCounts(book: QuickPromptBook): { readonly categories: number; readonly prompts: number; readonly always: number } {
+/** 统计（面板头部与设置页用）。`always` = 每次，`first` = 仅首次。 */
+export function bookCounts(book: QuickPromptBook): {
+  readonly categories: number
+  readonly prompts: number
+  readonly always: number
+  readonly first: number
+} {
   const prompts = book.categories.flatMap(category => category.prompts)
   return {
     categories: book.categories.length,
     prompts: prompts.length,
-    always: prompts.filter(prompt => prompt.always).length,
+    always: prompts.filter(prompt => insertModeOf(prompt) === 'always').length,
+    first: prompts.filter(prompt => insertModeOf(prompt) === 'first').length,
   }
 }
 
@@ -152,7 +158,7 @@ export function withPromptAdded(book: QuickPromptBook, categoryId: string): Quic
     return {
       ...category,
       prompts: [...category.prompts, {
-        id: newQuickPromptId(), label: '新指令', prompt: '（待填写）', always: false,
+        id: newQuickPromptId(), label: '新指令', prompt: '（待填写）', always: false, firstOnly: false,
       }],
     }
   })
@@ -169,7 +175,7 @@ export function withPromptPatched(
   book: QuickPromptBook,
   categoryId: string,
   promptId: string,
-  patch: Partial<Pick<QuickPrompt, 'label' | 'prompt' | 'always'>>,
+  patch: Partial<Pick<QuickPrompt, 'label' | 'prompt' | 'always' | 'firstOnly'>>,
 ): QuickPromptBook {
   return mapCategory(book, categoryId, (category) => ({
     ...category,
@@ -178,9 +184,28 @@ export function withPromptPatched(
       const label = patch.label === undefined ? prompt.label : patch.label.slice(0, QUICK_LABEL_MAX)
       const text = patch.prompt === undefined ? prompt.prompt : patch.prompt.slice(0, QUICK_TEXT_MAX)
       const always = patch.always === undefined ? prompt.always : patch.always
-      return { id: prompt.id, label, prompt: text, always }
+      const firstOnly = patch.firstOnly === undefined ? prompt.firstOnly : patch.firstOnly
+      return { id: prompt.id, label, prompt: text, always, firstOnly }
     }),
   }))
+}
+
+/**
+ * 设置一条的插入模式（界面上的三选一）。
+ *
+ * **两个互斥标志必须一次写对**——分别写就可能留下「又每次又仅首次」的矛盾状态，
+ * 所以界面只允许通过这里改模式，不直接改那两个布尔。
+ *
+ * @returns 新本；条目不存在、或模式没变化时**原样返回传入对象**（避免无意义写盘）。
+ */
+export function withInsertMode(book: QuickPromptBook, promptId: string, mode: InsertMode): QuickPromptBook {
+  const hit = findPrompt(book, promptId)
+  if (hit === undefined) return book
+  if (insertModeOf(hit.prompt) === mode) return book
+  return withPromptPatched(book, hit.category.id, promptId, {
+    always: mode === 'always',
+    firstOnly: mode === 'first',
+  })
 }
 
 /** 删条目。 */

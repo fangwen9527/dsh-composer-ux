@@ -350,8 +350,9 @@ console.log('9. 原子写的实现形状')
   const panelSrc = readFileSync(new URL('../src/client/QuickCommandsPanel.tsx', import.meta.url), 'utf8')
   const sectionSrc = readFileSync(new URL('../src/client/SettingsSection.tsx', import.meta.url), 'utf8')
   check(
-    '拦截器拿到的是跨分类的 always 取值函数（不是设置里的旧字段）',
-    /alwaysPrompts:\s*\(\)\s*=>\s*alwaysQuickPrompts\(book\.getSnapshot\(\)\)/.test(clientSrc),
+    '拦截器拿到的批次由 appendBatchForSend 决定（「仅首次」的判据在里面）',
+    /promptsForSend:\s*\(\)\s*=>\s*appendBatchForSend\(book\.getSnapshot\(\),\s*currentBlankSession\(\)\)/.test(clientSrc),
+    'client.tsx 里应把 promptsForSend 接到 appendBatchForSend(book, currentBlankSession())',
   )
   check('面板已不再从设置里读条目列表', !/settings\.quickPrompts/.test(panelSrc))
   check('设置页已不再写旧的 quickPrompts 设置字段', !/setField\(QUICK_PROMPTS_FIELD/.test(sectionSrc))
@@ -486,6 +487,81 @@ console.log('11. 跨分类移动条目')
   check('设置页里渲染了同一行，并接上了移动动作', /<AddPromptRow/.test(sectionSrc) && /withPromptMovedToCategory\(/.test(sectionSrc))
   check('设置页不再留旧的「+ 添加一条」独立按钮', !/添加一条/.test(sectionSrc))
   check('两处用的是同一个组件（行为不会分叉）', /from '\.\/AddPromptRow\.tsx'/.test(panelSrc) && /from '\.\/AddPromptRow\.tsx'/.test(sectionSrc))
+}
+
+// ══════════════ 12. 插入模式三选一（关 / 每次 / 仅首次） ═════════════════════
+console.log('12. 插入模式（关 / 每次 / 仅首次）')
+{
+  const promptOf = (always, firstOnly) => ({ always, firstOnly })
+  check("两个标志都关 → 'never'", pure.insertModeOf(promptOf(false, false)) === 'never')
+  check("只 always → 'always'", pure.insertModeOf(promptOf(true, false)) === 'always')
+  check("只 firstOnly → 'first'", pure.insertModeOf(promptOf(false, true)) === 'first')
+  check(
+    "手改文件把两个都写成 true → 按 'always'（每次都插本来就包含第一次）",
+    pure.insertModeOf(promptOf(true, true)) === 'always',
+  )
+
+  const book = () => ({
+    version: 2,
+    categories: [{ id: 'c', name: '默认', prompts: [{ id: 'p', label: 'l', prompt: 't', always: false, firstOnly: false }] }],
+  })
+  const mode = b => pure.insertModeOf(b.categories[0].prompts[0])
+
+  const asFirst = pure.withInsertMode(book(), 'p', 'first')
+  check('设成「仅首次」后 only firstOnly 为真', mode(asFirst) === 'first' && asFirst.categories[0].prompts[0].always === false)
+  const asAlways = pure.withInsertMode(asFirst, 'p', 'always')
+  check('从「仅首次」切到「每次」：老的标志被清掉（不会两个都真）', mode(asAlways) === 'always' && asAlways.categories[0].prompts[0].firstOnly === false)
+  const asNever = pure.withInsertMode(asAlways, 'p', 'never')
+  check('切回「关」：两个都清掉', mode(asNever) === 'never' && asNever.categories[0].prompts[0].always === false && asNever.categories[0].prompts[0].firstOnly === false)
+  check('模式没变化 → 原样返回（不做无意义写盘）', pure.withInsertMode(asNever, 'p', 'never') === asNever)
+  check('条目不存在 → 原样返回', pure.withInsertMode(asNever, 'nope', 'always') === asNever)
+
+  // 文件映射与向后兼容
+  const fileRow = pure.bookToFile(asFirst).categories[0].prompts[0]
+  check('「仅首次」写进文件是 autoSendFirst（autoSend 仍为 false）', fileRow.autoSend === false && fileRow.autoSendFirst === true, JSON.stringify(fileRow))
+  const neverRow = pure.bookToFile(asNever).categories[0].prompts[0]
+  check('「关」不写 autoSendFirst 键（文件形状贴近参考实现）', neverRow.autoSendFirst === undefined, JSON.stringify(neverRow))
+  const legacy = pure.sanitizeBook({ prompts: [{ id: 'a', title: '旧', text: 'x', autoSend: true }] })
+  check('读得懂参考实现的旧文件（autoSend: true → 每次）', pure.insertModeOf(legacy.categories[0].prompts[0]) === 'always')
+  const roundTrip = pure.sanitizeBook(pure.bookToFile(asFirst))
+  check('「仅首次」能往返（写出去再读回来还是仅首次）', pure.insertModeOf(roundTrip.categories[0].prompts[0]) === 'first')
+
+  // 发送批次：这就是「仅首次」的全部语义
+  const batch = {
+    version: 2,
+    categories: [
+      { id: 'a', name: '甲', prompts: [
+        { id: 'every', label: '每次', prompt: 'E', always: true, firstOnly: false },
+        { id: 'first', label: '仅首次', prompt: 'F', always: false, firstOnly: true },
+        { id: 'none', label: '关', prompt: 'N', always: false, firstOnly: false },
+      ] },
+      { id: 'b', name: '乙', prompts: [
+        { id: 'first2', label: '仅首次2', prompt: 'F2', always: false, firstOnly: true },
+      ] },
+    ],
+  }
+  check('会话已有消息（blank=false）→ 只带「每次」', pure.appendBatchForSend(batch, false).map(p => p.id).join(',') === 'every')
+  check('会话还没有消息（blank=true）→ 「每次」+「仅首次」，跨分类', pure.appendBatchForSend(batch, true).map(p => p.id).join(',') === 'every,first,first2')
+  check('「关」的永远不进批次', !pure.appendBatchForSend(batch, true).some(p => p.id === 'none'))
+  const bothTrue = { version: 2, categories: [{ id: 'c', name: 'x', prompts: [{ id: 'p', label: 'l', prompt: 't', always: true, firstOnly: true }] }] }
+  check('两个标志都为真时只出现一次（不重复附加）', pure.appendBatchForSend(bothTrue, true).length === 1)
+
+  // 接缝：blank 只能来自槽位快照；三选一控件两处共用
+  const buttonSrc = readFileSync(new URL('../src/client/QuickCommandsButton.tsx', import.meta.url), 'utf8')
+  const panelSrc = readFileSync(new URL('../src/client/QuickCommandsPanel.tsx', import.meta.url), 'utf8')
+  const sectionSrc = readFileSync(new URL('../src/client/SettingsSection.tsx', import.meta.url), 'utf8')
+  check(
+    '「会话还是空的」取自槽位快照的 blank 并投递给桥接',
+    /useSession\(state => state\?\.blank === true\)/.test(buttonSrc) && /blank: blank === true/.test(buttonSrc),
+    'QuickCommandsButton 里应有 useSession(state => state?.blank === true) 与 blank: blank === true',
+  )
+  check(
+    '面板换成了三选一控件（旧的单个勾选框已移除）',
+    /<InsertModeControl/.test(panelSrc) && !/type="checkbox"/.test(panelSrc),
+    '面板里不应再出现 type="checkbox"（那是旧的「默认插入」勾选框）',
+  )
+  check('设置页也用三选一控件', /<InsertModeControl/.test(sectionSrc))
+  check('两处共用同一个三选一组件（行为不会分叉）', /InsertModeControl\.tsx/.test(panelSrc) && /InsertModeControl\.tsx/.test(sectionSrc))
 }
 
 // ── 收尾 ────────────────────────────────────────────────────────────────────

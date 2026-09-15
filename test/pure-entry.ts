@@ -11,16 +11,16 @@ export {
 } from '../src/settings-contract.ts'
 export {
   DEFAULT_CATEGORY_NAME, OPTIMIZE_TEXT_MAX, QUICK_BOOK_VERSION, QUICK_CATEGORY_MAX,
-  QUICK_CATEGORY_NAME_MAX, QUICK_PROMPTS_API_PATH,
-  alwaysQuickPrompts, bookToFile, defaultQuickBook, flattenQuickPrompts,
-  newQuickCategoryId, sanitizeBook,
+  QUICK_CATEGORY_NAME_MAX, QUICK_PROMPTS_API_PATH, INSERT_MODES,
+  alwaysQuickPrompts, appendBatchForSend, bookToFile, defaultQuickBook, firstOnlyQuickPrompts,
+  flattenQuickPrompts, insertModeOf, newQuickCategoryId, sanitizeBook,
 } from '../src/settings-contract.ts'
 export { alwaysPrompts, sendButtonOf, withAlwaysPrompts } from '../src/client/quick-commands.ts'
 export {
   bookCounts, findPrompt, promptsElsewhere,
   withAlwaysToggled, withCategoryAdded, withCategoryMoved, withCategoryRemoved,
-  withCategoryRenamed, withPromptAdded, withPromptMoved, withPromptMovedToCategory,
-  withPromptPatched, withPromptRemoved,
+  withCategoryRenamed, withInsertMode, withPromptAdded, withPromptMoved,
+  withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from '../src/client/prompt-book.ts'
 export {
   OPTIMIZER_SPECS, buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser,

@@ -23,6 +23,13 @@ interface BridgeState {
   actions: InputActionsLike | null
   draft: string
   sessionId: string
+  /**
+   * 会话是否还**没有任何消息**（槽位给的 `SessionSnapshot.blank`）。
+   *
+   * 「仅首次插入」就靠它：发完第一条它自己会变成 false，所以不必自己记「本会话附加过
+   * 没有」，刷新页面也不会重复附加。取不到会话时按 false 处理（宁可不附加，也不误附加）。
+   */
+  blank: boolean
 }
 
 /** 输入框根元素的选择器（与 interceptors.ts 保持一致）。 */
@@ -31,20 +38,22 @@ const COMPOSER_SELECTOR = '[data-composer-input]'
 /** 输入卡片选择器（官方在 InputBar 上写的标记）。 */
 const CARD_SELECTOR = '[data-composer-card]'
 
-const state: BridgeState = { actions: null, draft: '', sessionId: '' }
+const state: BridgeState = { actions: null, draft: '', sessionId: '', blank: false }
 
 /**
  * 槽位组件每次渲染投递一次桥接数据。
- * @param next - 本会话的输入动作、当前草稿与服务端会话 id。
+ * @param next - 本会话的输入动作、当前草稿、服务端会话 id、以及会话是否还没有消息。
  */
 export function publishInputBridge(next: {
   readonly actions: InputActionsLike | null
   readonly draft: string
   readonly sessionId: string
+  readonly blank: boolean
 }): void {
   state.actions = next.actions
   state.draft = next.draft
   state.sessionId = next.sessionId
+  state.blank = next.blank
 }
 
 /**
@@ -57,6 +66,12 @@ export function releaseInputBridge(sessionId: string): void {
   state.actions = null
   state.draft = ''
   state.sessionId = ''
+  state.blank = false
+}
+
+/** 当前会话是不是还没有任何消息（「仅首次插入」的判据）。 */
+export function currentBlankSession(): boolean {
+  return state.blank === true
 }
 
 /** DOM 兜底读草稿（槽位未挂载时的最后手段）。 */

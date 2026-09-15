@@ -197,10 +197,13 @@ const buttonInject = byId('composer-ux-quick').inject()
 check('按钮拿到 toggle 动作', typeof buttonInject.actions.toggle === 'function')
 check('按钮拿到 panel 钩子', typeof buttonInject.hooks.panel?.getSnapshot === 'function')
 const panelInject = byId('composer-ux-quick-panel').inject()
-for (const name of ['close', 'insert', 'optimize', 'setTier', 'setAlways']) {
+// 0.4.0：插入模式从「单个 setAlways 勾选框」换成三选一的 setInsertMode
+// （两个互斥标志必须一次写对，不能再由界面分别改）。
+for (const name of ['close', 'insert', 'optimize', 'setTier', 'setInsertMode', 'addPrompt', 'movePrompt']) {
   check(`面板拿到 ${name}`, typeof panelInject.actions[name] === 'function')
 }
-for (const name of ['live', 'panel', 'busy', 'notice']) {
+check('面板不再拿到会造成矛盾状态的 setAlways', panelInject.actions.setAlways === undefined)
+for (const name of ['live', 'panel', 'busy', 'notice', 'book', 'bookStatus']) {
   check(`面板拿到 ${name} 钩子`, typeof panelInject.hooks[name]?.getSnapshot === 'function')
 }
 

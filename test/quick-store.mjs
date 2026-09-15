@@ -392,6 +392,12 @@ console.log('9. 原子写的实现形状')
     !codeOnly(clientSrc).includes('QUICK_PROMPTS_FIELD') && !codeOnly(sectionSrc).includes('QUICK_PROMPTS_FIELD'),
     'client.tsx 与 SettingsSection.tsx 里不应再出现 QUICK_PROMPTS_FIELD（只有宿主半的迁移种子读它）',
   )
+  check(
+    '「OpenCode 请求头」区块顶部用警告样式写着「用自定义 API 地址、别用 DSH 自带的」',
+    // 这是用户实测踩过的坑（自带地址配置发图片会报错），必须留在区块最前面。
+    /<FoldCard name="OpenCode 请求头"[\s\S]{0,800}?<p style=\{hintError\}>[\s\S]{0,300}?不要用 DSH 自带的 API 地址配置[\s\S]{0,300}?一旦发送图片就会报错/.test(sectionSrc),
+    'SettingsSection 的 OpenCode 请求头区块应有一段 hintError 样式的地址警告',
+  )
 }
 
 // ══════════════ 10. 客户端纯编辑函数（不可变） ═══════════════════════════════

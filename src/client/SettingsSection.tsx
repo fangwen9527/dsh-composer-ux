@@ -767,6 +767,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
       </FoldCard>
 
       <FoldCard name="OpenCode 请求头" summary={headerSummary}>
+        {/* 用户实测踩过的坑，放区块最前面：这一栏是为了 OpenCode 的 API 地址服务的，
+            用 DSH 自带的地址配置发图片会报错。 */}
+        <p style={hintError}>
+          ⚠️ 请使用自定义的 OpenCode API 地址，不要用 DSH 自带的 API 地址配置：
+          用自带的配置无法上传图片，一旦发送图片就会报错。
+        </p>
         <p style={bodyLead}>
           OpenCode 的接口要求客户端每次请求都带上一个稳定的会话 ID 请求头（官方 Go 文档
           「可以在哪里使用？」第 3 条：为每段对话在 x-opencode-session 中发送会话 ID，

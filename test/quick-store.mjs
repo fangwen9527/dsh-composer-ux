@@ -387,6 +387,11 @@ console.log('9. 原子写的实现形状')
     !/always\s*===\s*true/.test(qcSrc) && !/firstOnly\s*===\s*true/.test(qcSrc),
     'quick-commands.ts 不得再按 always/firstOnly 过滤（该有谁已由 appendBatchForSend 决定）',
   )
+  check(
+    '客户端两处都不再引用旧设置字段（0.3.0 搬家时留下的死导入已清）',
+    !codeOnly(clientSrc).includes('QUICK_PROMPTS_FIELD') && !codeOnly(sectionSrc).includes('QUICK_PROMPTS_FIELD'),
+    'client.tsx 与 SettingsSection.tsx 里不应再出现 QUICK_PROMPTS_FIELD（只有宿主半的迁移种子读它）',
+  )
 }
 
 // ══════════════ 10. 客户端纯编辑函数（不可变） ═══════════════════════════════

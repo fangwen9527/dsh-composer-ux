@@ -17,7 +17,7 @@ import {
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
-  QUICK_PROMPTS_FIELD, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
+  QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
   insertModeOf, newQuickPromptId, newSessionId,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,

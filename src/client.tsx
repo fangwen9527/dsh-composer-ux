@@ -8,7 +8,7 @@ import {
   DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
   HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
-  PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_PROMPTS_FIELD, SEND_KEY_FIELD, sanitizeSettings,
+  PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, SEND_KEY_FIELD, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,

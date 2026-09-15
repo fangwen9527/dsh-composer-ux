@@ -17,9 +17,10 @@ export {
 } from '../src/settings-contract.ts'
 export { alwaysPrompts, sendButtonOf, withAlwaysPrompts } from '../src/client/quick-commands.ts'
 export {
-  bookCounts, findPrompt,
+  bookCounts, findPrompt, promptsElsewhere,
   withAlwaysToggled, withCategoryAdded, withCategoryMoved, withCategoryRemoved,
-  withCategoryRenamed, withPromptAdded, withPromptMoved, withPromptPatched, withPromptRemoved,
+  withCategoryRenamed, withPromptAdded, withPromptMoved, withPromptMovedToCategory,
+  withPromptPatched, withPromptRemoved,
 } from '../src/client/prompt-book.ts'
 export {
   OPTIMIZER_SPECS, buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser,

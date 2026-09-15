@@ -422,6 +422,72 @@ console.log('10. 客户端编辑函数（不可变）与跨分类语义')
   check('按 id 找条目能报出所属分类', pure.findPrompt(book2, 'p3')?.category.id === 'b')
 }
 
+// ══════════════ 11. 跨分类移动条目（「＋ → 移动到这里」） ════════════════════
+console.log('11. 跨分类移动条目')
+{
+  const two = {
+    version: 2,
+    categories: [
+      { id: 'a', name: '甲', prompts: [
+        { id: 'p1', label: '一', prompt: 'X', always: true },
+        { id: 'p2', label: '二', prompt: 'Y', always: false },
+      ] },
+      { id: 'b', name: '乙', prompts: [
+        { id: 'p3', label: '三', prompt: 'Z', always: false },
+      ] },
+    ],
+  }
+
+  const moved = pure.withPromptMovedToCategory(two, 'p1', 'b')
+  check('源分类里移除了它', moved.categories[0].prompts.map(p => p.id).join(',') === 'p2', JSON.stringify(moved.categories[0].prompts.map(p => p.id)))
+  check('目标分类追加到**末尾**', moved.categories[1].prompts.map(p => p.id).join(',') === 'p3,p1', JSON.stringify(moved.categories[1].prompts.map(p => p.id)))
+  const carried = moved.categories[1].prompts[1]
+  check('搬的是同一条（id / 正文 / 默认插入都跟着走）', carried.id === 'p1' && carried.prompt === 'X' && carried.always === true, JSON.stringify(carried))
+  check('不可变：原对象没被改', two.categories[0].prompts.length === 2 && two.categories[1].prompts.length === 1)
+
+  check('目标就是源分类 → 原样返回', pure.withPromptMovedToCategory(two, 'p1', 'a') === two)
+  check('条目不存在 → 原样返回', pure.withPromptMovedToCategory(two, 'nope', 'b') === two)
+  check('目标分类不存在 → 原样返回', pure.withPromptMovedToCategory(two, 'p1', 'nope') === two)
+
+  const single = {
+    version: 2,
+    categories: [
+      { id: 'a', name: '甲', prompts: [{ id: 'p', label: 'l', prompt: 't', always: false }] },
+      { id: 'b', name: '乙', prompts: [{ id: 'q', label: 'l', prompt: 't', always: false }] },
+    ],
+  }
+  const emptied = pure.withPromptMovedToCategory(single, 'p', 'b')
+  check('移走最后一条后源分类**留空但不消失**（空分类是合法状态）', emptied.categories.length === 2 && emptied.categories[0].prompts.length === 0)
+
+  const full = {
+    version: 2,
+    categories: [
+      { id: 'a', name: '甲', prompts: [{ id: 'p', label: 'l', prompt: 't', always: false }] },
+      { id: 'b', name: '乙', prompts: Array.from({ length: pure.QUICK_PROMPT_MAX }, (_, index) => ({ id: `f${String(index)}`, label: 'l', prompt: 't', always: false })) },
+    ],
+  }
+  check('目标分类已满 → 原样返回（不越界）', pure.withPromptMovedToCategory(full, 'p', 'b') === full)
+
+  const candidates = pure.promptsElsewhere(two, 'a')
+  check('候选项只列别的分类', candidates.map(item => `${item.categoryName}:${item.prompt.id}`).join(',') === '乙:p3', JSON.stringify(candidates.map(item => item.prompt.id)))
+  check('候选项带来源分类名（菜单上要显示它）', candidates[0].categoryName === '乙')
+  check('当前分类的条目不出现在候选里', !candidates.some(item => item.prompt.id === 'p1' || item.prompt.id === 'p2'))
+
+  // 新建出来的条目正文必须非空：空正文会被净化丢掉，而面板的「新建」是立即写盘的，
+  // 给空串就会当场消失、看起来像坏掉了。
+  const fresh = pure.defaultQuickBook()
+  const withNew = pure.withPromptAdded(fresh, fresh.categories[0].id)
+  check('新建的条目带非空占位正文（否则写盘时消失）', (withNew.categories[0].prompts.at(-1)?.prompt ?? '').trim() !== '')
+
+  // 接缝：用户明确要求「设置页和面板」两处都有这一行。
+  const panelSrc = readFileSync(new URL('../src/client/QuickCommandsPanel.tsx', import.meta.url), 'utf8')
+  const sectionSrc = readFileSync(new URL('../src/client/SettingsSection.tsx', import.meta.url), 'utf8')
+  check('面板里渲染了这一行，并接上了移动动作', /<AddPromptRow/.test(panelSrc) && /actions\.movePrompt\(/.test(panelSrc))
+  check('设置页里渲染了同一行，并接上了移动动作', /<AddPromptRow/.test(sectionSrc) && /withPromptMovedToCategory\(/.test(sectionSrc))
+  check('设置页不再留旧的「+ 添加一条」独立按钮', !/添加一条/.test(sectionSrc))
+  check('两处用的是同一个组件（行为不会分叉）', /from '\.\/AddPromptRow\.tsx'/.test(panelSrc) && /from '\.\/AddPromptRow\.tsx'/.test(sectionSrc))
+}
+
 // ── 收尾 ────────────────────────────────────────────────────────────────────
 delete process.env.DSH_HOME
 for (const dir of homes) rmSync(dir, { recursive: true, force: true })

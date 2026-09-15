@@ -17,6 +17,7 @@ import {
   type ComposerUxSettings, type OptimizerTier, type QuickPromptBook,
 } from '../settings-contract.ts'
 import { bookCounts } from './prompt-book.ts'
+import { AddPromptRow } from './AddPromptRow.tsx'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
 import {
   quickAlwaysBox, quickAlwaysLabel, quickCategoryAdd, quickCategoryRow, quickCategoryTab,
@@ -55,6 +56,10 @@ export interface QuickPanelInjected {
     setAlways: (id: string, value: boolean) => void
     /** 新增一个分类（名字由设置页再改）。 */
     addCategory: (name: string) => void
+    /** 在当前分类里新建一条（占位正文，具体内容到设置页改）。 */
+    addPrompt: (categoryId: string) => void
+    /** 把某条从它所在分类移到目标分类（「移动到这里」）。 */
+    movePrompt: (promptId: string, toCategoryId: string) => void
     /** 从磁盘重读（文件被手工改过时的兜底）。 */
     reloadBook: () => void
   }
@@ -229,6 +234,15 @@ export function QuickCommandsPanel({
             </label>
           </div>
         ))}
+        {active !== undefined && (
+          <AddPromptRow
+            variant="panel"
+            book={book}
+            categoryId={active.id}
+            onAdd={() => { actions.addPrompt(active.id) }}
+            onMove={promptId => { actions.movePrompt(promptId, active.id) }}
+          />
+        )}
       </div>
 
       <div style={quickPanelFoot}>

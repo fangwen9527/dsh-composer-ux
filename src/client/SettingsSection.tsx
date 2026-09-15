@@ -24,8 +24,9 @@ import {
 } from '../settings-contract.ts'
 import {
   bookCounts, withCategoryAdded, withCategoryMoved, withCategoryRemoved, withCategoryRenamed,
-  withPromptAdded, withPromptMoved, withPromptPatched, withPromptRemoved,
+  withPromptAdded, withPromptMoved, withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from './prompt-book.ts'
+import { AddPromptRow } from './AddPromptRow.tsx'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -477,9 +478,13 @@ function QuickPromptsEditor(props: {
             </div>
           ))}
 
-          <div>
-            <button type="button" style={pill} onClick={() => { edit(withPromptAdded(draft, current.id)) }}>+ 添加一条</button>
-          </div>
+          {/* 列表最下边的「＋」：新建 / 把别的分类的条目移动到这里（与面板同一组件） */}
+          <AddPromptRow
+            book={draft}
+            categoryId={current.id}
+            onAdd={() => { edit(withPromptAdded(draft, current.id)) }}
+            onMove={promptId => { edit(withPromptMovedToCategory(draft, promptId, current.id)) }}
+          />
         </>
       )}
 

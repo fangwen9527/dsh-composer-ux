@@ -138,11 +138,23 @@ export function withCategoryMoved(book: QuickPromptBook, categoryId: string, del
   return { version: book.version, categories }
 }
 
-/** 在指定分类里加一条空条目（名字与正文留空，由用户在设置页填）。 */
+/**
+ * 在指定分类里加一条新条目。
+ *
+ * 正文给的是**占位文案**而不是空串：空正文的条目会被净化丢掉（`asPromptRow` 要求正文
+ * 非空），而面板里的「新建」是**立即写盘**的——给空正文的话它会当场消失、看起来像坏掉了。
+ * 设置页同样用它，于是两边行为一致：新建出来的是一条「新指令 /（待填写）」，把正文
+ * 替换掉即可。
+ */
 export function withPromptAdded(book: QuickPromptBook, categoryId: string): QuickPromptBook {
   return mapCategory(book, categoryId, (category) => {
     if (category.prompts.length >= QUICK_PROMPT_MAX) return category
-    return { ...category, prompts: [...category.prompts, { id: newQuickPromptId(), label: '新指令', prompt: '', always: false }] }
+    return {
+      ...category,
+      prompts: [...category.prompts, {
+        id: newQuickPromptId(), label: '新指令', prompt: '（待填写）', always: false,
+      }],
+    }
   })
 }
 
@@ -197,4 +209,51 @@ export function withAlwaysToggled(book: QuickPromptBook, promptId: string, value
   const hit = findPrompt(book, promptId)
   if (hit === undefined) return book
   return withPromptPatched(book, hit.category.id, promptId, { always: value })
+}
+
+/** 「移动到这里」菜单的数据源：其它分类里的全部条目（带来源分类名）。 */
+export function promptsElsewhere(
+  book: QuickPromptBook,
+  categoryId: string,
+): readonly { readonly categoryId: string; readonly categoryName: string; readonly prompt: QuickPrompt }[] {
+  return book.categories
+    .filter(category => category.id !== categoryId)
+    .flatMap(category => category.prompts.map(prompt => ({
+      categoryId: category.id,
+      categoryName: category.name,
+      prompt,
+    })))
+}
+
+/**
+ * 把一个条目从**它当前所在的分类**移到目标分类，追加到目标末尾。
+ *
+ * 只按 id 找条目（调用方不必知道它在哪个分类）：面板里「当前分类」是标签决定的，
+ * 设置页每个分类各有一份列表——按 id 找能少一个参数，也少一类「传错来源」的 bug。
+ *
+ * @returns 新本；下列情况**原样返回传入对象**（调用方据此避免无意义的写盘）：
+ *          条目不存在、目标分类不存在、目标就是它现在所在的分类、目标分类已满。
+ */
+export function withPromptMovedToCategory(
+  book: QuickPromptBook,
+  promptId: string,
+  toCategoryId: string,
+): QuickPromptBook {
+  const hit = findPrompt(book, promptId)
+  if (hit === undefined || hit.category.id === toCategoryId) return book
+  const target = categoryOf(book, toCategoryId)
+  if (target === undefined || target.prompts.length >= QUICK_PROMPT_MAX) return book
+  return {
+    version: book.version,
+    categories: book.categories.map((category) => {
+      if (category.id === hit.category.id) {
+        return { ...category, prompts: category.prompts.filter(prompt => prompt.id !== promptId) }
+      }
+      if (category.id === toCategoryId) {
+        // 原样搬同一个对象：id / 名称 / 正文 / 「默认插入」标记都跟着走。
+        return { ...category, prompts: [...category.prompts, hit.prompt] }
+      }
+      return category
+    }),
+  }
 }

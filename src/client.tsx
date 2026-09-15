@@ -15,8 +15,8 @@ import {
 } from './settings-contract.ts'
 import {
   loadPromptBook, savePromptBook, withAlwaysToggled, withCategoryAdded, withCategoryMoved,
-  withCategoryRemoved, withCategoryRenamed, withPromptAdded, withPromptMoved, withPromptPatched,
-  withPromptRemoved,
+  withCategoryRemoved, withCategoryRenamed, withPromptAdded, withPromptMoved,
+  withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from './client/prompt-book.ts'
 import { installInterceptors, runMenuAction } from './client/interceptors.ts'
 import { installPanelStyle } from './client/panel.ts'
@@ -127,6 +127,10 @@ export function apply(ctx: any): void {
       commitBook(withPromptMoved(book.getSnapshot(), categoryId, id, delta))
     },
     resetBook: (): void => { commitBook(defaultQuickBook()) },
+    /** 把某条从它所在分类移到目标分类（「移动到这里」：追加到目标末尾）。 */
+    movePromptToCategory: (promptId: string, toCategoryId: string): void => {
+      commitBook(withPromptMovedToCategory(book.getSnapshot(), promptId, toCategoryId))
+    },
     /** 设置页「保存」：把编辑器里的整本一次写回（而不是每敲一个字就写盘）。 */
     saveBook: (next: QuickPromptBook): void => { commitBook(next) },
   }
@@ -289,6 +293,8 @@ export function apply(ctx: any): void {
         renameCategory: bookActions.renameCategory,
         removeCategory: bookActions.removeCategory,
         moveCategory: bookActions.moveCategory,
+        addPrompt: bookActions.addPrompt,
+        movePrompt: bookActions.movePromptToCategory,
         reloadBook: bookActions.reload,
       },
     }),

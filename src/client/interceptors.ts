@@ -254,17 +254,27 @@ function isClipboardTimeout(error: unknown): boolean {
   return error instanceof Error && error.message === 'clipboard-read timeout'
 }
 
-/** Firefox：剪贴板授权不进站点权限面板，只能靠 about:config 全局允许一次。 */
+/** 当前浏览器是不是 Firefox（它对读剪贴板有额外的确认弹窗，见 FIREFOX_TIP）。 */
 function isFirefox(): boolean {
   return typeof navigator !== 'undefined' && /Firefox\//.test(navigator.userAgent)
 }
 
-/** Firefox 一次性配置指引（全局允许读剪贴板，after:config 新建整数，改完立即生效）。 */
-const FIREFOX_TIP = 'Firefox 每次读剪贴板都要点「粘贴(P)」确认：地址栏输入 about:config → 接受风险继续 → 右键新建「整数」→ 名称填 permissions.default.clipboard-read → 值填 1 → 重进 DSH；之后点一次粘贴即成功（或直接 Ctrl+V）'
+/**
+ * Firefox 的读剪贴板确认弹窗说明。
+ *
+ * 实测更正（0.4.0，用户在 Firefox 上验过）：这个弹窗**不是**权限面板、也**不能**用
+ * `about:config` 里的首选项关掉——它是 Firefox 的安全机制：网页读剪贴板要先弹一个只有
+ * 「粘贴(P)」一项的临时小窗（约 1 秒后才可点），用户点了才完成读取。按 MDN 的说明，
+ * 只有浏览器扩展凭 `clipboardRead` 权限才能免掉它；Firefox 147 起普通网页走完这个弹窗
+ * 也可以读。能靠改设置免掉它的只有 `dom.events.testing.asyncClipboard` 这类**测试用**开关，
+ * 那等于允许任何网站静默读剪贴板，我们不在界面上教这个。
+ */
+const FIREFOX_TIP = 'Firefox 不允许网页静默读剪贴板：请在弹出的「粘贴(P)」小窗上点一下（约 1 秒后才可点，这是 Firefox 的安全机制，插件关不掉）；不想多这一步就直接按 Ctrl+V'
 
 /** 粘贴：读剪贴板后在光标处插入纯文本。
  * 浏览器安全模型：写剪贴板（复制/剪切）免授权，读剪贴板（粘贴）必须授权，
- * 任何网页都无法绕过——但首次授权后浏览器会记住该站点，之后静默可用。
+ * 任何网页都无法绕过。Chrome / Edge 是**按站点**授权，允许一次后记住该站点、之后静默可用；
+ * Firefox 没有这种「记住」，每次读都要用户点一下它自己弹的「粘贴(P)」小窗（见 FIREFOX_TIP）。
  * 优先使用右键时预读的缓存（授权已被点击过一次，无感），失败再实时读取。
  */
 async function pasteText(root: HTMLElement): Promise<MenuActionResult> {

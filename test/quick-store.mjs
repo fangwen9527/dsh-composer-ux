@@ -47,6 +47,18 @@ function codeOnly(src) {
 }
 
 /**
+ * 不许出现在用户可见界面 / 运行时提示 / README 里的剪贴板首选项名。
+ *
+ * 第一个是 0.4.0 之前我们**写错**的（对 Firefox 的「粘贴(P)」小窗无效，用户实测打脸）；
+ * 后两个是真能关掉那个小窗、但会让**任何网站静默读你的剪贴板**的测试用开关——本插件不教。
+ */
+const FORBIDDEN_CLIPBOARD_PREFS = [
+  'permissions.default.clipboard-read',
+  'dom.events.testing.asyncClipboard',
+  'dom.events.asyncClipboard.readText',
+]
+
+/**
  * 兜底：变异测试（故意把 bug 放回去）时，断言链可能取到 undefined 而抛错。
  * 抛错要记成一条 ✗ 并正常收尾——**崩溃不是合格的失败报告**。
  */
@@ -399,13 +411,24 @@ console.log('9. 原子写的实现形状')
     'SettingsSection 的 OpenCode 请求头区块应有一段 hintError 样式的地址警告',
   )
   check(
-    '自定义档的粘贴授权说明写清了三家浏览器与 about:config 的入口',
-    // 用户要求的原话是「写明要在哪里找 about:config，以及谷歌/微软浏览器怎么办」；
-    // 这段说明是给人照着做的，缺一家就等于没写。
-    /自定义：[\s\S]{0,240}?Chrome \/ Edge[\s\S]{0,900}?about:config[\s\S]{0,400}?permissions\.default\.clipboard-read/.test(sectionSrc)
+    '自定义档的粘贴授权说明写清了 Chrome / Edge 与 Firefox 各自的办法',
+    // Chrome / Edge：站点授权 + 两个设置页地址；Firefox：它自己弹的「粘贴(P)」小窗 + 改用 Ctrl+V。
+    /Chrome \/ Edge[\s\S]{0,600}?chrome:\/\/settings\/content\/clipboard/.test(sectionSrc)
     && sectionSrc.includes('edge://settings/content/clipboard')
-    && sectionSrc.includes('chrome://settings/content/clipboard'),
-    'SettingsSection 里应写清 Chrome/Edge（含设置页地址）与 Firefox（about:config → permissions.default.clipboard-read）各自的办法',
+    && /Firefox[\s\S]{0,400}?粘贴\(P\)[\s\S]{0,300}?Ctrl\+V/.test(sectionSrc),
+    'SettingsSection 里应写清 Chrome/Edge（含设置页地址）与 Firefox（粘贴(P) 小窗 + Ctrl+V）',
+  )
+  check(
+    '界面、运行时提示与 README 都不再出现那类剪贴板首选项名',
+    // 回归点：曾经在界面、README 与运行时提示里教用户「把 about:config 里那个首选项设为 1」，
+    // 用户在 Firefox 上实测——弹窗照旧。两者（我们写错的、以及真能关掉弹窗但会让任何网站
+    // 静默读剪贴板的测试用开关）都不许出现在用户可见的界面 / 提示 / README 里。
+    !FORBIDDEN_CLIPBOARD_PREFS.some(name =>
+      sectionSrc.includes(name)
+      || codeOnly(readFileSync(new URL('../src/client/interceptors.ts', import.meta.url), 'utf8')).includes(name)
+      // README 按**原文**查：里面全是 URL，剥注释会把 `https://` 之后整行切掉、反而漏检。
+      || readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(name)),
+    `不许出现：${FORBIDDEN_CLIPBOARD_PREFS.join(' / ')}（Firefox 的「粘贴(P)」小窗与它们无关，也关不掉）`,
   )
 }
 

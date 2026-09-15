@@ -672,11 +672,13 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           edge://settings/content/clipboard）。
         </p>
         <p style={hintInfo}>
-          · Firefox：每次点「粘贴」都会问。想一次免掉：地址栏输入 about:config（点「接受风险并继续」）
-          → 在上方搜索框输入 permissions.default.clipboard-read → 右键「新建」→「整数」→ 值填 1。
+          · Firefox：不允许网页静默读剪贴板——你点本插件的「粘贴」后，它会先弹一个只有「粘贴(P)」
+          一项的小窗（约 1 秒后才可点），点它才完成这次粘贴。这是 Firefox 的安全机制，插件关不掉
+          （实测：about:config 里的剪贴板首选项对它无效）。不想多这一步就直接按 Ctrl+V，
+          或把上面的「菜单来源」换成「浏览器 / 官方」档——那两档用的是浏览器自己的粘贴。
         </p>
         <p style={hintInfo}>
-          注意：about:config、chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
+          注意：chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
           或复制上面那串粘贴到地址栏。
         </p>
         {settings.menuMode === 'custom' && (<>

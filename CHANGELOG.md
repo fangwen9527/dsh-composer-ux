@@ -34,6 +34,10 @@
    - ✅ 正解：护栏匹配前先剥注释（`codeOnly()`）。注释里必须能自由记录踩过的坑。
 4. **设置页「快捷指令」卡片里三处 `**加粗**` 是 Markdown 字面量**，在 React 里就渲染成三个星号（`**发送时怎么附加**`）。这是 0.4.0 写文案时留下的，没人报过但一眼可见。
    - ✅ 正解：改成 `<strong>`。**这类问题只有看渲染结果才发现**——文案改动要顺手在真界面里看一眼。
+5. **Firefox 的粘贴说明一直是错的**（用户照做之后实测发现）。我们教用户「把 `about:config` 里的 `permissions.default.clipboard-read` 设为 `1` 就不弹授权窗」——用户设完之后，「粘贴(P)」小窗照旧出现。
+   - 查证结论：那个小窗是 Firefox 的**固定安全机制**——网页读剪贴板时它弹一个只有「Paste」一项的临时菜单（约 1 秒后才可点），与那个首选项无关；能免掉它的只有 `dom.events.testing.asyncClipboard` 这类**测试用**开关，那等于允许任何网站静默读剪贴板（[MDN](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API#security_considerations)、[caniuse](https://caniuse.com/mdn-api_clipboard_readtext)：只有带 `clipboardRead` 权限的扩展不受此限）。
+   - ✅ 正解：界面、README 与运行时提示统一改成准确说法——「Firefox 一定会弹那个小窗，插件关不掉；不想多这一步就用 Ctrl+V，或把「菜单来源」换成「浏览器 / 官方」档」。并加一条护栏：界面与运行时提示里**不许再出现**那个首选项名（变异测试：写回去立刻变红）。README 另留一句「早先写法是错的」的更正，避免有人从旧文档学到错的。
+   - 教训：**「用户照做之后没用」就是最硬的证据**。这条错误能存活好几个版本，是因为它只写在文案与提示里、没有任何测试盯着它是否成立。
 
 ### 测试
 

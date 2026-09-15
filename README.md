@@ -78,9 +78,11 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
 | 浏览器 | 首次/之后 | 改或撤销授权 | 免掉弹窗的办法 |
 | --- | --- | --- | --- |
 | Chrome / Edge | 弹出后点「允许」即记住这个站点，之后不再问 | 地址栏最左的网站图标 → 网站设置（Edge 叫「此站点的权限」）→ 剪贴板；或 `chrome://settings/content/clipboard`（Edge 是 `edge://settings/content/clipboard`） | 不需要：允许一次即可 |
-| Firefox | 每次点「粘贴」都会问 | — | 地址栏输入 `about:config`（接受风险）→ 搜 `permissions.default.clipboard-read` → 新建「整数」填 `1` |
+| Firefox | 每次点「粘贴」都会弹一个只有「粘贴(P)」一项的小窗（约 1 秒后才可点），点它才完成 | 无（没有站点授权面板） | **关不掉**：这是 Firefox 的安全机制，网页不允许静默读剪贴板。不想多这一步就按 Ctrl+V，或把「菜单来源」切成「浏览器 / 官方」档 |
 
-> `about:config` / `chrome://` / `edge://` 这些地址**不能做成网页里的链接**（浏览器禁止页面跳转到内部协议），只能手输或复制粘贴到地址栏。被拒绝授权或无响应时，菜单里会提示「请用 Ctrl+V 粘贴」。
+> 0.4.0 实测更正：早先文档里教过「改 `about:config` 里某个剪贴板首选项就不弹窗」——**那是错的**，那个弹窗与任何首选项都无关（用户在 Firefox 上照做后弹窗照旧）。依据：[MDN Clipboard API 的安全说明](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API#security_considerations)（读到不允许的内容时，浏览器弹的临时菜单里只有一个 Paste 项、约 1 秒后才可点）、[caniuse](https://caniuse.com/mdn-api_clipboard_readtext)（只有带 `clipboardRead` 权限的扩展不显示粘贴提示）。能免掉它的设置都属于「允许任何网站静默读剪贴板」那一类，本插件不教、也不建议改。
+>
+> `chrome://` / `edge://` 这些地址**不能做成网页里的链接**（浏览器禁止页面跳转到内部协议），只能手输或复制粘贴到地址栏。被拒绝授权或无响应时，菜单里会提示「请用 Ctrl+V 粘贴」。
 
 自定义档的细节：
 

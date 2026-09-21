@@ -106,6 +106,98 @@ console.log('1. 快捷指令的净化（防脏数据）')
     pure.MENU_MODES.every(item => typeof item.label === 'string' && item.label !== ''
       && typeof item.hint === 'string' && item.hint.length > 10))
 }
+{
+  // 0.5.0：「每一栏一个开关」，默认关；总开关默认开。
+  //
+  // 这一段是整个功能最要紧的护栏 —— 判据写错的方向有两种，而且都很难在界面上看出来：
+  //  · 一律默认关 ⇒ 老用户升级那一刻键位失效、OpenCode 路由 400；
+  //  · 一律默认开 ⇒ 全新安装六栏全开，与"默认关"正好相反。
+  // 所以两个方向都要钉住。
+  const blank = pure.sanitizeSettings({})
+  check('全新安装（空文档）→ 五栏全关',
+    blank.keysEnabled === false && blank.menuEnabled === false && blank.quickEnabled === false
+    && blank.panelEnabled === false && blank.terminalEnabled === false,
+    JSON.stringify([blank.keysEnabled, blank.menuEnabled, blank.quickEnabled, blank.panelEnabled, blank.terminalEnabled]))
+  check('总开关默认开（它是总闸，不是"要不要用这一栏"）', blank.enabled === true)
+  check('OpenCode 那一栏沿用 headerEnabled，且默认关', blank.headerEnabled === false)
+  check('DEFAULT_SETTINGS 与净化结果一致（两处不许分叉）',
+    pure.DEFAULT_SETTINGS.enabled === true && pure.DEFAULT_SETTINGS.keysEnabled === false
+    && pure.DEFAULT_SETTINGS.menuEnabled === false && pure.DEFAULT_SETTINGS.quickEnabled === false
+    && pure.DEFAULT_SETTINGS.panelEnabled === false && pure.DEFAULT_SETTINGS.terminalEnabled === false)
+
+  // 显式值永远优先（用户表过态就听他的），哪怕信号存在。
+  check('显式 false 压过信号（改过键位但明确关了键位栏）',
+    pure.sanitizeSettings({ keysEnabled: false, sendKey: 'Ctrl+Enter' }).keysEnabled === false)
+  check('显式 true 不需要任何信号',
+    pure.sanitizeSettings({ panelEnabled: true }).panelEnabled === true)
+
+  // 老用户：每一栏的"碰过"判据各测一次（值 ≠ 从没碰过的样子）。
+  check('改过键位 → 键位栏开',
+    pure.sanitizeSettings({ sendKey: 'Ctrl+Enter' }).keysEnabled === true
+    && pure.sanitizeSettings({ newlineKey: 'Enter' }).keysEnabled === true)
+  check('键位保持默认（Enter / Shift+Enter）→ 仍算没碰过',
+    pure.sanitizeSettings({ sendKey: 'Enter', newlineKey: 'Shift+Enter' }).keysEnabled === false)
+  check('右键菜单选过浏览器/自定义档 → 开',
+    pure.sanitizeSettings({ menuMode: 'browser' }).menuEnabled === true
+    && pure.sanitizeSettings({ menuMode: 'custom' }).menuEnabled === true)
+  check('右键菜单就是"官方"档 → 算没碰过（官方＝不介入＝等价于关）',
+    pure.sanitizeSettings({ menuMode: 'official' }).menuEnabled === false)
+  check('设置面板有尺寸记录 → 开',
+    pure.sanitizeSettings({ panelWidth: 1007, panelHeight: 746 }).panelEnabled === true)
+  check('设置面板全是默认值 → 关',
+    pure.sanitizeSettings({ panelScroll: true, panelResize: true }).panelEnabled === false)
+  check('终端档位不是自动 / 填了路径 → 开',
+    pure.sanitizeSettings({ terminalMode: 'gitbash' }).terminalEnabled === true
+    && pure.sanitizeSettings({ terminalBashPath: 'D:/Git/bin/bash.exe' }).terminalEnabled === true)
+  check('终端档位保持"自动"且没填路径 → 关',
+    pure.sanitizeSettings({ terminalMode: 'auto' }).terminalEnabled === false)
+  check('宿主半自持字段不能当判据（候选列表是插件自己写的）',
+    pure.sanitizeSettings({
+      terminalCandidates: [{ path: 'D:/Git/bin/bash.exe', label: 'Git', kind: 'git', explicit: false }],
+      terminalStatus: '已生效：D:/Git/bin/bash.exe',
+      terminalEffective: 'bash',
+    }).terminalEnabled === false)
+  check('快捷指令列表被改过 → 开（文档里的次级信号）',
+    pure.sanitizeSettings({ quickPrompts: [{ id: 'x', label: 'x', prompt: 'x', always: false }] }).quickEnabled === true)
+  check('优化档位不是默认 → 开',
+    pure.sanitizeSettings({ optimizerTier: 'extreme' }).quickEnabled === true)
+
+  // 用户真实文档的回归：这就是他 2026-09-17 那份（headerValue 已换成假 UUID）。
+  // 六栏必须全部保持开着 —— 升级不能把他正在用的东西关掉。
+  const real = pure.sanitizeSettings({
+    enabled: true,
+    panelResize: true,
+    menuNative: true,
+    sendKey: 'Ctrl+Enter',
+    newlineKey: 'Enter',
+    headerEnabled: true,
+    headerValue: '00000000-0000-0000-0000-000000000000',
+    headerAppliedName: 'x-opencode-session',
+    headerAppliedValue: '00000000-0000-0000-0000-000000000000',
+    headerStatus: '已写入 opencode-go、go',
+    optimizerTier: 'advanced',
+    panelWidth: 1007,
+    panelHeight: 746,
+    panelScroll: true,
+    menuMode: 'browser',
+    terminalStatus: '已生效：D:/Git/bin/bash.exe（Git for Windows）',
+    terminalEffective: 'bash',
+    terminalMode: 'gitbash',
+    terminalBashPath: 'D:/Git/bin/bash.exe',
+  })
+  const live = pure.activeSections(real)
+  check('真实文档迁移后：键位 / 右键菜单 / 设置面板 / OpenCode / 默认终端 全开',
+    live.keys && live.menu && live.panel && live.header && live.terminal,
+    JSON.stringify(live))
+
+  // activeSections：总闸 + 栏开关，两处都要看
+  check('总开关关掉 → 六栏全不生效（哪怕栏开关是开的）',
+    Object.values(pure.activeSections({ ...pure.DEFAULT_SETTINGS, enabled: false, keysEnabled: true, headerEnabled: true }))
+      .every(value => value === false))
+  check('总开关开着 + 栏开 → 生效', pure.activeSections({ ...pure.DEFAULT_SETTINGS, keysEnabled: true }).keys === true)
+  check('activeSections 用本栏自己的 headerEnabled，没有第二个请求头开关',
+    pure.activeSections({ ...pure.DEFAULT_SETTINGS, headerEnabled: true }).header === true)
+}
 
 // ══════════════ 2. 发送时的末尾拼接语义 ════════════════════════════════════
 //
@@ -309,6 +401,8 @@ async function bootHost(options = {}) {
       },
     },
     ...(options.model === undefined ? {} : { agentDefaultModel: options.model }),
+    // 重启路由的第一道关卡是官方 connection.requestRejection：用它验证"先问官方那道"。
+    ...(options.connection === undefined ? {} : { connection: options.connection }),
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
@@ -329,30 +423,40 @@ async function bootHost(options = {}) {
 }
 
 /**
- * 宿主半现在注册两条 exact 路由（提示词优化 + 快捷指令存储），
+ * 宿主半现在注册三条 exact 路由（提示词优化 + 快捷指令存储 + 终端状态），
  * 所以按**路径**取用，不要再按下标——加一条路由不该让别的用例集体改下标。
  */
 const optimizerRoute = host => host.routes.find(route => route.path === pure.OPTIMIZER_API_PATH)
 const storeRoute = host => host.routes.find(route => route.path === pure.QUICK_PROMPTS_API_PATH)
 
-/** 假请求：可被 for-await 读取的 body。 */
-function makeReq(method, body) {
+/**
+ * 假请求：可被 for-await 读取的 body。
+ * @param extra 额外的请求事实（重启用它伪造 headers / socket.remoteAddress）。
+ */
+function makeReq(method, body, extra = {}) {
   return {
     method,
     url: pure.OPTIMIZER_API_PATH,
     async *[Symbol.asyncIterator]() {
       if (body !== undefined) yield Buffer.from(body, 'utf8')
     },
+    ...extra,
   }
 }
 
-/** 假响应：捕获状态码与主体。 */
+/**
+ * 假响应：捕获状态码与主体。
+ * `statusCode` 那个设值器是刻意的：真实 ServerResponse 两种写法都行，路由里官方那道
+ * 信任关卡用的是 `res.statusCode = rejection`，harness 少这一个设值器就会把它读成 0。
+ */
 function makeRes() {
   const captured = { status: 0, body: '' }
   return {
     captured,
     writeHead(code) { captured.status = code },
     end(body) { captured.body = body },
+    get statusCode() { return captured.status },
+    set statusCode(code) { captured.status = code },
   }
 }
 
@@ -360,7 +464,12 @@ const json = res => JSON.parse(res.captured.body)
 
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
-  check('注册了两条 exact 路由（优化 + 快捷指令存储）', host.routes.length === 2 && host.routes.every(route => route.kind === 'exact'), JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
+  check('注册了四条 exact 路由（优化 + 快捷指令存储 + 终端状态 + 重启）',
+    host.routes.length === 4
+    && host.routes.every(route => route.kind === 'exact')
+    && [pure.OPTIMIZER_API_PATH, pure.QUICK_PROMPTS_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH]
+      .every(path => host.routes.some(route => route.path === path)),
+    JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
   check('优化路由路径与客户端约定一致', optimizerRoute(host)?.path === pure.OPTIMIZER_API_PATH, optimizerRoute(host)?.path)
   check('存储路由路径与客户端约定一致', storeRoute(host)?.path === pure.QUICK_PROMPTS_API_PATH, storeRoute(host)?.path)
 
@@ -470,6 +579,18 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
 
   const empty = schema({ quickPrompts: [] })
   check('空列表是合法值（被尊重，不回落）', empty.quickPrompts.length === 0)
+
+  // 0.5.0 五栏开关：schema 里**故意不给默认值**（`.required(false)`）。
+  // 迁移要用的信息就是"文档里到底有没有这个键"：schemastery 对缺省的 required(false)
+  // 键会**整个省掉**（返回 undefined），一旦有人给它补上 `.default(false)`，
+  // "从没碰过"与"明确关掉"就再也分不出来，迁移会静默失效。
+  check('五栏开关在 schema 里是可缺省的（缺省 ≠ false，迁移靠这个区分）',
+    empty.keysEnabled === undefined && empty.menuEnabled === undefined && empty.quickEnabled === undefined
+    && empty.panelEnabled === undefined && empty.terminalEnabled === undefined,
+    JSON.stringify([empty.keysEnabled, empty.menuEnabled, empty.quickEnabled, empty.panelEnabled, empty.terminalEnabled]))
+  check('用户写过的 false 原样解析回来（不会被默认值顶掉）',
+    schema({ menuEnabled: false }).menuEnabled === false
+    && schema({ panelEnabled: false, panelScroll: true }).panelEnabled === false)
 }
 
 // ══════════════ 7. 样式：实色按钮的「填充 + 前景」必须成对 ═══════════════════
@@ -564,6 +685,371 @@ console.log('8. 设置面板尺寸手柄（挂进面板内部，不比层叠）'
   // 面板选择器得对得上官方面板结构（role/aria + 直接子 nav）。
   check('面板选择器仍是官方面板结构',
     pure.PANEL_SELECTOR === '[role="dialog"][aria-modal="true"]:has(> nav)', pure.PANEL_SELECTOR)
+}
+
+console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取路径全部注入）')
+{
+  // ── 启动命令重建（dshArgv 的两种形态）────────────────────────────────────
+  const facts = over => ({
+    node: 'D:\\node\\node.exe',
+    argv1: 'D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js',
+    execArgv: [],
+    rest: ['web'],
+    cwd: 'D:\\DeepSeek Harness',
+    platform: 'win32',
+    resolve: p => p,
+    dirname: p => p.slice(0, p.lastIndexOf('\\')),
+    ...over,
+  })
+  const winLaunch = pure.launchCommand(facts())
+  check('入口像 dsh 入口 → node + 绝对入口 + 之后的参数（如 web）',
+    winLaunch.file === 'D:\\node\\node.exe'
+    && winLaunch.args.join('|') === 'D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js|web',
+    JSON.stringify(winLaunch))
+  check('cwd 取入口所在目录（源码启动的 --import tsx/esm 才解析得到）',
+    winLaunch.cwd === 'D:\\DeepSeek Harness\\apps\\cli\\lib', winLaunch.cwd)
+  check('execArgv 排在入口之前',
+    pure.launchCommand(facts({ execArgv: ['--import', 'tsx/esm'] })).args.join('|')
+      === '--import|tsx/esm|D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js|web')
+  check('相对入口先 resolve 成绝对（否则子进程按自己的 cwd 找 → MODULE_NOT_FOUND）',
+    pure.launchCommand(facts({ argv1: 'apps/cli/lib/bin.js', resolve: p => 'D:\\DSH\\' + p }))
+      .args.includes('D:\\DSH\\apps/cli/lib/bin.js'))
+  const bare = pure.launchCommand(facts({ argv1: 'D:\\tools\\other.js' }))
+  check('入口不像 dsh → 退回裸 dsh', bare.file === 'dsh' && bare.args.join('|') === 'web', JSON.stringify(bare))
+  check('裸 dsh 在 Windows 上必须过 shell（它是 .cmd shim）', bare.viaShell === true)
+  check('裸 dsh 在 POSIX 上不过 shell',
+    pure.launchCommand(facts({ argv1: undefined, platform: 'linux' })).viaShell === false)
+  check('node 可执行文件优先用 argv0（Android 上 execPath 是动态链接器）',
+    pure.nodeExecutableOf({ argv0: 'D:\\node\\node.exe', execPath: 'X', exists: () => true }) === 'D:\\node\\node.exe')
+  check('argv0 不是绝对路径或不存在 → 退回 execPath',
+    pure.nodeExecutableOf({ argv0: 'node', execPath: 'D:\\node\\node.exe', exists: () => true }) === 'D:\\node\\node.exe'
+    && pure.nodeExecutableOf({ argv0: 'D:\\ghost.exe', execPath: 'D:\\node\\node.exe', exists: () => false }) === 'D:\\node\\node.exe')
+
+  // ── Windows 的 spawn 包装（唯一目的是给它一个隐藏控制台）────────────────
+  const winSpawn = pure.respawnCommand(winLaunch, 'win32')
+  check('Windows 改用 powershell -NoProfile -WindowStyle Hidden',
+    winSpawn.file === 'powershell.exe'
+    && winSpawn.args.slice(0, 4).join(' ') === '-NoProfile -WindowStyle Hidden -Command',
+    JSON.stringify(winSpawn.args.slice(0, 5)))
+  check('命令串里每一段都用 PowerShell 单引号包住',
+    winSpawn.args[4].startsWith("& 'D:\\node\\node.exe' 'D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js' 'web'"),
+    winSpawn.args[4])
+  check('detached=false：真正的隐藏交给助手那层的 windowsHide（CREATE_NO_WINDOW）',
+    winSpawn.detached === false && winSpawn.viaShell === false)
+  check('裸 dsh 在 Windows 上补成 dsh.cmd（PowerShell 会优先选被策略拒绝的 .ps1）',
+    pure.respawnCommand(bare, 'win32').args[4].startsWith("& 'dsh.cmd'"))
+  check('已经是 .cmd 就不重复补',
+    pure.respawnCommand({ ...bare, file: 'dsh.cmd' }, 'win32').args[4].startsWith("& 'dsh.cmd'"))
+  const posixSpawn = pure.respawnCommand(winLaunch, 'linux')
+  check('POSIX 就是原命令 + detached',
+    posixSpawn.file === winLaunch.file && posixSpawn.detached === true && posixSpawn.viaShell === false)
+  check('单引号里的单引号写两遍（路径带引号不会破）',
+    pure.quotePowerShell("C:\\it's here\\a b.exe") === "'C:\\it''s here\\a b.exe'",
+    pure.quotePowerShell("C:\\it's here\\a b.exe"))
+
+  // ── 端口与信任关卡（这是"杀进程"的接口，所以逐条断言）──────────────────
+  check('端口从 Host 头里读（含 IPv6 字面量）',
+    pure.servingPort('127.0.0.1:3080') === 3080 && pure.servingPort('[::1]:3080') === 3080)
+  check('Host 里没有端口 → null（默认端口，助手退回固定等待）',
+    pure.servingPort('localhost') === null && pure.servingPort(undefined) === null
+    && pure.servingPort('a:0') === null && pure.servingPort('a:70000') === null)
+  check('回环地址三种写法都认', ['127.0.0.1', '::1', '::ffff:127.0.0.1'].every(pure.isLoopbackAddress))
+  check('非回环不认', !pure.isLoopbackAddress('192.168.1.5') && !pure.isLoopbackAddress(undefined))
+
+  const trust = over => ({
+    remoteAddress: '127.0.0.1',
+    headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
+    ...over,
+  })
+  check('本机同源 POST → 放行', pure.trustedRestartRequest(trust()) === true)
+  check('非回环 peer → 拒', pure.trustedRestartRequest(trust({ remoteAddress: '10.0.0.9' })) === false)
+  check('任何转发痕迹 → 拒（说明中间站着代理，不是用户）',
+    ['forwarded', 'x-forwarded-for', 'x-real-ip'].every(name =>
+      pure.trustedRestartRequest(trust({ headers: { ...trust().headers, [name]: 'x' } })) === false))
+  check('缺 Origin 或 Host → 拒',
+    pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080' } })) === false
+    && pure.trustedRestartRequest(trust({ headers: { origin: 'http://127.0.0.1:3080' } })) === false)
+  check('跨站 Origin → 拒（DNS rebinding / 跨站调用挡在这里）',
+    pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080', origin: 'http://evil.example' } })) === false)
+  check('非 http(s) 的 Origin → 拒',
+    pure.trustedRestartRequest(trust({ headers: { host: 'x', origin: 'file:///etc/passwd' } })) === false)
+  check('Origin 不是合法 URL → 拒',
+    pure.trustedRestartRequest(trust({ headers: { host: 'x', origin: 'not a url' } })) === false)
+  check('重复 Host 头取第一个',
+    pure.trustedRestartRequest(trust({
+      headers: { host: ['127.0.0.1:3080', 'evil.example'], origin: 'http://127.0.0.1:3080' },
+    })) === true)
+
+  // ── 调试器 / supervisor（两种"不该从界面里杀掉"的宿主）──────────────────
+  const dbg = over => ({ inspectorUrl: undefined, execArgv: [], nodeOptions: undefined, ...over })
+  check('inspector 已开 → 不给重启', pure.detectedDebugger(dbg({ inspectorUrl: 'ws://127.0.0.1:9229/x' })) === 'inspector')
+  check('execArgv 里的 --inspect / --inspect-brk=9229 认出来',
+    pure.detectedDebugger(dbg({ execArgv: ['--inspect'] })) === 'inspector'
+    && pure.detectedDebugger(dbg({ execArgv: ['--inspect-brk=9229'] })) === 'inspector')
+  check('NODE_OPTIONS 里的 --inspect 也认',
+    pure.detectedDebugger(dbg({ nodeOptions: '--max-old-space-size=4096 --inspect' })) === 'inspector')
+  check('按 token 前缀匹配：路径里带 inspect 的脚本名不误判',
+    pure.detectedDebugger(dbg({ execArgv: ['C:\\tools\\inspect-tool.js'] })) === null
+    && pure.detectedDebugger(dbg({ nodeOptions: '--inspection-mode' })) === null)
+  check('都没有 → null', pure.detectedDebugger(dbg()) === null)
+
+  const sup = over => ({ env: {}, ppid: 500, parentComm: () => 'bash', ...over })
+  check('没有 systemd 标记 → null', pure.detectedSupervisor(sup()) === null)
+  check('有 INVOCATION_ID 但父进程是普通 shell → null（继承不等于拥有）',
+    pure.detectedSupervisor(sup({ env: { INVOCATION_ID: 'abc' } })) === null)
+  check('INVOCATION_ID + 父进程是 PID 1 → systemd',
+    pure.detectedSupervisor(sup({ env: { INVOCATION_ID: 'abc' }, ppid: 1 })) === 'systemd')
+  check('INVOCATION_ID + 父进程 comm 是 systemd → systemd',
+    pure.detectedSupervisor(sup({ env: { INVOCATION_ID: 'abc' }, parentComm: () => 'systemd' })) === 'systemd')
+  check('JOURNAL_STREAM 同样算标记',
+    pure.detectedSupervisor(sup({ env: { JOURNAL_STREAM: '8:1' }, ppid: 1 })) === 'systemd')
+
+  // ── 助手源码（把每条"为什么"都变成断言）────────────────────────────────
+  const helperOf = port => pure.restartHelperSource({
+    spawned: pure.respawnCommand(winLaunch, 'win32'),
+    cwd: 'D:\\DeepSeek Harness',
+    logs: { out: 'C:\\Temp\\a.out.log', err: 'C:\\Temp\\a.err.log' },
+    port,
+  })
+  const helper = helperOf(3080)
+  check('等端口而不是睡死时间：connect 探测 + 250ms 轮询 + 30 秒上限',
+    helper.includes('net.connect') && helper.includes('const pollMs = 250')
+    && helper.includes('const portWaitMs = 30000'))
+  check('用 connect 探而不是 bind（bind 会自己占住那个马上要交出去的端口）',
+    helper.includes('probe.destroy()') && !helper.includes('.listen('))
+  check('端口空出来后还多等 300ms（Windows 的 TIME_WAIT 尾巴）', helper.includes('const settleMs = 300'))
+  check('起新宿主带 windowsHide（没控制台的助手 spawn 控制台程序会新建可见窗口）',
+    helper.includes('windowsHide: true'))
+  check('stdout/stderr 各一个日志文件',
+    helper.includes('fs.openSync(logOut, "a")') && helper.includes('fs.openSync(logErr, "a")'))
+  check('spawn 的失败单独接住（异步报错，try/catch 抓不到）', helper.includes('child.on("error"'))
+  check('起完再验证端口 20 秒，没起来写一行诊断',
+    helper.includes('const replacementWaitMs = 20000') && helper.includes('did not bind port'))
+  check('诊断落进 err 日志并带插件名前缀', helper.includes("'[dsh-composer-ux] '"))
+  check('注入值一律 JSON 串（路径带引号/空格不会破）',
+    helper.includes('const file = "powershell.exe"')
+    && helper.includes('const cwd = "D:\\\\DeepSeek Harness"'))
+  check('没有端口时先等 1500ms、起完再活 3000ms（别把还没 detach 完的替换进程带走）',
+    helperOf(null).includes('const noPortDelayMs = 1500') && helperOf(null).includes('const lingerMs = 3000'))
+
+  // ── 真跑一遍助手：这类 bug 只在运行时露出来 ──────────────────────────────
+  {
+    const { spawn } = await import('node:child_process')
+    const fsMod = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = fsMod.mkdtempSync(join(tmpdir(), 'composer-ux-helper-'))
+    /**
+     * 跑一次助手。轮询到证据出现就杀掉它 —— 别让测试真去等它自然结束。
+     * @param port 传 null 时跳过"等端口"那一段；给真端口才会走那段逻辑。
+     */
+    const runHelper = async (spawned, evidence, budgetMs, port = null) => {
+      const out = join(dir, 'out.log')
+      const err = join(dir, 'err.log')
+      const child = spawn(process.execPath, ['-e', pure.restartHelperSource({
+        spawned, cwd: dir, logs: { out, err }, port,
+      })], { stdio: 'ignore' })
+      const until = Date.now() + budgetMs
+      let hit = false
+      while (Date.now() < until) {
+        if (evidence()) { hit = true; break }
+        await new Promise(resolve => { setTimeout(resolve, 100) })
+      }
+      child.kill()
+      const errText = () => (fsMod.existsSync(err) ? fsMod.readFileSync(err, 'utf8') : '')
+      return { hit, out, errText }
+    }
+    /** 让"替换进程"留下一个标记文件。 */
+    const writeMarker = target =>
+      `require('node:fs').writeFileSync(${JSON.stringify(target)}, 'REPLACEMENT-UP')`
+
+    // 真测"等端口"：先把端口占住（助手必须等），200ms 后放掉 —— 助手应当**立刻**起进程，
+    // 远早于"固定 sleep 1500ms"那种实现。这条断言才是这段逻辑真正的护栏，
+    // 只查源码里有没有 net.connect 是咬不住"把 while 换成 sleep"那种改动的。
+    {
+      const { createServer } = await import('node:net')
+      const held = createServer(() => {})
+      await new Promise(resolve => { held.listen(0, '127.0.0.1', resolve) })
+      const heldPort = held.address().port
+      const fastMarker = join(dir, 'port-wait.txt')
+      const startedAt = Date.now()
+      const slowStart = runHelper(
+        { file: process.execPath, args: ['-e', writeMarker(fastMarker)], viaShell: false, detached: false },
+        () => fsMod.existsSync(fastMarker),
+        5000,
+        heldPort,
+      )
+      setTimeout(() => { held.close() }, 200)
+      const waited = await slowStart
+      const elapsed = Date.now() - startedAt
+      check('助手等的是端口而不是固定时长：端口一空出来就起进程（远早于固定 sleep 的 1500ms）',
+        waited.hit && elapsed < 1400, `marker=${String(waited.hit)} elapsed=${String(elapsed)}ms`)
+    }
+
+    const marker = join(dir, 'replacement-ran.txt')
+    const okRan = await runHelper(
+      { file: process.execPath, args: ['-e', writeMarker(marker)], viaShell: false, detached: false },
+      () => fsMod.existsSync(marker),
+      8000,
+    )
+    check('助手真的把替换进程起来了（替换进程自己留下的标记文件出现）', okRan.hit,
+      fsMod.existsSync(marker) ? '' : '标记文件没出现')
+    check('助手开了输出日志（stdio 接的是文件而不是管道）', fsMod.existsSync(okRan.out))
+
+    const errPath = join(dir, 'err.log')
+    const badRan = await runHelper(
+      { file: join(dir, 'no-such-binary-xyz.exe'), args: [], viaShell: false, detached: false },
+      () => fsMod.existsSync(errPath)
+        && fsMod.readFileSync(errPath, 'utf8').includes('could not start the replacement'),
+      8000,
+    )
+    check('替换进程起不来 → 助手把原因写进 err 日志（会记日志的宿主已经退出了，只能它写）',
+      badRan.hit, badRan.errText().slice(0, 200))
+    fsMod.rmSync(dir, { recursive: true, force: true })
+  }
+
+  // ── 排期：分离起助手 + 延迟退出自己 ─────────────────────────────────────
+  const fakeRestartIo = over => {
+    const calls = { spawn: [], waited: [], stopped: 0 }
+    let unrefed = 0
+    let releaseWait
+    const helperChild = { pid: 4242, unref: () => { unrefed += 1 }, once: () => {} }
+    const io = {
+      platform: 'win32',
+      pid: 1111,
+      argv0: 'D:\\node\\node.exe',
+      execPath: 'D:\\node\\node.exe',
+      argv1: 'D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js',
+      execArgv: [],
+      rest: ['web'],
+      cwd: 'D:\\DeepSeek Harness',
+      env: { PATH: 'x' },
+      tmpdir: 'C:\\Temp',
+      stamp: '2026-01-01T00-00-00',
+      exists: () => true,
+      resolve: p => p,
+      dirname: () => 'D:\\DeepSeek Harness\\apps\\cli',
+      join: (...parts) => parts.join('\\'),
+      spawn: (command, args, options) => {
+        calls.spawn.push({ command, args, options })
+        return helperChild
+      },
+      stop: () => { calls.stopped += 1 },
+      wait: ms => {
+        calls.waited.push(ms)
+        return new Promise(resolve => { releaseWait = resolve })
+      },
+      ...over,
+    }
+    return { io, calls, release: () => releaseWait?.(), unrefed: () => unrefed }
+  }
+
+  {
+    const { io, calls, release, unrefed } = fakeRestartIo()
+    const scheduled = pure.scheduleRestart(io, 3080)
+    check('助手用 node -e <源码> 起（不留脚本文件在磁盘上）',
+      calls.spawn[0]?.command === 'D:\\node\\node.exe' && calls.spawn[0]?.args[0] === '-e'
+      && calls.spawn[0].args[1].includes('net.connect'), JSON.stringify(calls.spawn[0]?.command))
+    check('助手 detached + 忽略 stdio + windowsHide',
+      calls.spawn[0]?.options?.detached === true && calls.spawn[0]?.options?.stdio === 'ignore'
+      && calls.spawn[0]?.options?.windowsHide === true)
+    check('助手 unref（不然它拖着宿主不退出）', unrefed() === 1)
+    check('回给界面：helperPid / 两个日志路径 / 端口 / 重放命令',
+      scheduled.ok === true && scheduled.helperPid === 4242
+      && scheduled.logOut.includes(pure.RESTART_LOG_PREFIX)
+      && scheduled.logErr.includes(pure.RESTART_LOG_PREFIX)
+      && scheduled.port === 3080 && scheduled.command.includes('powershell.exe'),
+      JSON.stringify(scheduled))
+    check('退出是延迟的（先把 HTTP 响应发出去）',
+      calls.waited[0] === pure.RESTART_EXIT_DELAY_MS && calls.stopped === 0, JSON.stringify(calls))
+    release()
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    check('延迟到点才 stop 自己', calls.stopped === 1, String(calls.stopped))
+  }
+  {
+    const { io, calls } = fakeRestartIo()
+    io.spawn = () => { throw new Error('spawn 失败') }
+    let threw = null
+    try { pure.scheduleRestart(io, null) } catch (error) { threw = error }
+    check('助手都起不来 → 抛错（路由回 500）而不是先把自己退出',
+      threw !== null && calls.stopped === 0, String(threw))
+  }
+
+  // ── 优雅退出：emit 而不是真发信号 ────────────────────────────────────────
+  {
+    const calls = { signals: [], timers: [], exits: [] }
+    pure.gracefulStop({
+      emitSignal: signal => calls.signals.push(signal),
+      exit: code => calls.exits.push(code),
+      timer: (ms, run) => calls.timers.push({ ms, run }),
+    })
+    check('走 emit(SIGTERM)：Windows 上 process.kill 等价于 TerminateProcess，DSH 的 handler 不会跑',
+      calls.signals[0] === 'SIGTERM' && calls.timers.length === 1)
+    check('兜底定时器比 DSH 自己的 5 秒上限长（不抢它的优雅关停）',
+      calls.timers[0].ms === pure.RESTART_STOP_FALLBACK_MS && calls.timers[0].ms > 5000)
+    calls.timers[0].run()
+    check('兜底到点就 exit(0)', calls.exits[0] === 0, JSON.stringify(calls.exits))
+
+    const safe = { timers: [] }
+    pure.gracefulStop({
+      emitSignal: () => { throw new Error('没有 handler') },
+      exit: () => {},
+      timer: ms => safe.timers.push(ms),
+    })
+    check('emit 抛错也照常武装兜底（不能让它变成"点了没反应"）',
+      safe.timers[0] === pure.RESTART_STOP_FALLBACK_MS)
+    check('boot 号 = pid-时间戳（界面靠它判断新进程）', pure.bootId(7, 8) === '7-8')
+  }
+
+  // ── 接口：GET 只读展示；POST 的真路径绝不在测试里走通 ─────────────────────
+  {
+    const host = await bootHost()
+    const route = host.routes.find(item => item.path === pure.RESTART_API_PATH)
+    check('重启路由挂上了（exact）', route !== undefined && route.kind === 'exact',
+      JSON.stringify(host.routes.map(r => r.path)))
+    const res = makeRes()
+    await route.handler(makeReq('GET'), res)
+    const body = json(res)
+    check('GET 回报 boot 号（界面靠"号变了"判断新进程起来了）',
+      typeof body.boot === 'string' && body.boot.includes('-'), String(body.boot))
+    check('GET 回报"会怎么重启"（重放命令；测试进程的 argv[1] 不是 dsh 入口 → 走裸 dsh 那条路）',
+      body.ok === true && String(body.command).length > 0
+      && String(body.command).includes(process.platform === 'win32' ? 'powershell.exe' : 'dsh'),
+      String(body.command))
+    check('GET 回报日志落点（失败时界面告诉用户去哪看）',
+      String(body.logHint).includes(pure.RESTART_LOG_PREFIX), String(body.logHint))
+    check('GET 回报在跑会话数，且当前没被拦',
+      body.running === 0 && body.blocked === null, JSON.stringify(body))
+
+    const wrong = makeRes()
+    await route.handler(makeReq('PUT'), wrong)
+    check('非 GET/POST → 405（不把 PUT 当成读状态）', wrong.captured.status === 405, String(wrong.captured.status))
+
+    const rejectedHost = await bootHost({ connection: { requestRejection: () => 403 } })
+    const rejectedRoute = rejectedHost.routes.find(item => item.path === pure.RESTART_API_PATH)
+    const r1 = makeRes()
+    await rejectedRoute.handler(makeReq('GET'), r1)
+    check('官方 connection.requestRejection 在第一位，被拒就直接结束',
+      r1.captured.status === 403 && !r1.captured.body, `${String(r1.captured.status)} ${String(r1.captured.body)}`)
+
+    // 第二道关卡：本机同源。被拒的 POST **不会**走到 spawn（否则这个测试会真的重启自己）。
+    const r2 = makeRes()
+    await route.handler(makeReq('POST', '{}'), r2)
+    check('POST 缺 Origin/Host → 403',
+      r2.captured.status === 403 && json(r2).ok === false, r2.captured.body)
+    const r3 = makeRes()
+    await route.handler(makeReq('POST', '{}', {
+      headers: { host: '127.0.0.1:3080', origin: 'http://evil.example' },
+      socket: { remoteAddress: '127.0.0.1' },
+    }), r3)
+    check('POST 跨站 Origin → 403', r3.captured.status === 403, r3.captured.body)
+    const r4 = makeRes()
+    await route.handler(makeReq('POST', '{}', {
+      headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080', 'x-forwarded-for': '10.0.0.1' },
+      socket: { remoteAddress: '127.0.0.1' },
+    }), r4)
+    check('POST 带转发头 → 403', r4.captured.status === 403, r4.captured.body)
+  }
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

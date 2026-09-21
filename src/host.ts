@@ -15,8 +15,15 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { spawn } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import inspector from 'node:inspector'
 import {
   DEFAULT_HEADER_NAME, DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
+  KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+  TERMINAL_ENABLED_FIELD,
   HEADER_APPLIED_NAME_FIELD,
   HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
@@ -24,8 +31,21 @@ import {
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZER_API_PATH, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
-  SEND_KEY_FIELD, newSessionId, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
+  RESTART_API_PATH,
+  SEND_KEY_FIELD, defaultQuickBook, newSessionId, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
+  type QuickPromptBook,
 } from './settings-contract.ts'
+import {
+  TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
+  TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
+} from './terminal/contracts.ts'
+import { installTerminalPolicy } from './terminal/host.ts'
+import type { BashToolDeps } from './terminal/tool.ts'
+import {
+  RESTART_LOG_PREFIX, bootId, detectedDebugger, detectedSupervisor, gracefulStop, planRestart,
+  scheduleRestart, servingPort, trustedRestartRequest,
+} from './restart.ts'
+import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser } from './optimizer-prompt.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 
@@ -56,6 +76,21 @@ function objectOf(value: unknown): Record<string, unknown> | undefined {
 /** 只接受字符串，其余一律视为空串。 */
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+/** 取头值的第一个（Node 对重复头会给出数组）。 */
+function firstHeaderValue(value: string | readonly string[] | undefined): string | undefined {
+  if (value === undefined) return undefined
+  return typeof value === 'string' ? value : value[0]
+}
+
+/**
+ * 书本里有没有"非内置"的内容 —— 「快捷指令」栏迁移的判据（见 apply 里那段说明）。
+ * @param book 读到的书本。
+ * @returns 与内置默认本不同则为 true。
+ */
+function bookLooksCustom(book: QuickPromptBook): boolean {
+  return JSON.stringify(sanitizeBook(book)) !== JSON.stringify(defaultQuickBook())
 }
 
 /** 头名是否合法：与 llm-pi-ai 的 assertValidHeaders 同规则（Fetch 接受才算）。 */
@@ -232,6 +267,14 @@ export function apply(ctx: Context): void {
       NAMESPACE,
       z.object({
         [ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.enabled),
+        // 五栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
+        // —— 没有 ⇒ 从没碰过这一栏 ⇒ 关闭；有 ⇒ 用户碰过 ⇒ 保持他写下的值。
+        // 给了静态默认值就再也分不出这两种情况了（净化的 sectionEnabledOf 靠它）。
+        [KEYS_ENABLED_FIELD]: z.boolean().required(false),
+        [MENU_ENABLED_FIELD]: z.boolean().required(false),
+        [QUICK_ENABLED_FIELD]: z.boolean().required(false),
+        [PANEL_ENABLED_FIELD]: z.boolean().required(false),
+        [TERMINAL_ENABLED_FIELD]: z.boolean().required(false),
         [SEND_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.sendKey),
         [NEWLINE_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.newlineKey),
         ...Object.fromEntries(MENU_FIELDS.map(field => [
@@ -267,6 +310,18 @@ export function apply(ctx: Context): void {
           always: z.boolean().default(false),
         })).default(DEFAULT_QUICK_PROMPTS.map(item => ({ ...item }))),
         [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
+        // 「默认终端」（0.5.0 起）：用户档位与可选路径。
+        [TERMINAL_MODE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalMode),
+        [TERMINAL_BASH_PATH_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalBashPath),
+        // 宿主半自持的三项：探测候选、状态行、当前生效 shell（见 HOST_OWNED_FIELDS）。
+        [TERMINAL_CANDIDATES_FIELD]: z.array(z.object({
+          path: z.string().default(''),
+          label: z.string().default(''),
+          kind: z.string().default('path'),
+          explicit: z.boolean().default(false),
+        })).default([]),
+        [TERMINAL_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalStatus),
+        [TERMINAL_EFFECTIVE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalEffective),
       }),
     )
 
@@ -564,5 +619,220 @@ export function apply(ctx: Context): void {
       path: QUICK_PROMPTS_API_PATH,
       handler: handle as never,
     }), 'composer-ux: quick prompt store route')
+  })
+
+  // ── 默认终端（Windows：把终端的 pwsh 换成 Git Bash）────────────────────────
+  //
+  // 机制：**按 agent 会话下发**。官方 `tools.restrict()` 在全局上下文会抛错
+  // （"a context-global restriction would mask every agent"），所以压制 pwsh 必须发生在
+  // 该 agent 自己的 scope 里；为了让"改完设置立刻生效"，这里在设置变化时遍历
+  // `ctx.agents.list()` 对每个在跑会话重新下发（见 terminal/host.ts 的注释）。
+  //
+  // 平台：非 Windows 直接不接管（官方 bash 工具本来就在），只把状态如实回报给设置页。
+  ctx.inject(['settings', 'webServer'], (termCtx) => {
+    /** 采集工具运行所需的宿主服务；缺 subprocess 就没法跑命令（只降级为压制 pwsh）。 */
+    const readToolDeps = (): BashToolDeps | undefined => {
+      const subprocess = termCtx.get('subprocess')
+      if (subprocess === undefined) return undefined
+      const sandbox = termCtx.get('sandbox')
+      const sandboxPolicy = termCtx.get('sandboxPolicy')
+      const approval = termCtx.get('approval')
+      const jobs = termCtx.get('jobs')
+      const shellEnv = termCtx.get('shellEnv')
+      return {
+        subprocess: subprocess as never,
+        ...(sandbox === undefined ? {} : { sandbox: sandbox as never }),
+        ...(sandboxPolicy === undefined ? {} : { sandboxPolicy: sandboxPolicy as never }),
+        ...(approval === undefined ? {} : { approval: approval as never }),
+        ...(jobs === undefined ? {} : { jobs: jobs as never }),
+        ...(shellEnv === undefined ? {} : { shellEnv: shellEnv as never }),
+      }
+    }
+    installTerminalPolicy(
+      termCtx as never,
+      NAMESPACE,
+      termCtx.get('settings') as never,
+      readToolDeps,
+    )
+  })
+
+  // ── 迁移：「快捷指令」栏对老用户保持开着（一次性写回文档）──────────────────
+  //
+  // 为什么这一栏不能只靠设置文档判断：0.3.0 起条目搬到了 `quick-prompts.json`，
+  // **"用过快捷指令的人"和"从没碰过的人"的设置文档可以一模一样**（都是内置 9 条 + 默认档位），
+  // 纯净函数那套"值不等于默认值"的判据在他身上会得出"没碰过 ⇒ 关"，把入口按钮收掉。
+  // 所以这里读一次书本文件：有非内置内容 ⇒ 认定他在用 ⇒ 写回 `quickEnabled: true`。
+  // 写回之后两端都只需要看那一个布尔，不必各自知道文件的存在。
+  // **只在文档里还没有这个键时写**：用户明确关掉之后文档里就是 `false`，不会被重新打开。
+  ctx.inject(['settings'], (migrateCtx) => {
+    void (async () => {
+      const service = migrateCtx.get('settings') as SettingsLike | undefined
+      if (service === undefined) return
+      const row = objectOf(service.get(NAMESPACE))
+      if (row === undefined || row[QUICK_ENABLED_FIELD] !== undefined) return
+      try {
+        const outcome = await readQuickBook(quickStorePath())
+        if (outcome.kind !== 'ok' || !bookLooksCustom(outcome.book)) return
+        await service.mutate(NAMESPACE, [
+          { op: 'set', path: [QUICK_ENABLED_FIELD], value: true },
+        ])
+      } catch (error: unknown) {
+        // 迁移失败不是致命错误：用户顶多在设置页手动打开这一栏。
+        console.error('[composer-ux] quick section migration skipped', error)
+      }
+    })()
+  })
+
+  // ── 重启 DSH ──────────────────────────────────────────────────────────────
+  //
+  // 只有宿主进程能把自己重新拉起来（浏览器碰不到进程），DSH 也没有官方重启机制
+  // （插件市场那边只说「更改将在下次启动生效」）。机制照搬插件市场：分离一个 node 助手
+  // 进程 → 自己退出 → 助手等端口真的空出来 → 用隐藏控制台的 PowerShell 起新宿主 →
+  // 20 秒内确认端口有人监听，没起来把诊断写进日志。细节与理由全在 `src/restart.ts`。
+  //
+  // 这一整块是**宿主半**，所以改完必须重启 DSH 才会生效（这也正是它要解决的问题）。
+  ctx.inject(['webServer'], (restartCtx) => {
+    /** 这次启动的标识：界面靠"号变了"判断新进程真的起来了。 */
+    const BOOT_ID = bootId(process.pid, Date.now())
+    /** 当前宿主是否处于"不该被从界面里杀掉"的状态。 */
+    const blockedBy = (): string | null => {
+      const supervisor = detectedSupervisor({
+        env: process.env,
+        ppid: process.ppid,
+        parentComm: (pid) => {
+          try {
+            return readFileSync(`/proc/${String(pid)}/comm`, 'utf8').trim()
+          } catch {
+            // /proc 只在 Linux 上有；读不到就说明"不是 systemd 的主进程"。
+            return null
+          }
+        },
+      })
+      if (supervisor !== null) return `supervised:${supervisor}`
+      if (detectedDebugger({
+        inspectorUrl: inspector.url(),
+        execArgv: process.execArgv,
+        nodeOptions: process.env.NODE_OPTIONS,
+      }) !== null) return 'debugger'
+      return null
+    }
+    /** 组装注入面（真实实现；测试里换假的）。 */
+    const buildIo = (): RestartIo => ({
+      platform: process.platform,
+      pid: process.pid,
+      argv0: process.argv0,
+      execPath: process.execPath,
+      argv1: process.argv[1],
+      execArgv: process.execArgv,
+      // argv[0] 是 node 自己、argv[1] 是入口；重放的是"入口 + 之后的参数"。
+      rest: process.argv.slice(2),
+      cwd: process.cwd(),
+      env: process.env,
+      tmpdir: tmpdir(),
+      stamp: new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
+      exists: (path) => existsSync(path),
+      resolve: (path) => resolve(path),
+      dirname: (path) => dirname(path),
+      join: (...parts) => join(...parts),
+      spawn: (command, args, options) => spawn(command, [...args], {
+        detached: options.detached,
+        stdio: options.stdio,
+        windowsHide: options.windowsHide,
+        env: options.env as NodeJS.ProcessEnv,
+      }),
+      stop: () => {
+        gracefulStop({
+          emitSignal: (signal) => { process.emit(signal as 'SIGTERM') },
+          exit: (code) => { process.exit(code) },
+          timer: (ms, run) => { setTimeout(run, ms) },
+        })
+      },
+      wait: (ms) => new Promise<void>((done) => { setTimeout(done, ms) }),
+    })
+    /** 已经排过一次重启：防止界面重复点 / 两个标签页同时点。 */
+    let restarting = false
+    /** GET 只读展示：会怎么重启、日志落在哪。 */
+    const planForDisplay = (): { command: string; execPath: string; logHint: string } => {
+      const io = buildIo()
+      const plan = planRestart(io, null)
+      return {
+        command: [plan.respawn.file, ...plan.respawn.args].join(' '),
+        execPath: plan.node,
+        logHint: join(io.tmpdir, `${RESTART_LOG_PREFIX}*.err.log`),
+      }
+    }
+
+    restartCtx.effect(() => restartCtx.webServer.register({
+      kind: 'exact',
+      path: RESTART_API_PATH,
+      handler: (req: {
+        method?: string
+        headers?: Readonly<Record<string, string | readonly string[] | undefined>>
+        socket?: { remoteAddress?: string }
+      }, res: {
+        statusCode?: number
+        writeHead: (code: number, headers: Record<string, string>) => void
+        end: (body?: string) => void
+      }): void => {
+        const send = (code: number, payload: unknown): void => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(JSON.stringify(payload))
+        }
+        // 第一道：官方那道信任关卡（本机 webServer 绑 0.0.0.0：Host/Origin 围栏 + 浏览器令牌）。
+        // 与另外两条路由一致，先问它，被拒就直接结束。
+        const connection = restartCtx.get('connection') as
+          { requestRejection?: (request: unknown) => number | undefined } | undefined
+        const rejection = connection?.requestRejection?.(req)
+        if (rejection !== undefined) {
+          res.statusCode = rejection
+          res.end()
+          return
+        }
+
+        const agents = restartCtx.get('agents') as { list?: () => readonly unknown[] } | undefined
+        const running = agents?.list?.().length ?? 0
+        const blocked = blockedBy()
+        const method = (req.method ?? 'GET').toUpperCase()
+
+        if (method !== 'GET' && method !== 'POST') {
+          res.writeHead(405, { allow: 'GET, POST' })
+          res.end()
+          return
+        }
+        if (method === 'GET') {
+          const plan = planForDisplay()
+          send(200, { ok: true, ...plan, running, blocked, boot: BOOT_ID })
+          return
+        }
+
+        // 第二道：这是"杀进程"的接口，所以额外要求请求确实来自本机同源页面 ——
+        // 回环 peer、无转发痕迹、Origin 与 Host 同源。跨站页面一定带自己的 Origin，挡在这里。
+        if (!trustedRestartRequest({
+          remoteAddress: req.socket?.remoteAddress,
+          headers: req.headers ?? {},
+        })) {
+          send(403, { ok: false, error: 'restart is limited to same-origin loopback requests' })
+          return
+        }
+        if (blocked !== null) {
+          send(403, { ok: false, error: blocked === 'debugger'
+            ? 'self-restart is disabled while the host is under a debugger'
+            : `restart belongs to the ${blocked.slice('supervised:'.length)} supervisor on this host` })
+          return
+        }
+        if (restarting) {
+          send(409, { ok: false, error: 'restart already scheduled' })
+          return
+        }
+        restarting = true
+        try {
+          const scheduled = scheduleRestart(buildIo(), servingPort(firstHeaderValue(req.headers?.host)))
+          send(202, { ok: true, boot: BOOT_ID, running, ...scheduled })
+        } catch (error: unknown) {
+          restarting = false
+          send(500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }), 'composer-ux: restart route')
   })
 }

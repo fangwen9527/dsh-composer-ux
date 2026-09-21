@@ -92,12 +92,22 @@ function tempHome(label) {
 }
 
 /** 造一个假宿主 ctx 并启动插件；返回按路径取到的存储路由。 */
-async function boot(home, legacy) {
+async function boot(home, legacy, extra) {
   process.env.DSH_HOME = home
   const routes = []
   const ns = { enabled: true }
   if (legacy !== undefined) ns[pure.QUICK_PROMPTS_FIELD ?? 'quickPrompts'] = legacy
-  const settings = { get: name => (name === 'composer-ux' ? ns : undefined), register: () => {}, mutate: async () => {} }
+  if (extra !== undefined) Object.assign(ns, extra)
+  const mutations = []
+  const settings = {
+    get: name => (name === 'composer-ux' ? ns : undefined),
+    register: () => {},
+    mutate: async (_ns, ops) => {
+      for (const op of ops) {
+        if (op.op === 'set') { ns[op.path[0]] = op.value; mutations.push({ path: op.path, value: op.value }) }
+      }
+    },
+  }
   const services = {
     settings,
     webServer: { register: route => { routes.push(route); return () => {} } },
@@ -114,6 +124,8 @@ async function boot(home, legacy) {
   return {
     route: routes.find(item => item.path === pure.QUICK_PROMPTS_API_PATH),
     routes,
+    mutations,
+    ns,
   }
 }
 
@@ -376,7 +388,9 @@ console.log('9. 原子写的实现形状')
   const sectionSrc = readFileSync(new URL('../src/client/SettingsSection.tsx', import.meta.url), 'utf8')
   check(
     '拦截器拿到的批次由 appendBatchForSend 决定（「仅首次」的判据在里面）',
-    /promptsForSend:\s*\(\)\s*=>\s*appendBatchForSend\(book\.getSnapshot\(\),\s*currentBlankSession\(\)\)/.test(clientSrc),
+    // 允许外面套一层「快捷指令」栏的开关（关掉时给空批次），但那一批必须仍由
+    // appendBatchForSend(book, currentBlankSession()) 决定 ——「仅首次」的判据就在里面。
+    /promptsForSend:\s*\(\)\s*=>[\s\S]{0,200}?appendBatchForSend\(book\.getSnapshot\(\),\s*currentBlankSession\(\)\)/.test(clientSrc),
     'client.tsx 里应把 promptsForSend 接到 appendBatchForSend(book, currentBlankSession())',
   )
   check('面板已不再从设置里读条目列表', !/settings\.quickPrompts/.test(panelSrc))
@@ -407,7 +421,8 @@ console.log('9. 原子写的实现形状')
   check(
     '「OpenCode 请求头」区块顶部用警告样式写着「用自定义 API 地址、别用 DSH 自带的」',
     // 这是用户实测踩过的坑（自带地址配置发图片会报错），必须留在区块最前面。
-    /<FoldCard name="OpenCode 请求头"[\s\S]{0,800}?<p style=\{hintError\}>[\s\S]{0,300}?不要用 DSH 自带的 API 地址配置[\s\S]{0,300}?一旦发送图片就会报错/.test(sectionSrc),
+    // 标题行改成多行属性写法之后，名字不再紧跟 `<FoldCard `，所以放宽到 200 字符内出现名字。
+    /<FoldCard[\s\S]{0,200}?name="OpenCode 请求头"[\s\S]{0,900}?<p style=\{hintError\}>[\s\S]{0,300}?不要用 DSH 自带的 API 地址配置[\s\S]{0,300}?一旦发送图片就会报错/.test(sectionSrc),
     'SettingsSection 的 OpenCode 请求头区块应有一段 hintError 样式的地址警告',
   )
   check(
@@ -672,6 +687,60 @@ console.log('12. 插入模式（关 / 每次 / 仅首次）')
   )
   check('设置页也用三选一控件', /<InsertModeControl/.test(sectionSrc))
   check('两处共用同一个三选一组件（行为不会分叉）', /InsertModeControl\.tsx/.test(panelSrc) && /InsertModeControl\.tsx/.test(sectionSrc))
+}
+
+// ══════════════ 9. 「快捷指令」栏的一次性迁移 ═══════════════════════════════
+//
+// 为什么这一栏要单独一个文件判据：0.3.0 起条目搬到了 quick-prompts.json，
+// 「用过快捷指令的人」和「从没碰过的人」的设置文档可以一模一样（都是内置 9 条 + 默认档位）。
+// 所以宿主半启动时读一次书本文件，有非内置内容就把 quickEnabled 写回文档 ——
+// 之后再判断就只看那一个布尔了（两端不必各自知道文件的存在）。
+console.log('9. 「快捷指令」栏迁移（书本有非内置内容 → 写回 quickEnabled: true）')
+{
+  const custom = JSON.stringify({
+    version: 2,
+    categories: [{ id: 'cat-mine', name: '测试', prompts: [{ id: 'p1', label: 'x', prompt: 'y' }] }],
+  })
+  const wroteQuick = host => host.mutations.some(op => op.path[0] === 'quickEnabled')
+
+  {
+    // 书本里有用户自建的分类 → 写回 true（老用户升级后入口按钮不该消失）
+    const home = tempHome('sect-custom')
+    writeFileSync(fileIn(home), custom)
+    const host = await boot(home, undefined)
+    check('书本有非内置内容 → 写回 quickEnabled: true',
+      host.mutations.some(op => op.path[0] === 'quickEnabled' && op.value === true),
+      JSON.stringify(host.mutations))
+  }
+  {
+    // 只有内置默认本 → 认定"没碰过"，一个字都不写（新装用户六栏全关）
+    const home = tempHome('sect-builtin')
+    const first = await boot(home, undefined)
+    await callGet(first) // 这一次 GET 会把内置默认本落到盘上
+    check('前置：内置默认本已落盘', existsSync(fileIn(home)))
+    const second = await boot(home, undefined)
+    check('内置默认本 → 不写 quickEnabled（新装用户保持关）', !wroteQuick(second), JSON.stringify(second.mutations))
+  }
+  {
+    // 用户明确关过（文档里已经有 false）→ 绝不写回 true
+    const home = tempHome('sect-off')
+    writeFileSync(fileIn(home), custom)
+    const host = await boot(home, undefined, { quickEnabled: false })
+    check('用户已明确关掉 → 不会被迁移重新打开', !wroteQuick(host), JSON.stringify(host.mutations))
+  }
+  {
+    // 已经是 true（第二轮启动）→ 幂等，不重复写
+    const home = tempHome('sect-on')
+    writeFileSync(fileIn(home), custom)
+    const host = await boot(home, undefined, { quickEnabled: true })
+    check('已经写过 true → 幂等（不重复写盘）', !wroteQuick(host), JSON.stringify(host.mutations))
+  }
+  {
+    // 没有文件（从没启动过 / 首次安装）→ 不写
+    const home = tempHome('sect-missing')
+    const host = await boot(home, undefined)
+    check('还没有书本文件 → 不写', !wroteQuick(host), JSON.stringify(host.mutations))
+  }
 }
 
 // ── 收尾 ────────────────────────────────────────────────────────────────────

@@ -1,13 +1,65 @@
 /**
  * dsh-composer-ux 公共契约：设置字段、默认值、展示元数据。
  * 本模块必须零 import（host 与 client 两半共用，跨端不共享任何运行时身份）。
+ *
+ * 唯一的例外是 `./terminal/` 下那几个**纯函数**模块（零外部依赖、无 DOM、无 node API），
+ * 「默认终端」的字段与判定放在那里，这里只把它们并进设置契约。
  */
+import {
+  DEFAULT_TERMINAL_MODE, TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD,
+  TERMINAL_EFFECTIVE_FIELD, TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
+  sanitizeTerminalCandidates, terminalModeFrom,
+  type TerminalCandidate, type TerminalMode,
+} from './terminal/contracts.ts'
 
 /** Host settings namespace（小写字母/数字/连字符）。 */
 export const NAMESPACE = 'composer-ux'
 
+/**
+ * 仓库地址：设置页抬头那个「GitHub ↗」链接用它。
+ *
+ * 必须与 `package.json` 的 `repository.url` 一致 —— `test/client-registration.mjs`
+ * 有一条护栏盯着两处，免得各写一份然后慢慢分叉（客户端也不许硬编码第二份地址）。
+ */
+export const REPO_URL = 'https://github.com/fangwen9527/dsh-composer-ux'
+
+// ── 「重启 DSH」按钮 ─────────────────────────────────────────────────────────
+//
+// 为什么这件事必须落在宿主半：只有宿主进程能把自己重新拉起来（浏览器碰不到进程）。
+// 机制照搬插件市场（分离一个 node 助手进程、等端口空闲、用隐藏控制台的 PowerShell 起新宿主），
+// 全部细节在 `src/restart.ts`。这里只有两端共用的那一个常量。
+// 0.5.0 里那个「可选重启命令」字段已去掉：机制足够可靠之后它只剩"多一个会填错的地方"。
+
+/** 重启接口路径（宿主半注册，客户端半调用）。 */
+export const RESTART_API_PATH = '/composer-ux/restart'
+
 /** 全局总开关字段名。 */
 export const ENABLED_FIELD = 'enabled'
+
+// ── 「每一栏一个开关」 ───────────────────────────────────────────────────────
+//
+// 六张折叠卡各有一个"这一栏要不要生效"的开关，**默认关**；总开关（`enabled`）默认开，
+// 它是一道总闸：`enabled && 该栏开关` 才生效。
+//
+// 为什么要有"从没碰过的栏才默认关"这条迁移规则（用户拍板 A 方案）：本插件已经发布过，
+// 老用户设置文档里全是"我正在用"的痕迹。若一律默认关，升级那一刻他的键位就回到 DSH 原生、
+// OpenCode 路由直接 400（请求头不再注入）、Git Bash 换回 PowerShell —— 全是要用到才发现的破坏。
+// 所以：**这一栏的值不等于"从没碰过的样子" ⇒ 认定碰过 ⇒ 开**（判据见 `sectionEnabledOf`）。
+// 全新安装（什么痕迹都没有）因此是六栏全关。规则的实现在下面 `sectionEnabledOf`。
+//
+// 「OpenCode 请求头」那一栏**没有新键**：它原来的 `headerEnabled`（默认 false）本来就是
+// "这一栏要不要生效"，直接搬到标题行当卡级开关，不再造一个同义的键。
+
+/** 「键位」栏开关。 */
+export const KEYS_ENABLED_FIELD = 'keysEnabled'
+/** 「右键菜单」栏开关。 */
+export const MENU_ENABLED_FIELD = 'menuEnabled'
+/** 「快捷指令」栏开关。 */
+export const QUICK_ENABLED_FIELD = 'quickEnabled'
+/** 「设置面板」栏开关。 */
+export const PANEL_ENABLED_FIELD = 'panelEnabled'
+/** 「默认终端」栏开关。 */
+export const TERMINAL_ENABLED_FIELD = 'terminalEnabled'
 
 /** 键位字段名。 */
 export const SEND_KEY_FIELD = 'sendKey'
@@ -463,11 +515,18 @@ export const HEADER_STATUS_FIELD = 'headerStatus'
 /**
  * 只在宿主半维护的字段：设置页「恢复默认」不得清空它们，
  * 否则已写入的头会失去记账、永远撤销不掉。
+ *
+ * 「默认终端」的三个自持字段同理：候选表与状态是**宿主半的探测结果**，
+ * 清掉之后界面会变成"没探测过"的样子（而实际还在用某个 bash），
+ * 用户点一次「恢复默认」就会看到自相矛盾的状态。
  */
 export const HOST_OWNED_FIELDS = [
   HEADER_APPLIED_NAME_FIELD,
   HEADER_APPLIED_VALUE_FIELD,
   HEADER_STATUS_FIELD,
+  TERMINAL_CANDIDATES_FIELD,
+  TERMINAL_STATUS_FIELD,
+  TERMINAL_EFFECTIVE_FIELD,
 ] as const
 
 /** 请求头最终落地的设置命名空间（由 llm-pi-ai 注册）。 */
@@ -497,6 +556,11 @@ export const HEADER_NAME_MAX = 64
 /** 全部可持久化字段。 */
 export type SettingsField =
   | typeof ENABLED_FIELD
+  | typeof KEYS_ENABLED_FIELD
+  | typeof MENU_ENABLED_FIELD
+  | typeof QUICK_ENABLED_FIELD
+  | typeof PANEL_ENABLED_FIELD
+  | typeof TERMINAL_ENABLED_FIELD
   | typeof SEND_KEY_FIELD
   | typeof NEWLINE_KEY_FIELD
   | typeof PANEL_SCROLL_FIELD
@@ -511,6 +575,8 @@ export type SettingsField =
   | typeof HEADER_ROUTES_FIELD
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
+  | typeof TERMINAL_MODE_FIELD
+  | typeof TERMINAL_BASH_PATH_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -526,8 +592,17 @@ export interface MenuState {
 
 /** 解析后的设置。 */
 export interface ComposerUxSettings {
-  /** 全局总开关：false 时本插件所有功能停用。 */
+  /** 全局总开关：false 时本插件所有功能停用。默认**开**。 */
   enabled: boolean
+  /**
+   * 六栏各自的开关：`enabled && 该栏开关` 才生效。默认**关**（老用户按"碰过没"迁移，见
+   * `sectionEnabledOf`）。「OpenCode 请求头」那一栏直接用 `headerEnabled`，没有单独的键。
+   */
+  keysEnabled: boolean
+  menuEnabled: boolean
+  quickEnabled: boolean
+  panelEnabled: boolean
+  terminalEnabled: boolean
   /** 发送键位规范串（如 'Enter'、'Ctrl+Enter'、''=无）。 */
   sendKey: string
   /** 换行键位规范串。 */
@@ -569,11 +644,31 @@ export interface ComposerUxSettings {
   quickPrompts: readonly QuickPrompt[]
   /** 提示词优化强度档位。 */
   optimizerTier: OptimizerTier
+  /**
+   * 「默认终端」档位：自动 / Git Bash / PowerShell。只对 Windows 生效
+   * （非 Windows 上宿主半直接跳过，卡片显示"不需要"）。
+   */
+  terminalMode: TerminalMode
+  /** 用户指定的 Git Bash 路径；留空 = 用探测到的第一个候选。 */
+  terminalBashPath: string
+  /** 宿主半探测到的候选（只读展示，见 HOST_OWNED_FIELDS）。 */
+  terminalCandidates: readonly TerminalCandidate[]
+  /** 宿主半写的状态行：当前生效 shell / 为什么没生效（只读展示）。 */
+  terminalStatus: string
+  /** 宿主半写的当前生效 shell：'bash' / 'pwsh'（只读展示）。 */
+  terminalEffective: string
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
 export const DEFAULT_SETTINGS: ComposerUxSettings = {
+  // 总开关默认开：它只是总闸，真正"要不要用这一栏"由下面五个开关决定（默认关）。
   enabled: true,
+  // 五栏默认关（老文档由 sectionEnabledOf 迁移成"碰过就开"）。
+  keysEnabled: false,
+  menuEnabled: false,
+  quickEnabled: false,
+  panelEnabled: false,
+  terminalEnabled: false,
   sendKey: 'Enter',
   newlineKey: 'Shift+Enter',
   menuUndo: true,
@@ -595,6 +690,35 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   headerStatus: '',
   quickPrompts: DEFAULT_QUICK_PROMPTS,
   optimizerTier: DEFAULT_OPTIMIZER_TIER,
+  terminalMode: DEFAULT_TERMINAL_MODE,
+  terminalBashPath: '',
+  terminalCandidates: [],
+  terminalStatus: '',
+  terminalEffective: '',
+}
+
+/**
+ * 六栏里哪几栏生效：**总开关 +（OpenCode 那栏用自己的 `headerEnabled`）+ 该栏开关**。
+ *
+ * 宿主半与客户端半都走这一个函数，免得有人只看了栏开关、忘了总闸（或者反过来）。
+ */
+export function activeSections(settings: ComposerUxSettings): {
+  readonly keys: boolean
+  readonly menu: boolean
+  readonly quick: boolean
+  readonly panel: boolean
+  readonly header: boolean
+  readonly terminal: boolean
+} {
+  const on = settings.enabled
+  return {
+    keys: on && settings.keysEnabled,
+    menu: on && settings.menuEnabled,
+    quick: on && settings.quickEnabled,
+    panel: on && settings.panelEnabled,
+    header: on && settings.headerEnabled,
+    terminal: on && settings.terminalEnabled,
+  }
 }
 
 /** 设置页「键位」一节的预设。 */
@@ -635,6 +759,69 @@ export function newSessionId(): string {
 export function parseRouteList(text: string): readonly string[] {
   const parts = text.split(/[\s,，、]+/).map(item => item.trim()).filter(item => item !== '')
   return [...new Set(parts)]
+}
+
+/**
+ * 每栏的"用户碰过没"判据（迁移规则用，见文件上方那段说明）。
+ *
+ * ⚠️ 判据必须是「**值不等于"从没碰过"的样子**」，不能是「键存在」：
+ * `settings.get()` 给的是**已解析**的值（schema 默认值 + 组合 base + 用户层），
+ * 所以从没碰过的人的文档里也照样有 `sendKey: 'Enter'`、`panelScroll: true` 这些默认值 ——
+ * 按"键存在"判断会让全新安装六栏全开，与"默认关"正好相反。
+ * （第一版就写成了"键存在"，是推理 + 测试当场逮住的，注释留在这里防复发。）
+ *
+ * 另外：宿主半自持字段（`terminalStatus` / `terminalCandidates` / `terminalEffective` /
+ * `headerApplied*`）**不许**当判据 —— 它们是插件自己写的，全新安装也会出现。
+ *
+ * 「快捷指令」栏还有一个文档里看不出来的信号：0.3.0 起条目搬到了 `quick-prompts.json`，
+ * 用过的人和没用过的人的设置文档可以一模一样。那一条由宿主半读文件后**一次性写回文档**
+ * （见 `src/host.ts` 的 `migrateQuickSection`），所以这里只剩"文档里的列表被改过"这一次级信号。
+ */
+const SECTION_SIGNALS: Readonly<Record<string, (source: Record<string, unknown>) => boolean>> = {
+  [KEYS_ENABLED_FIELD]: source =>
+    touched(source, SEND_KEY_FIELD, DEFAULT_SETTINGS.sendKey)
+    || touched(source, NEWLINE_KEY_FIELD, DEFAULT_SETTINGS.newlineKey),
+  // 「官方」＝本插件不介入，等价于关；所以只有选过另外两档才算"碰过"。
+  // （`menuModeFrom` 对"两个键都没有"给的就是 'official'，天然满足"缺省 = 默认"。）
+  [MENU_ENABLED_FIELD]: source =>
+    menuModeFrom(source[MENU_MODE_FIELD], source[MENU_NATIVE_FIELD]) !== 'official',
+  [QUICK_ENABLED_FIELD]: source =>
+    (Array.isArray(source[QUICK_PROMPTS_FIELD])
+      && source[QUICK_PROMPTS_FIELD].length !== DEFAULT_QUICK_PROMPTS.length)
+    || touched(source, OPTIMIZER_TIER_FIELD, DEFAULT_OPTIMIZER_TIER),
+  [PANEL_ENABLED_FIELD]: source =>
+    touched(source, PANEL_SCROLL_FIELD, true)
+    || touched(source, PANEL_RESIZE_FIELD, true)
+    || source[PANEL_WIDTH_FIELD] !== undefined
+    || source[PANEL_HEIGHT_FIELD] !== undefined,
+  [TERMINAL_ENABLED_FIELD]: source =>
+    touched(source, TERMINAL_MODE_FIELD, DEFAULT_TERMINAL_MODE)
+    || touched(source, TERMINAL_BASH_PATH_FIELD, ''),
+}
+
+/**
+ * 这个键在文档里**出现过**，且值不等于"从没碰过的样子"。
+ *
+ * 两个条件缺一不可，而且第二半极易漏：文档里没有这个键时值是 `undefined`，
+ * 拿它去比默认值会得出"不相等 ⇒ 碰过"（`'' !== 'Enter'`、`undefined !== true` 都是真），
+ * 于是全新安装六栏全开 —— 与"默认关"正好相反。第一版就是这么写的，被测试当场逮住。
+ */
+function touched(source: Record<string, unknown>, field: string, untouched: unknown): boolean {
+  const value = source[field]
+  return value !== undefined && value !== untouched
+}
+
+/**
+ * 算出一栏开关的值：显式写过就听它的，否则按"用户碰过没"推断。
+ * @param field 栏开关字段名。
+ * @param source 设置文档（解析后的值；缺省的键会被 schemastery 省掉，所以 undefined 就是"没写过"）。
+ * @returns 该栏是否生效。
+ */
+export function sectionEnabledOf(field: string, source: Record<string, unknown>): boolean {
+  const explicit = source[field]
+  if (typeof explicit === 'boolean') return explicit
+  const signal = SECTION_SIGNALS[field]
+  return signal === undefined ? false : signal(source)
 }
 
 /** 设置数据净化：把线上值收窄为安全形状（防脏数据）。 */
@@ -692,6 +879,12 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
   }
   return {
     enabled: asBool(ENABLED_FIELD),
+    // 五栏开关：显式写过听它的，否则按"用户碰过没"迁移（见 sectionEnabledOf）。
+    keysEnabled: sectionEnabledOf(KEYS_ENABLED_FIELD, source),
+    menuEnabled: sectionEnabledOf(MENU_ENABLED_FIELD, source),
+    quickEnabled: sectionEnabledOf(QUICK_ENABLED_FIELD, source),
+    panelEnabled: sectionEnabledOf(PANEL_ENABLED_FIELD, source),
+    terminalEnabled: sectionEnabledOf(TERMINAL_ENABLED_FIELD, source),
     sendKey: asString(SEND_KEY_FIELD),
     newlineKey: asString(NEWLINE_KEY_FIELD),
     menuUndo: asBool('menuUndo'),
@@ -717,5 +910,12 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     headerStatus: asText(HEADER_STATUS_FIELD, HEADER_VALUE_MAX),
     quickPrompts: asQuickPrompts(),
     optimizerTier: asTier(),
+    terminalMode: terminalModeFrom(source[TERMINAL_MODE_FIELD]),
+    // 路径只做长度与归一化收窄，不在这里判"存不存在"——那是宿主半的探测结论，
+    // 由状态行告诉用户（用户看得见自己填了什么，比悄悄清空好）。
+    terminalBashPath: asText(TERMINAL_BASH_PATH_FIELD, 400),
+    terminalCandidates: sanitizeTerminalCandidates(source[TERMINAL_CANDIDATES_FIELD]),
+    terminalStatus: asText(TERMINAL_STATUS_FIELD, 400),
+    terminalEffective: asText(TERMINAL_EFFECTIVE_FIELD, 16),
   }
 }

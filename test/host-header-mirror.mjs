@@ -6,7 +6,15 @@
  *
  *   node test/host-header-mirror.mjs
  */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { apply } from '../lib/index.js'
+
+// 把 $DSH_HOME 指到一个空目录：宿主半启动时会读一次「快捷指令」文件做一次迁移
+// （有非内置内容就把 quickEnabled 写进文档）。不隔离的话这里会去读**真实用户**的
+// quick-prompts.json，测试结果就取决于跑测试的人机器上有什么。
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-hhm-home-'))
 
 const NAMESPACE = 'composer-ux'
 const LLM = 'llm-pi-ai'

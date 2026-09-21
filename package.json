@@ -1,55 +1,60 @@
 {
-    "name": "dsh-composer-ux",
-    "version": "0.4.0",
-    "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头（含设置页）",
-    "type": "module",
-    "main": "./lib/index.js",
-    "exports": {
-        ".": "./lib/index.js",
-        "./client": {
-            "default": "./lib/client.js"
-        }
-    },
-    "files": [
-        "lib",
-        "cordis.patch.yml",
-        "README.md",
-        "CHANGELOG.md",
-        "LICENSE"
-    ],
-    "keywords": [
-        "dsh-plugin",
-        "dsh",
-        "deepseek-harness",
-        "cordis",
-        "web",
-        "input",
-        "context-menu",
-        "settings",
-        "opencode"
-    ],
-    "license": "MIT",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/fangwen9527/dsh-composer-ux.git"
-    },
-    "dsh": {
-        "client": {
-            "platform": "web",
-            "inject": [
-                "slots",
-                "settingsScope"
-            ]
-        },
-        "bundle": {
-            "patch": "./cordis.patch.yml"
-        }
-    },
-    "scripts": {
-        "build": "node build.mjs",
-        "test": "node test/host-header-mirror.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/client-registration.mjs"
-    },
-    "devDependencies": {
-        "esbuild": "^0.25.0"
+  "name": "dsh-composer-ux",
+  "version": "0.5.0",
+  "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头 + Windows 默认终端切换（把模型的 PowerShell 工具换成 Git Bash）（含设置页）+ 设置页抬头一键重启 DSH（助手进程 + 等端口 + 隐藏控制台）",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": {
+      "default": "./lib/client.js"
     }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "web",
+    "input",
+    "context-menu",
+    "settings",
+    "opencode",
+    "terminal",
+    "git-bash",
+    "windows",
+    "shell",
+    "restart"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fangwen9527/dsh-composer-ux.git"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots",
+        "settingsScope"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/host-header-mirror.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/client-registration.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
 }

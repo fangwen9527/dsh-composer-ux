@@ -20,7 +20,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { PANEL_HEIGHT_FIELD, PANEL_WIDTH_FIELD, type ComposerUxSettings } from '../settings-contract.ts'
+import { PANEL_HEIGHT_FIELD, PANEL_WIDTH_FIELD, activeSections, type ComposerUxSettings } from '../settings-contract.ts'
 import {
   RESIZE_EDGE_CLASS, RESIZE_GRIP_CLASS, RESIZE_LAYER_CLASS, RESIZE_OUTLINE_CLASS,
   RESIZE_OUTLINE_STYLE, clampPanelHeight, clampPanelWidth, findSettingsPanel, handleBox,
@@ -54,12 +54,13 @@ const EDGES: readonly ResizeEdge[] = ['left', 'right', 'top', 'bottom', 'br']
 /** 渲染设置面板尺寸手柄；无面板或开关关闭时不渲染。 */
 export function PanelResizeHandles({ useLive, actions }: PanelResizeProps) {
   const settings = useLive(value => ({
-    enabled: value.enabled,
+    // 「设置面板」栏（或总开关）关着时整块停用 —— 与导航滚动那处用同一个判据。
+    sectionOn: activeSections(value).panel,
     panelResize: value.panelResize,
     panelWidth: value.panelWidth,
     panelHeight: value.panelHeight,
   }))
-  const enabled = settings.enabled === true && settings.panelResize === true
+  const enabled = settings.sectionOn === true && settings.panelResize === true
   const [panel, setPanel] = useState<HTMLElement | null>(null)
   const [active, setActive] = useState<ResizeEdge | null>(null)
   const dragRef = useRef<DragStart | null>(null)

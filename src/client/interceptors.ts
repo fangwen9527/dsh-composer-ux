@@ -17,7 +17,7 @@ import {
   chordToInit, encodeChord, isEnterFamily, type ChordEvent,
 } from './chords.ts'
 import { applyPromptsForSend, sendButtonOf } from './quick-commands.ts'
-import type { ComposerUxSettings, MenuState, QuickPrompt } from '../settings-contract.ts'
+import { activeSections, type ComposerUxSettings, type MenuState, type QuickPrompt } from '../settings-contract.ts'
 
 export interface InterceptorDeps {
   /** 同步读取当前解析后的设置（拦截器非 React 环境）。 */
@@ -91,6 +91,8 @@ function composing(event: KeyboardEvent): boolean {
 export function installInterceptors(deps: InterceptorDeps): () => void {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (replaying) return
+    // 「键位」栏（或总开关）关着时完全不介入：Enter 家族按 DSH 原生行为走。
+    if (!activeSections(deps.settings()).keys) return
     const root = findComposerRoot(event.target)
     if (root === null) return
     if (composing(event)) return
@@ -131,7 +133,10 @@ export function installInterceptors(deps: InterceptorDeps): () => void {
   const onContextMenu = (event: MouseEvent): void => {
     const root = findComposerRoot(event.target)
     if (root === null) return
-    const mode = deps.settings().menuMode
+    const settings = deps.settings()
+    // 「右键菜单」栏（或总开关）关着时本插件完全不介入 —— 与下面的「官方」档同一条出口。
+    if (!activeSections(settings).menu) return
+    const mode = settings.menuMode
     // 官方档：本插件**完全不介入** —— 既不 preventDefault 也不 stopImmediatePropagation，
     // DSH 官方与其它插件自己的右键处理原样生效。（DSH 官方输入框本身没有右键菜单，
     // 所以通常看到的就是浏览器菜单。）已打开的自定义菜单由 client.tsx 在切档时关掉。

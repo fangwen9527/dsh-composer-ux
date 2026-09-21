@@ -2,6 +2,84 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] — 2026-09-21
+
+> **本版含宿主半新能力**（六个折叠卡的栏开关进了 settings schema），装完必须**重启 DSH** 才会作用到会话上。
+> 只动客户端半的改动（设置页版式、右键菜单卡那两处）刷新页面即可。
+
+### 新增
+
+- **两层开关：总开关 + 每栏开关**（用户要求「插件的每个条目都增加一个开关按钮默认关闭，总开关默认打开」）。
+  - 设置页顶部「启用输入增强」= **总开关，默认开**（原本就是），它是一道总闸；六张折叠卡的**标题行右端各一个卡级开关，默认关**。生效条件是 `enabled && 该栏开关`，判据只有一个 `activeSections()`，不在各组件里各写一遍。
+  - **卡内已有的开关全部搬到标题行**（用户要求），其中**右键菜单那 7 项后来又搬回了卡内**（见下一条）：设置面板的「导航滚动 / 边缘缩放」变成标题行的两个小开关；默认终端的三档变成标题行的 `compact` 胶囊；**OpenCode 请求头那一栏没有新键** —— 原来的 `headerEnabled` 本来就是"这一栏要不要生效"，直接当卡级开关，不造同义的第二个键。
+  - **右键菜单卡：点哪档只显示哪档的说明 + 那 7 项只在「自定义」档出现**（用户看过真实界面后提的两条）。
+    - 原来三档说明 + 剪贴板授权注意事项一共 6 段**全铺开**，一屏文字、还要人自己找哪段跟自己选的那档有关；现在 `官方 / 浏览器 / 自定义` **各一段互斥渲染**，「自定义」那段后面才接它专用的 Chrome / Edge、Firefox 剪贴板授权说明。
+    - 那 7 个条目开关（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）先做成标题行的「**7 项 ▼**」条（7 个滑块平铺会把标题行挤爆），后来改成**平铺在「自定义」档里**：这 7 项本来就只对「自定义」档有意义，摆在标题行等于在任何档位都能改一堆当时不生效的东西。strip 那一套（按钮 + 展开条 + `dsh-ux-stripButton` / `dsh-ux-cardStrip` 两个类）**整套删掉**，并留了"不许复活"的护栏（变异 Q 咬住）—— 设置页布局没有自动化测试，护栏只能保到这里，挤不挤得下由用户的眼睛判。
+    - 顺手删掉标题行下面那行**重复当前档位**的正文 `hint`（`MENU_MODES[].hint` 仍是三枚胶囊的悬停提示，只是不再有第二处正文）。
+  - 标题行因此从"整行一个 `<button>`"改成"展开按钮 + 控件区"两个兄弟节点：`<button>` 里塞按钮是无效 HTML，点击还会冒泡成"展开整张卡"。
+  - **关掉一栏 = 这一块完全不介入**，栏内的值全部保留（打开即原样恢复）：键位 → DSH 原生键位；右键菜单 → 不介入；快捷指令 → 输入框那枚按钮消失、面板收掉、**附加批次直接给空**（键位发送与官方发送按钮两条路共用这一个闸）；设置面板 → 不滚动、不拖大小；OpenCode 请求头 → 停止注入并撤销已写入的头；默认终端 → 宿主半撤销已下发的 `pwsh` 压制并回写"未启用"。
+  - **未启用时的观感**：概览行加「未启用 · 」前缀、卡片描边变虚线、展开区压暗；栏内控件仍可编辑（先配好再打开）。
+- **「默认关」对老用户是迁移出来的，不是硬编码**（用户拍板 A 方案）。
+  - 判据是**"这一栏的值不等于从没碰过的样子"**（改过键位 / 选过浏览器或自定义菜单档 / 有面板尺寸记录 / 终端档位不是自动或填过路径）。全新安装（什么痕迹都没有）才是六栏全关。
+  - ⚠️ **不能按"键存在"判断**：`settings.get()` 给的是**已解析**的值（schema 默认值 + 组合 base + 用户层），从没碰过的人的文档里也照样有 `sendKey: 'Enter'`、`panelScroll: true` —— 按"键存在"判断会让全新安装六栏全开，与"默认关"正好相反。这条被测试当场逮住（「全新安装（空文档）→ 五栏全关」变红），判据改成"出现过 **且** 不等于默认值"。
+  - 同理，**宿主半自持字段不许当判据**（`terminalCandidates` / `terminalStatus` / `terminalEffective` / `headerApplied*` 是插件自己写的，全新安装也会出现），有专门一条测试盯着。
+  - **五栏开关在 schema 里是 `.required(false)`、故意不给默认值**：schemastery 对缺省的可选键会**整个省掉**，所以"文档里没有这个键"与"明确关掉"能分开 —— 迁移要用的就是这个区别。有测试专门钉住"缺省 ≠ false"（谁把它改成 `.default(false)`，迁移会静默失效）。
+  - **「快捷指令」栏多一条文件判据**：0.3.0 起条目搬到了 `quick-prompts.json`，用过的人和没用过的人的设置文档可以一模一样。所以宿主半启动时读一次书本文件，**有非内置内容就把 `quickEnabled: true` 写回文档**（写回之后两端都只需要看那一个布尔）。只在文档里还没有这个键时写：用户明确关掉之后不会被重新打开（有测试）。
+  - **升级前可以先自查**：新增 `test/check-sections.mjs` —— 拿真实的 `settings.yaml` 跑一遍迁移，打印六栏会变成什么，**只读**、不写任何文件。本机实测输出：六栏全开（「快捷指令」靠文件判据）。
+- **「设置 → 输入体验 → 默认终端」**（只对 Windows 生效）：把模型用的终端工具从 PowerShell（`pwsh`）换成 **Git Bash**。
+  - **三档**：自动（探测到 Git Bash 就用）/ Git Bash / PowerShell（保持 DSH 默认、本插件完全不介入）。默认「自动」。
+  - **「裸本体」不列为候选**：同根下既有 `bin\bash.exe` 又有 `usr\bin\bash.exe` / `mingw64\bin\bash.exe` 时只列前者。本机实测：前者 `MSYSTEM=MINGW64`、`PATH` 前置 `/mingw64/bin:/usr/bin`、`head`/`grep`/`uname` 都在且中文文件名当参数正常；后者 `MSYSTEM` 为空、`PATH` 只有继承来的 Windows PATH，**coreutils 全部 command not found**（交给模型就是命令大面积失败）。没有 `bin\bash.exe` 兄弟的来源（如 MSYS2 只提供 `usr\bin\bash.exe`）照常列出；**手填路径不受此限**。
+  - **探测顺序**（同一路径只留优先级最高的一次，候选会在卡片里列出并标注来源）：设置里填的路径 → **PATH 上正在用的那份 git（由 `git.exe` 反推安装根）** → Git 官方落点（`Program Files` / `x86` / `%ProgramW6432%` / **`%LOCALAPPDATA%\Programs`**——安装器以普通用户运行时的默认落点）→ **Scoop / Chocolatey 便携包** → **GitHub Desktop 内嵌 / 旧 GitHub 的 `PortableGit_*` / Visual Studio 内嵌**（带版本号，靠列举子目录，新版本优先）→ MSYS2 / Cygwin → **各盘符根下的 `Git` / `PortableGit` / `msys64` / `cygwin64`** → Niubash（`niu.exe`）→ PATH 兜底。这份清单是**联网核对过**的（[SO: Where is git.exe located?](https://stackoverflow.com/questions/11928561/where-is-git-exe-located)、[SO: Why was git installed in AppData](https://stackoverflow.com/questions/32297340/why-was-git-installed-in-appdata-instead-of-program-files)、[cli/cli#2617](https://github.com/cli/cli/issues/2617) 等），并逐条写了测试。探测只做有限次存在性检查 + 三处目录列举，**不递归扫盘、不跑进程**。
+  - **硬排除 WSL 的 `bash.exe`**（`System32` 与 `WindowsApps` 两个来源）——它把 `D:\x` 解释成 `/mnt/d/x`，与模型手里的 Windows 工作目录不兼容，而且只有在它**确实存在**时才会出现在「已排除」说明里。
+  - 本机就是这条规则的受益者：Git for Windows 装在 `D:\Git`（不在 Program Files），只按固定目录找是找不到的——「先找 git 再反推」才能命中 `D:\Git\bin\bash.exe`。
+  - **立刻生效**：改档位后宿主半会**遍历所有在跑会话**重新下发，不需要开新会话（详见下节「为什么这样实现」）。
+  - **工具契约与官方 `@deepseek-ai/dsh-tool-bash` 逐字对齐**：描述、参数与输出 JSON Schema、`[stderr]` 头、`(no output)` 兜底、标记顺序（拒绝 → 升级提示 → 超时 → signal 或 exit code 在**最末**）、终端卡片（exit 状态拆成 pill）、后台任务（`{kind:'background', jobId}` + `job_output` / `job_kill`）、超时收敛（默认 120s、上限 600s）、输出截断与落盘位置、沙箱约束与**升级审批**（fail-closed、严格更宽、审批文案）。
+  - **零新增运行时依赖**：宿主半仍是自包含产物（只内联 schemastery/cosmokit），官方的五个运行时符号（`defineTool` / `TOOL_ABORTED` / `HarnessError` / 沙箱标记与升级助手 / `DSH_ENV_PREFIX`）在 `src/terminal/` 下等价实现，避免因「依赖共享宿主包」被市场体检警告。
+  - **失败不伤会话**：探测不到、拿不到 `subprocess`、`restrict` 被拒（例如该会话本来就看不到 `pwsh`）、非 Windows —— 一律只降级 + 在设置页状态行写明原因，不抛错、不 veto 别的插件。
+  - 设置页只读展示三项宿主半自持字段（`terminalStatus` / `terminalEffective` / `terminalCandidates`），并加了「自动发现」按钮与候选点选。
+- 设置接口 `GET/POST /composer-ux/terminal`：查状态、重扫候选。与另外两条路由一样受官方 `connection.requestRejection` 守卫（本机 webServer 绑 `0.0.0.0`，而这条接口会回传本地路径）。
+- 设置页抬头（「输入体验」那张卡）右端加了 **「GitHub ↗」**：真实 `<a target="_blank" rel="noreferrer noopener">`，地址取自契约里的 `REPO_URL`（与 `package.json` 的 `repository.url` 一致，客户端不硬编码第二份 —— 有测试盯着两处不许分叉）。
+- **「重启 DSH」按钮**（`src/restart.ts` + `GET/POST /composer-ux/restart`）：位置是「输入体验」卡片**抬头右端、GitHub 链接左边**，确认条展开在抬头正下方。
+  - **机制照搬插件市场 [dsh-market](https://github.com/dsh-market/dsh-market)**（`src/restart.ts` + `src/dsh-cli.ts`，本机 profile 里就有它的源码与注释）。为什么抄它而不是自己发明：它文件顶部挂着一串 issue 号，每条都是"重启按钮按下去没用"的具体死法。
+  - **两步确认**（用户拍板保留）：点按钮先读"会怎么重启、当前有几个会话在跑"，确认条在抬头正下方，点「确认重启」才真重启 —— 重启会打断正在跑的会话（包括正在生成的那一轮）。
+  - **分离一个 node 助手进程**（`node -e <源码>`，detached + unref + `stdio: 'ignore'`），宿主自己 **500ms 后退出**，好让这个 HTTP 响应先发出去。
+  - **助手等端口真的空出来**：每 250ms `connect` 探一次、最多 30 秒，通了再等 300ms（Windows 的 TIME_WAIT 尾巴）。用 connect 而不是 bind：bind 一下自己就把那个马上要交出去的端口占住了。固定 sleep 会让新宿主 `EADDRINUSE` 当场死掉、而失败还被 `catch {}` 吞了（市场 issue #177）。
+  - **用隐藏控制台的 PowerShell 起新宿主**：Windows 上 `detached` = `DETACHED_PROCESS` = **没有控制台**，新宿主之后起的每个控制台子进程都会新建一个可见窗口（#40）；而 `-WindowStyle Hidden` 管不到 spawn 交给 PowerShell 的那个控制台，所以助手那层还得自己带 `windowsHide`（CREATE_NO_WINDOW，#624）。裸 `dsh` 要显式补成 `dsh.cmd`：PowerShell 会优先选被默认策略拒绝的 `dsh.ps1`（#397）。
+  - **起来之后再验证 20 秒**：端口没人监听就把诊断写进日志 —— 本来该记日志的宿主进程已经退出了，重启失败必须留证据。
+  - **界面靠 `boot` 号判断成功**：每 1.5 秒问一次状态，号变了（新进程接管了端口）就 `location.reload()`；60 秒还没变才报超时，并把日志路径显示出来（市场同款判定）。
+  - **两道关卡**：先过官方 `connection.requestRejection`（Host/Origin 围栏 + 浏览器令牌），再过本插件自己的"回环 peer + 无转发头 + `Origin` 与 `Host` 同源"。这是"杀进程"的接口，跨站页面一定带自己的 `Origin`，挡在这里。非 GET/POST 回 405。
+  - **不该从界面里杀掉的宿主会拒绝**：宿主正被调试器附着（`inspector.url()` / `--inspect` 家族，按 token 前缀匹配以免把 `inspect-tool.js` 这种路径误判），或它在 systemd 下当服务跑（`INVOCATION_ID`/`JOURNAL_STREAM` **且**父进程是 PID 1 或 comm 为 `systemd` —— 只看环境变量会把普通终端与 CI runner 误判成"有 supervisor"，市场 issue #229/#471 就是这么踩的）。这时按钮禁用并说明原因。
+  - **退出方式与市场刻意不同**：用 `process.emit('SIGTERM')` 而不是 `process.kill(pid,'SIGTERM')`。理由是可验证的：DSH 在 `apps/cli/src/profile-boot.ts:290` 注册了 `SIGTERM → interrupt(0)`（先 `fiber.dispose()` 再退出，自带 5 秒上限 `PROCESS_SHUTDOWN_TIMEOUT_MS`），而 **Windows 上 `process.kill` 等价于 `TerminateProcess`** —— 本机实测（node 起子进程、注册 handler、自己杀自己）SIGTERM / SIGINT / SIGKILL 三种写法的 handler **一次都没跑到**，进程直接没了。对"刚装完插件随手重启"没差别，对正在跑长会话的用户就是硬切。兜底：10 秒后还活着就 `exit(0)`。
+  - **第一次点的时候，正在跑的宿主还是上一版**（新路由要重启后才加载）：宿主半没有 `boot` 字段时，界面如实说明"这次走旧机制，重启之后按钮就是新版了"。旧版 handler 在同一路径上，所以第一次点照样能把 DSH 重启起来。
+  - **去掉「可选重启命令」与那张「维护」卡**（用户拍板）：机制换成市场那套之后，这个字段只剩"多一个会填错的地方"。老文档里可能留着的 `restartCommand` 由「恢复默认」顺手清掉；schema 里不再有它。
+  - 新增 `GET /composer-ux/restart`（只读：boot 号、重放命令、日志落点、在跑会话数、是否被拦）与 `POST`（真重启，回 **202** + boot 号）。**测试里绝不让 POST 走到成功路径**：那会真的重启测试进程。
+
+### 为什么这样实现（三条来自官方源码的硬约束）
+
+1. **`ctx.tools.restrict()` 不能在全局上下文调用**：`packages/core/tools/src/index.ts:1077` 直接抛 `tools.restrict() requires a scoped context (agent.ctx): a context-global restriction would mask every agent`。所以「隐藏 pwsh」只能发生在**该 agent 自己的 scope** 里；为了让改动立刻生效，本插件在 `agent/created` 与 `settings/updated` 两个时机**遍历在跑会话**逐个下发（与官方 fixture `scoped-tool-subagent` 同形）。
+2. **`restrict()` 会校验名字必须已在全局注册表里**，否则抛 `names unknown global tool "pwsh"` —— 该会话本来就看不到 `pwsh` 时会命中这条，本插件记一行原因跳过（这正是官方 `tool-bash` 的日志里 `restrict(deny:[pwsh]) refused, skipping` 的那种情况）。
+3. **不需要再写 `system-prompt/assemble` 过滤器**：工具注册表自己就把 schema 喂给提示词（`packages/core/tools/src/index.ts:834` → `systemPrompt.tools(context => this.wireSchemas(context.scope))`），而 `wireSchemas(scope)` 取的是**已过滤**的可见 schema —— 一次 `deny` 会同时从「可调用注册表」和「提示词工具列表」里消失。提示词侧只做一件事：在本会话作用域里摘掉预设的 `tool:pwsh` 段（按名字过滤 `sections`，与官方 `browser-use-runtime` 同一手法）。
+
+### 开发中发现并修掉的问题
+
+0. **把 Niubash 从"单条候选"改成"安装根分组"时它整个消失了。** 新加的来源分组只会试
+   `<root>/bin|usr/bin|mingw64/bin/bash.exe`，而 Niubash 的可执行文件叫 `niu.exe` 且就在根目录下 ——
+   分组形状不匹配。是**测试逮住的**（"Niubash 仍是候选"当场变红），不是靠肉眼复查。
+   **下面这条是用户实测发现的**（他在卡片上点了 `D:\Git\usr\bin\bash.exe` 那个候选，模型的命令就大面积失败）：
+   `D:\Git\bin\bash.exe` 与 `D:\Git\usr\bin\bash.exe` 实测差别 —— 前者 `MSYSTEM=MINGW64`、`PATH` 前置 `/mingw64/bin:/usr/bin`、`head`/`grep`/`uname` 都在、中文文件名当参数正常；后者 `MSYSTEM` 为空、`PATH` 只有继承来的 Windows PATH（只有 `D:\Git\cmd`），**coreutils 全部 command not found**。
+2. **`sandbox.confine()` 是 `async`，而本机装着的 `dsh-windows-shell-policy@0.0.5` 把它当同步用**（`confined = sandbox.confine(...)` 后直接读 `.argv`）。官方签名是 `confine(argv, policy, signal): Promise<ConfinedArgv>`，所以那个插件一旦处于受限模式就拿到 `Promise`、`argv` 变成 `undefined`，命令根本发不起来。本实现 `await` 它，并专门写了一条测试（「实际 spawn 的是 confine 返回的 argv」）防止回归。
+2. **官方 `tool-bash` 在 win32 上是 `disabled`**（`packages/bundle/base/cordis.patch.yml`），而且它只消费 `ctx.shell` —— win32 的 `ctx.shell` 栈是 `pwsh-sandbox`（PowerShell）。所以「启用官方 bash 工具」拿不到 Git Bash，必须自带工具（这正是 converk/dsh-tweaks 那个插件的做法，本实现沿用并补齐了上面那条 async）。
+3. **「中文路径不能当参数」的根因很可能是本机 shell 环境而非 Windows**：实测当前 `bash` 工具里的 `grep` 解析到 `…/Niubash/winuxcmd/usr/bin/grep.exe`（版本串 `grep (WinuxCmd) 1.0.5`），且该环境**没有 `/proc`**——不是 MSYS/Git Bash；用它跑 `grep <中文文件名>` 会直接 `cannot open` 并 `0xC0000409` 退出。换成真 Git Bash 后是否消失，**等实测确认**（本版不宣称已解决）。
+
+### 测试
+
+- 新增 `test/terminal-policy.mjs`（162 条）：探测顺序与 WSL 排除、渲染与 `parseExitStatus`（含官方 `[exit code: null]` 怪癖）、升级审批 fail-closed、bash 工具的参数/输出 schema 与执行路径（argv / cwd / env / stdio 上限 / confine 必须 await / 拒绝识别 / 后台钩子 / 中止与超时）、宿主半接线（在跑会话当场下发、新会话下发、幂等、切回 PowerShell 时撤销、非 Windows 与缺服务的降级）。
+- `test/quick-commands.mjs` 第 10 节重写（重启机制）：启动命令重建的两种形态（dsh 入口 vs 裸 `dsh`）、`nodeExecutableOf`、Windows 的 PowerShell 包装与 `.cmd` 补全、端口解析与同源关卡逐条、调试器 / systemd 判定、助手源码的每条"为什么"、排期与优雅退出（spawn / 定时 / 退出全部注入）、以及**真的跑一遍助手**（替换进程的标记文件出现 / 起不来时 err 日志里有诊断 / 端口一空出来就起进程 —— 这条才是"等端口"逻辑真正的护栏）。
+- `test/client-registration.mjs` 新增第 8 节：按钮在抬头且**在 GitHub 链接左边**、确认条在抬头正下方、第一步只 GET 第二步才 POST、靠 `boot` 号 `location.reload()`、被拦时禁用并说明、老宿主如实提示、类名真的进了产物与样式表（中文在产物里是 `\uXXXX`，所以只查 ASCII 标记）。
+- 关键护栏做过**变异测试**（`test/mutation-guards.mjs`，手动跑）：把「遍历在跑会话」去掉、把同源关卡去掉、把官方信任关卡去掉、把抬头按钮拿掉、把助手的 `windowsHide` 关掉、把"等端口"换成固定 sleep、把「可选重启命令」加回来、把栏开关一律返回 true、把迁移判据丢掉一半、把终端/键位的栏门控去掉、把五栏开关改成带默认值、把快捷指令的文件迁移去掉、把「自定义」档的门控去掉、把三档说明的互斥条件去掉、把 strip 那条死路接回来、把标题行下重复的 hint 加回去、把那 7 个条目开关整段删掉、把那 7 行渲染短路掉、把「浏览器」档的说明短路掉、把三档说明全铺开 —— **21 条全部当场变红**。跑变异必须带上 `node build.mjs`：宿主半的用例打的是构建产物，只改 `src/` 不重建会得到假的"没咬住"。
+- 新增 `test/settings-render.mjs`（**手动跑，20 项**）：这套件一直没有 React 渲染器，设置页版式只能靠搜源码字符串护栏 —— 那是最弱的一层（把 `{settings.menuMode === 'custom' && (` 改成 `{true && (` 它照样绿）。这个文件用 `react-dom/server`（**借 profile 里那份**，不新增依赖、不改 `package.json`）把设置页真的渲染成 HTML，断言：六张卡都渲染出来、右键菜单卡标题行只剩卡级开关、三档正文互斥且两两不同、那 7 行条目开关只在「自定义」档。三处坑记在文件头：两个 React 副本（profile 顶层与 react-dom 的 peer 不是同一个 ⇒ 必须按 react-dom 的解析路径取 react，否则 `dispatcher` 为 null）、三枚胶囊的 `title` 里也带着那三句话（按 HTML 搜会误报"说明没互斥"，第一版就假红了 3 项）、`FoldCard` 的展开态在组件内部（SSR 点不动 ⇒ 打包时在内存里改成展开，锚点找不到就报错）。
+- 开关与迁移的测试（共 60+ 条）：全新安装六栏全关、总开关默认开、显式值优先于迁移、每栏判据各一条、宿主半自持字段不当判据、`activeSections` 的总闸语义、**用户真实文档的回归**（六栏保持全开）、schema 的"缺省 ≠ false"、快捷指令的文件迁移（非内置 → 写回；内置 → 不写；已关 → 不写回；幂等；没文件 → 不写）、终端栏关掉时撤销已下发的压制、总开关关掉时同样撤销、拦截器/入口按钮/面板把手各自的栏门控、标题行拆成两个兄弟节点、六张卡各有一个开关。
+
 ## [0.4.0] — 2026-09-15
 
 > 已发布：用户实测通过后授权发布，已上 npm（`latest`）、GitHub 标签与 Release（`v0.4.0`）。

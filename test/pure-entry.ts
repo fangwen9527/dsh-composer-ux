@@ -42,3 +42,52 @@ export {
   PANEL_SELECTOR, RESIZE_EDGE_CLASS, RESIZE_GRIP_CLASS, RESIZE_LAYER_CLASS,
   RESIZE_OUTLINE_CLASS, RESIZE_OUTLINE_STYLE, handleBox,
 } from '../src/client/panel.ts'
+/**
+ * 终端探测的纯函数出口：探测顺序（git 反推 / WSL 硬排除 / Niubash 降级）是
+ * 「默认终端」这块能力里唯一能在 node 里完整验证的部分，其余要真机。
+ */
+export {
+  WSL_REASON, candidateKindOf, defaultBashPath, discoverBashCandidates, isWslBash, kindLabel,
+  normalizePath, unpreparedBashRoot,
+} from '../src/terminal/discover.ts'
+/**
+ * 终端渲染层：标记顺序与 exit 锚点是**模型可见行为**（终端卡片靠末尾锚点拆 pill），
+ * 与官方 `dsh-tool-bash` 逐字对齐，所以逐条断言。
+ */
+export {
+  DSH_ENV_PREFIX, ESCALATION_TARGETS, escalationHintMarker, parseExitStatus,
+  renderBashResult, renderProcessRead, sandboxDenialMarker,
+} from '../src/terminal/render.ts'
+/** 升级审批语义（fail-closed、严格更宽、文案）—— 逐字对齐官方，值得逐条断言。 */
+export {
+  WIDER_MODES, approveEscalation, validateEscalationArgs,
+} from '../src/terminal/sandbox.ts'
+/** bash 工具本体：参数/输出 schema、描述、执行路径（argv/cwd/env/confine/后台/中止）。 */
+export {
+  BASH_SECTION_TEXT, BASH_TOOL_NAME, DEFAULT_TIMEOUT_MS, ENV_OVERRIDES, MAX_TIMEOUT_MS,
+  TOOL_ABORTED, TOOL_BASH_SECTION_ORDER, TOOL_PWSH_SECTION_ORDER, bashDescription, bashParameters,
+  bashOutputSchema, clampTimeout, createBashTool, escalationModesOf, resolveWorkdir,
+} from '../src/terminal/tool.ts'
+/** 「默认终端」的契约：字段名、三档、候选净化、生效判定、状态行文案。 */
+export {
+  DEFAULT_TERMINAL_MODE, TERMINAL_API_PATH, TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD,
+  TERMINAL_EFFECTIVE_FIELD, TERMINAL_MODE_FIELD, TERMINAL_MODES, TERMINAL_STATUS_FIELD,
+  activeBashPath, candidatesToStored, sanitizeTerminalCandidates, terminalModeFrom, terminalStatusText,
+} from '../src/terminal/contracts.ts'
+/** 宿主半子系统本体：按会话下发（restrict/register/section）+ 立刻覆盖在跑 agent + 状态回写。 */
+export { installTerminalPolicy } from '../src/terminal/host.ts'
+/**
+ * 「重启 DSH」（机制照搬插件市场）：启动命令重建、spawn 包装、助手源码、信任关卡、
+ * 优雅退出、排期（spawn/定时/退出/取路径全部注入）。逐条断言的理由在测试第 10 节。
+ */
+export {
+  RESTART_EXIT_DELAY_MS, RESTART_LOG_PREFIX, RESTART_POLL_MS, RESTART_PORT_WAIT_MS,
+  RESTART_STOP_FALLBACK_MS,
+  bootId, detectedDebugger, detectedSupervisor, gracefulStop, isLoopbackAddress, launchCommand,
+  nodeExecutableOf, planRestart, quotePowerShell, respawnCommand, restartHelperSource,
+  scheduleRestart, servingPort, trustedRestartRequest,
+} from '../src/restart.ts'
+/** 「每一栏一个开关」的判据与总闸合成（两半共用，必须逐条钉住）。 */
+export { sectionEnabledOf, activeSections, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD, TERMINAL_ENABLED_FIELD } from '../src/settings-contract.ts'
+/** 设置契约里那几个跨端常量（重启接口路径等）。 */
+export { REPO_URL, RESTART_API_PATH } from '../src/settings-contract.ts'

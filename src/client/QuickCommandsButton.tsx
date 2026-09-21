@@ -11,7 +11,7 @@
 import React, { useEffect, useRef } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { ComposerUxSettings } from '../settings-contract.ts'
+import { activeSections, type ComposerUxSettings } from '../settings-contract.ts'
 import { publishInputBridge, releaseInputBridge, type InputActionsLike } from './quick-commands.ts'
 import { QUICK_BUTTON_CLASS } from './quick-style.ts'
 
@@ -70,7 +70,8 @@ export function QuickCommandsButton({
     return () => { releaseInputBridge(sid) }
   }, [inputActions, draft, sessionId, blank])
 
-  if (settings.enabled !== true) return null
+  // 「快捷指令」栏（或总开关）关着时这枚按钮整个不出现。
+  if (!activeSections(settings).quick) return null
 
   const open = anchor !== null
 

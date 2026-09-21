@@ -6,13 +6,17 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
-  HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
-  NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
-  PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, SEND_KEY_FIELD, sanitizeSettings,
+  HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD,
+  MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
+  NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
+  PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
+  activeSections, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from './settings-contract.ts'
+// 终端字段的常量住在终端契约里（settings-contract 只是把它们并进设置契约）。
+import { TERMINAL_BASH_PATH_FIELD, TERMINAL_MODE_FIELD } from './terminal/contracts.ts'
 import {
   loadPromptBook, savePromptBook, withCategoryAdded, withCategoryMoved,
   withCategoryRemoved, withCategoryRenamed, withInsertMode, withPromptAdded, withPromptMoved,
@@ -149,6 +153,15 @@ export function apply(ctx: any): void {
         PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
         HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_VALUE_FIELD, HEADER_ROUTES_FIELD,
         OPTIMIZER_TIER_FIELD,
+        // 0.5.0 新增的用户配置：终端档位/路径（「恢复默认」也该把它们恢复）。
+        TERMINAL_MODE_FIELD, TERMINAL_BASH_PATH_FIELD,
+        // 五栏开关也清掉：清掉 = 回到"从没碰过这一栏"⇒ 全关（新装默认的样子）。
+        // 若不清，恢复默认之后六栏还会保持之前打开的状态，与"默认关"的语义不符。
+        KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+        PANEL_ENABLED_FIELD, TERMINAL_ENABLED_FIELD,
+        // 0.5.0 里那个「可选重启命令」字段已经删掉，但老文档里可能还留着值：
+        // 顺手清掉，免得它永远躺在设置文件里没人认识。
+        'restartCommand',
       ].map(field => ({ op: 'unset', path: [field] })),
     ).catch((error: unknown) => {
       console.error('[composer-ux] settings reset failed', error)
@@ -309,42 +322,48 @@ export function apply(ctx: any): void {
   // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。
   ctx.effect(() => installQuickButtonStyle(), 'composer-ux: quick button style')
 
-  // 设置面板导航滚动样式（随 panelScroll 开关切换；总开关关闭时一并停用）。
+  // 设置面板导航滚动样式（随 panelScroll 开关切换；「设置面板」栏或总开关关闭时一并停用）。
   ctx.effect(
     () => installPanelStyle(
       () => {
         const settings = live.getSnapshot()
-        return settings.enabled && settings.panelScroll
+        return activeSections(settings).panel && settings.panelScroll
       },
       listener => live.subscribe(listener),
     ),
     'composer-ux: panel style',
   )
 
-  // 键位拦截 + 右键菜单打开（受总开关控制：关闭时卸载监听并关闭已开菜单）。
+  // 键位拦截 + 右键菜单打开 + 官方发送按钮上的条目附加（三件事共用这一组捕获监听）。
+  // 安装条件放宽成"三栏里任意一栏开着"，各自在自己的处理函数里按栏判断 ——
+  // 免得只开「快捷指令」时连官方发送按钮那条路都不装（那样附加就失效了）。
   ctx.effect(() => {
     let dispose: (() => void) | null = null
     const syncInterceptors = (): void => {
-      const enabled = live.getSnapshot().enabled
-      if (enabled && dispose === null) {
+      const settings = live.getSnapshot()
+      const sections = activeSections(settings)
+      const wanted = sections.keys || sections.menu || sections.quick
+      if (wanted && dispose === null) {
         dispose = installInterceptors({
           settings: () => live.getSnapshot(),
           // 「仅首次」由这里决定是否算进这一批：会话还是空的（blank）才带上。
-          promptsForSend: () => appendBatchForSend(book.getSnapshot(), currentBlankSession()),
+          // 「快捷指令」栏关掉时这里直接给空批次 —— 这是唯一一处"关掉就不附加"的闸，
+          // 键位发送与官方按钮两条路都从这里取批次，不需要各写一遍。
+          promptsForSend: () => (activeSections(live.getSnapshot()).quick
+            ? appendBatchForSend(book.getSnapshot(), currentBlankSession())
+            : []),
           setMenu: state => { menu.set(state) },
           menuOpen: () => menu.getSnapshot() !== null,
         })
-      } else if (!enabled) {
+      } else if (!wanted) {
         dispose?.()
         dispose = null
-        menu.set(null)
-        panel.set(null)
       }
       // 只要不是「自定义」档，就清掉可能还开着的自定义菜单（官方 / 浏览器两档都不该留下它）。
-      if (live.getSnapshot().menuMode !== 'custom') menu.set(null)
-      // 总开关关掉时按钮本身也会消失（组件里按 enabled 返回 null），
+      if (settings.menuMode !== 'custom' || !sections.menu) menu.set(null)
+      // 快捷指令栏关掉时按钮本身也会消失（组件里按开关返回 null），
       // 浮层必须跟着一起收，否则会留下一个没有锚点的面板。
-      if (!live.getSnapshot().enabled) panel.set(null)
+      if (!sections.quick) panel.set(null)
     }
     syncInterceptors()
     const unsubscribe = live.subscribe(syncInterceptors)

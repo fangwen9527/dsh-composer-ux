@@ -4,21 +4,35 @@
 > configurable **send / newline keys**, a native-style **7-item right-click context menu**, a resizable &
 > scrollable **settings panel with persisted size**, a **global on/off switch**, a **quick-command panel**
 > (built-in prompts, click-to-insert, per-item "always append on send"), a **prompt optimizer** that runs a
-> separate model call before you send, and automatic **`x-opencode-session` request-header injection** so
-> OpenCode (Go) routes work inside DSH.
+> separate model call before you send, automatic **`x-opencode-session` request-header injection** so
+> OpenCode (Go) routes work inside DSH, and — on Windows — a **default-terminal switch** that replaces the
+> model's PowerShell tool with **Git Bash** (git-anchored discovery, WSL excluded, per-session tool-surface
+> trim, official-identical sandbox/approval/timeout semantics), plus a **one-click "restart DSH"** button
+> in the settings-card header (market-proven self-restart: detached node helper, port-release wait,
+> hidden-console relaunch, same-origin fence, boot-id reload).
 > Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
 > ships in this repository, so there is **no build step and no build authorization**. License: MIT.
 
 DeepSeek Harness Web 输入体验增强插件：
 
-0. **全局开关**：设置页顶部「启用输入增强」总开关——关闭后键位、右键菜单、快捷指令、设置面板滚动/缩放全部停用（输入框恢复 DSH 原生行为），设置页保留用于一键恢复；开关状态持久保存。
+![设置页「输入体验」：顶部总开关 + 六张折叠卡，每张卡的标题行右端各有一个卡级开关](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.5.0/docs/settings-panel-0.5.0.png)
+
+> 上图即 0.5.0 的设置页（六栏都开着）。注意标题行**只有卡级开关与从属控件** —— 右键菜单那 7 个条目开关已按实测反馈搬进卡内的「自定义」档（见第 0 条）。
+
+0. **两层开关：总开关 + 每栏开关**。设置页顶部「启用输入增强」是**总开关（默认开）**，它是一道总闸；六张折叠卡的标题行右端各有一个**卡级开关（默认关）**，决定「这一栏要不要生效」。两处都满足才生效（`enabled && 该栏开关`）。
+   - **老用户不会被升级弄坏**：卡级开关的默认值不是硬编码的 `false`，而是按「设置文档里有没有『你在用』的痕迹」迁移 —— 碰过的栏保持开着、没碰过的才是关；全新安装（空白文档）才是六栏全关。「快捷指令」那一栏多一条文件判据（0.3.0 起条目存在 `quick-prompts.json`，设置文档里看不出来）。
+   - **升级前可以先看一眼**：`node test/check-sections.mjs` 拿你真实的 `settings.yaml` 跑一遍迁移，打印六栏会变成什么（**只读**，不写任何文件）。
+   - **关掉一栏 = 这一块完全不介入**，且栏内的值全部保留（打开即原样恢复）：键位关 → 输入框按 DSH 原生键位；右键菜单关 → 本插件不介入；快捷指令关 → 输入框那枚按钮消失；设置面板关 → 不滚动、不拖大小；OpenCode 请求头关 → 停止注入并撤销已写入的头；默认终端关 → 保持 PowerShell。
+   - 「OpenCode 请求头」那一栏**没有额外的开关**：原来的「附加请求头」本来就是「这一栏要不要生效」，直接搬到了标题行。
 1. **设置 → 输入体验**（设置页新增条目）
-   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下五个栏目为**可折叠卡片**（标题行只放标题 + 一句动态概览，长说明与控件都在展开后的内容区），**默认全部折叠、不记忆展开状态**，可同时展开多个。
+   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下六个栏目为**可折叠卡片** —— 标题行左侧是「标题 + 一句动态概览 + 展开箭头」，右侧是**这一栏的开关与从属控件**（设置面板的两个开关、默认终端的三档都在这里），长说明与其余控件在展开后的内容区；**默认全部折叠、不记忆展开状态**，可同时展开多个。标题行**只放卡级开关与从属控件**：右键菜单那 7 个条目开关按用户后来的反馈**搬回了卡内**（它们只对「自定义」档有意义，见下一条）。
    - **键位**：分别配置「发送键」「换行键」——常用预设（Enter / Ctrl+Enter / Alt+Enter / Shift+Enter）+ 点击「自定义…」后直接按任意组合键录制（Esc 取消，Backspace 清除），支持清空为「无」；发送与换行不能设为相同按键；可一键恢复默认。
-   - **右键菜单**：三档「菜单来源」（官方不介入 / 浏览器菜单 / 自定义菜单，见下「右键菜单」一节）；自定义档那 7 个条目（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）可单独开关。
+   - **右键菜单**：三档「菜单来源」（官方不介入 / 浏览器菜单 / 自定义菜单，见下「右键菜单」一节）；卡内**只显示当前选中那一档的说明**（点官方看官方的、点浏览器看浏览器的、点自定义看自定义的；自定义档还带 Chrome / Edge 与 Firefox 的剪贴板授权说明）；那 7 个条目（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）**只在「自定义」档显示**、逐个开关（旁边一个「全部开启」）。这三件事有**真渲染测试**盯着（`node test/settings-render.mjs`：把设置页渲染成 HTML，断言三档正文互斥、那 7 行只在自定义档、标题行没有第二个入口）。
    - **快捷指令**：分类增删改 / 条目增删改与上下移 / 跨分类移动 / 每条一个插入模式（关 · 每次 · 仅首次）/ 优化强度三档（详见下节）。
-   - **设置面板**：导航可滚动开关；边缘拖拽调整面板大小（尺寸记忆持久化）与尺寸预设。
+   - **设置面板**：导航可滚动 / 边缘调整大小两个开关（都在标题行）；尺寸预设与拖拽说明在展开区。
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
+   - **默认终端**：Windows 上把模型用的终端工具从 PowerShell 换成 Git Bash（三档在标题行；详见下节）。
+   - **重启 DSH**：卡片抬头右端（GitHub 链接左边）那枚按钮，两步确认后原地重启（详见「维护：重启 DSH」）。
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
 
@@ -144,6 +158,54 @@ OpenCode 的接口要求客户端在每次请求里带上一个稳定的会话 I
   - **带着它时真实调用成功，且前缀缓存在工作**：同一段前缀连发两次，`input` 174 → 46、`cacheRead` 192 → 320（总前缀 366 不变），第二次有更多内容直接命中缓存。
   - **线级证据**：用 `test/opencode-header-wire-probe.mjs` 起一个本地端点，DSH 发过去的推理请求上确实带着 `x-opencode-session: <值>`，以及它自己的 `user-agent: deepseek-harness/0.1.5-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)`（正好满足 OpenCode 文档对客户端标识的第 2 条要求）。
 
+## 默认终端（Windows）
+
+Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`），而模型的训练语料里 bash 占绝对多数。这一栏把终端换成 **Git Bash**：模型看到的工具就叫 `bash`，`pwsh` 从它的工具列表里消失 —— 一个会话只面对一个终端工具。
+
+- **设置页位置**：设置 → 输入体验 → 「默认终端」（折叠栏目）：档位 / Git Bash 路径 /「自动发现」/ 候选点选，附两行宿主半回写的只读状态（当前生效 shell、状态行）。
+- **三档**：`自动`（探测到 Git Bash 就用，找不到就保持 PowerShell —— 默认，开箱即用）/ `Git Bash`（强制换，没探测到会回落并在状态行说明）/ `PowerShell`（保持 DSH 默认，本插件完全不介入终端）。
+- **探测顺序**（同一路径只留优先级最高的那一次；多个候选会在卡片里列出来让你点，并标注来源）：
+  1. 你在设置里填的路径；
+  2. **PATH 上正在用的那份 git**（由 `git.exe` 反推同一个安装根 —— 本机就是这样命中 `D:\Git` 的）；
+  3. Git 的官方落点：`Program Files\Git`、`Program Files (x86)\Git`、`%ProgramW6432%\Git`、`%LOCALAPPDATA%\Programs\Git`（**安装器以普通用户身份运行时默认落这里**，以管理员运行才落 Program Files）；
+  4. **Scoop**（`%SCOOP%\apps\git\current`）与 **Chocolatey 便携包**（`…\chocolatey\lib\git.portable\tools`）；
+  5. **GitHub Desktop 内嵌**（`%LOCALAPPDATA%\GitHubDesktop\app-*\resources\app\git`）、**旧 GitHub for Windows 的 PortableGit**（`%LOCALAPPDATA%\GitHub\PortableGit_*`）、**Visual Studio 内嵌**（`…\Microsoft Visual Studio\<年份>\<版本>\Common7\IDE\…\Team Explorer\Git`）—— 这三处带版本号，靠"列一眼子目录"枚举（新的排前面）；
+  6. MSYS2（`C:\msys64\usr\bin`）、Cygwin（`C:\cygwin64\bin`）；
+  7. **各盘符根下的 `Git` / `PortableGit` / `msys64` / `cygwin64`**（覆盖装在 `D:\Git`、`D:\PortableGit`、自己解压到任意盘的情况）；
+  8. Niubash（`%LOCALAPPDATA%\Programs\Niubash\niu.exe`）；
+  9. PATH 兜底（**这里的 `bash.exe` 很可能就是 WSL 的启动器**，见下条）。
+- **为什么不"扫全盘"**：探测只做有限次存在性检查 + 极少数目录列举（带版本号的那三处），全程不递归遍历、不跑进程，因此没有"装完卡几秒"这种代价。找不到就如实说找不到，由你手填路径。
+- **"裸本体"不列为候选**：同一个 Git 安装根下如果既有 `bin\bash.exe` 又有 `usr\bin\bash.exe`（或 `mingw64\bin\bash.exe`），**只列前者**。本机实测两者的差别：前者会给出 `MSYSTEM=MINGW64`、把 `PATH` 前置成 `/mingw64/bin:/usr/bin`，于是 `head` / `grep` / `uname` 都在、中文文件名当参数也正常；后者 `MSYSTEM` 为空、`PATH` 只有继承来的 Windows PATH（里面只有 `D:\Git\cmd`），**coreutils 全部 command not found** —— 交给模型就是命令大面积失败。没有 `bin\bash.exe` 兄弟的来源（例如 MSYS2 只提供 `usr\bin\bash.exe`）照常列出；**你自己手填的路径不受这条限制**（那是你的选择）。
+- **为什么「先找 git」**：Git for Windows 不一定装在 `Program Files`（本机就在 `D:\Git`）。只按固定目录找会一边找不到、一边退到 PATH，而 Windows 上 PATH 里的 `bash.exe` 很可能就是 **WSL 的启动器**。
+- **WSL 被硬排除**：`C:\Windows\System32\bash.exe` 与 `…\Microsoft\WindowsApps\bash.exe` 一律不用 —— 它把 `D:\x` 解释成 `/mnt/d/x`，与模型手里的 Windows 路径、工作目录、`%TEMP%` 全都不兼容。只有在它确实存在时，卡片的状态行才会提一句「已排除 N 个 WSL 的 bash.exe」，不会在没装 WSL 的机器上凭空报警。
+- **改完立刻生效**：宿主半会在 `agent/created`（新会话）与设置变更时**遍历所有在跑会话**重新下发，不需要开新会话；切回 PowerShell 会把之前下发的限制**撤销**。
+- **与官方终端逐字对齐的行为**：工具描述、参数与输出 JSON Schema、`[stderr]` 分段、`(no output)` 兜底、标记顺序（沙箱拒绝 → 升级提示 → 超时 → `[killed by signal: X]` **或** `[exit code: N]` 在最末）、终端卡片（exit 状态拆成 pill，可点开看命令 / cwd / 输出）、后台任务（`run_in_background` + `job_output` / `job_kill`）、超时（默认 120s、上限 600s）、输出截断并把完整输出落盘、沙箱约束与 `sandbox_permissions` 升级审批。非零退出**不是错误**，只是末尾一个标记。
+- **失败不伤会话**：探测不到 bash、宿主没有 `subprocess`、某个会话本来就看不到 `pwsh`（此时官方 `restrict` 会拒绝）、非 Windows —— 一律只降级并在状态行写明原因，不抛错、不 veto 别的插件、不影响会话本身。
+- **一个诚实的副作用**：会话内工具面会随档位变化，而**会话历史里可能还留着旧工具名**。如果模型按旧名字调用，会拿到 unknown tool 之类的错 —— 让它换成 `bash` 重试即可（卡片上也写了这句）。
+- **非 Windows**：直接不接管（官方 bash 工具本来就在），卡片显示一行说明。
+
+## 维护：重启 DSH
+
+装了新插件、改了宿主半代码（比如本插件的「默认终端」、键位 schema）之后，DSH 需要重启才会加载新代码。设置页「输入体验」卡片**抬头右端**（GitHub 链接左边）有一枚「重启 DSH」。
+
+机制照搬插件市场 [dsh-market](https://github.com/dsh-market/dsh-market)（它的 `src/restart.ts` 里挂着一串 issue 号，每条都是"重启按钮按下去没用"的具体死法）：
+
+1. **两步确认**：点按钮先问宿主半"会怎么重启、当前有几个会话在跑"，确认条出现在抬头正下方，点「确认重启」才真重启 —— 重启会打断正在跑的会话（包括正在生成的那一轮）。
+2. **分离一个 node 助手进程**（`node -e <源码>`，detached + unref），宿主自己 500ms 后退出（延迟是为了让这个 HTTP 响应先发出去）。
+3. **助手等端口真的空出来**：每 250ms `connect` 探一次，最多 30 秒，通了再等 300ms（Windows 的 TIME_WAIT 尾巴）。固定 sleep 会让新宿主 `EADDRINUSE` 当场死掉。
+4. **用隐藏控制台的 PowerShell 起新宿主**：Windows 上 `detached` = `DETACHED_PROCESS` = 没有控制台，新宿主之后起的每个控制台子进程都会弹一个黑窗口；`powershell -NoProfile -WindowStyle Hidden` 给它一个隐藏控制台，助手那层再带 `windowsHide`。
+5. **起来之后再验证 20 秒**：端口没人监听就把诊断写进日志 —— 本来该记日志的宿主进程已经退出了，重启失败必须留证据。
+6. **界面靠 `boot` 号判断成功**：每 1.5 秒问一次状态，号变了（说明新进程接管了端口）就 `location.reload()`；60 秒还没变才报超时，并把日志路径告诉你。
+
+其它几点：
+
+- **日志**：助手写 `<系统临时目录>/composer-ux-restart-<时间戳>.out.log|err.log`（失败时界面会把路径显示出来）。
+- **两道关卡**：先过官方 `connection.requestRejection`（Host/Origin 围栏 + 浏览器令牌），再过本插件自己的"回环 peer + 无转发头 + `Origin` 与 `Host` 同源"——这是"杀进程"的接口，跨站页面一定带自己的 `Origin`，挡在这里。
+- **不该从界面里杀掉的宿主会拒绝**：宿主正被调试器附着（`--inspect` / `inspector.url()`），或者它在 systemd 下当服务跑（重启权归 supervisor，自己重启会把 cgroup 里的接管进程一起收掉）。这时按钮禁用并说明原因。
+- **退出走 `process.emit('SIGTERM')` 而不是 `process.kill(pid,'SIGTERM')`**：DSH 在 `apps/cli/src/profile-boot.ts` 注册了 SIGTERM handler（先 `fiber.dispose()` 再退出，自带 5 秒上限）。而 Windows 上 `process.kill` 等价于 `TerminateProcess` —— 本机实测 handler 一次都跑不到。兜底：10 秒后还活着就 `exit(0)`。
+- **第一次点的时候，正在跑的宿主还是上一版**（新路由要重启后才加载）：界面会如实说明"这次走旧机制，重启之后按钮就是新版了"。
+- 为什么 DSH 需要插件自己干这件事：官方没有重启宿主的机制（插件市场那边只提示「更改将在下次启动生效」），所以这件事只能由插件做。
+
 ## 结构
 
 仓库根目录（克隆或解压出来即是）：
@@ -156,18 +218,34 @@ dsh-composer-ux/
 ├── CHANGELOG.md                  # 版本更新日志
 ├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器），并做发行后处理
 ├── src/
-│   ├── host.ts                    # Host 半：注册 settings namespace + 把请求头镜像进 llm-pi-ai
-│   ├── settings-contract.ts       # 字段/默认值/菜单元数据（零依赖共享）
+│   ├── host.ts                    # Host 半：注册 settings namespace + 请求头镜像 + 「默认终端」+ 「重启 DSH」路由
+│   ├── settings-contract.ts       # 字段/默认值/菜单元数据 + 栏开关的迁移判据（零依赖共享）
+│   ├── restart.ts                 # 「重启 DSH」：助手进程/等端口/隐藏控制台/信任关卡/优雅退出（零 import）
 │   ├── client.tsx                 # Browser 半：设置页 + 菜单浮层 + 拦截器
+│   ├── terminal/                  # 「默认终端」（Windows：pwsh → Git Bash），全部零官方运行时依赖
+│   │   ├── discover.ts            # 探测：git 锚定反推 bash、硬排除 WSL、多候选排序（纯函数）
+│   │   ├── render.ts              # 结果渲染与 exit 状态解析（与官方逐字对齐）
+│   │   ├── sandbox.ts             # 沙箱策略面 + 升级审批（fail-closed，与官方同语义）
+│   │   ├── tool.ts                # bash 工具定义：schema / 执行 / 后台 / 中止 / 终端卡片
+│   │   ├── contracts.ts           # 字段、三档、候选净化、生效判定、状态行文案（纯函数）
+│   │   └── host.ts                # 宿主半接线：按会话下发 restrict+register+section、立刻覆盖在跑会话
 │   └── client/
 │       ├── chords.ts              # 键位编码/录制校验
 │       ├── interceptors.ts        # keydown/contextmenu 捕获拦截 + 回放
-│       ├── SettingsSection.tsx    # 设置页「输入体验」（顶部常显 + 折叠栏目）
+│       ├── SettingsSection.tsx    # 设置页「输入体验」（顶部常显 + 折叠栏目 + 默认终端卡片）
 │       ├── settings-style.ts      # 折叠卡片样式表（dsh-ux-* 类名注入）
 │       ├── ContextMenuHost.tsx    # shell.overlay 右键菜单
 │       └── styles.ts              # --dsw-* 令牌内联样式
+├── docs/settings-panel-0.5.0.png  # README 顶部那张设置页截图（用 tag 固定的 raw 链接引用，不进 npm 包）
 ├── test/
 │   ├── host-header-mirror.mjs          # 请求头镜像的行为测试（假 settings 驱动构建产物）
+│   ├── quick-commands.mjs              # 快捷指令 / 优化接口 / 路由注册 / 重启机制
+│   ├── quick-store.mjs                 # 快捷指令文件存储与写回路径
+│   ├── terminal-policy.mjs             # 默认终端：探测 / 渲染 / 升级审批 / bash 工具 / 宿主半接线
+│   ├── client-registration.mjs         # 客户端注册协议、右键行为、抬头按钮、六栏开关与标题行布局
+│   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红（21 条）
+│   ├── settings-render.mjs             # 真渲染测试（手动跑）：借 profile 的 react 把设置页渲染成 HTML
+│   ├── check-sections.mjs              # 升级前自查（只读）：拿真实 settings.yaml 跑一遍栏开关迁移
 │   └── opencode-header-wire-probe.mjs  # 线级探针：本地端点，用来看 DSH 出网请求带了什么头
 └── lib/                  # 构建产物（运行所需）
 ```
@@ -176,7 +254,12 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-node test/host-header-mirror.mjs  # 宿主半行为测试（写入/撤销/改名/幂等/不误删）
+npm test                          # 五个套件；当前 632 passed, 0 failed
+node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人
+node test/settings-render.mjs     # 手动跑：把设置页真渲染成 HTML，断言版式与互斥显示（20 项）
+node test/check-sections.mjs      # 只读：升级前看六栏会变成什么
+node test/host-header-mirror.mjs  # 只跑宿主半的请求头测试（写入/撤销/改名/幂等/不误删）
+node test/terminal-policy.mjs     # 只跑「默认终端」（探测 / 渲染 / 审批 / 工具 / 接线）
 # 线级探针（可选）：起一个本地端点，再把某条路由临时指过来，即可看到真实出网请求头
 node test/opencode-header-wire-probe.mjs 8799 600000
 # 若 DSH 源码检出不在默认路径：

@@ -17,7 +17,9 @@ import {
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
-  QUICK_PROMPT_MAX, QUICK_TEXT_MAX, SEND_PRESETS,
+  QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS,
+  KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+  TERMINAL_ENABLED_FIELD, activeSections,
   insertModeOf, newQuickPromptId, newSessionId,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
@@ -27,6 +29,10 @@ import {
   withInsertMode, withPromptAdded, withPromptMoved, withPromptMovedToCategory, withPromptPatched,
   withPromptRemoved,
 } from './prompt-book.ts'
+import {
+  TERMINAL_API_PATH, TERMINAL_BASH_PATH_FIELD, TERMINAL_MODES, TERMINAL_MODE_FIELD,
+  sanitizeTerminalCandidates,
+} from '../terminal/contracts.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { PillChoice } from './PillChoice.tsx'
@@ -88,27 +94,59 @@ function Chevron() {
 }
 
 /**
- * 可折叠栏目：整行标题就是按钮，默认折叠且不记忆展开状态
- * （每次打开设置页都回到折叠）。
+ * 可折叠栏目：标题行左侧是展开按钮（整块可点），右侧是**这一栏的开关**与从属控件；
+ * 默认折叠且不记忆展开状态（每次打开设置页都回到折叠）。
  */
-function FoldCard(props: { name: string; summary: string; children: React.ReactNode }) {
+function FoldCard(props: {
+  name: string
+  summary: string
+  /** 这一栏的开关（六栏都有）。关掉时概览前会加「未启用 · 」，卡片描边变虚线。 */
+  toggle?: { readonly checked: boolean; readonly onChange: (next: boolean) => void }
+  /** 标题行右侧、开关左边的从属控件（三档 / 小开关）。 */
+  controls?: React.ReactNode
+  children: React.ReactNode
+}) {
   const [open, setOpen] = useState(false)
+  const off = props.toggle !== undefined && props.toggle.checked === false
   return (
-    <section className={open ? 'dsh-ux-card dsh-ux-cardOpen' : 'dsh-ux-card'}>
-      <button
-        type="button"
-        className="dsh-ux-cardHeader"
-        aria-expanded={open}
-        onClick={() => { setOpen(current => !current) }}
-      >
-        <span className="dsh-ux-cardHeadText">
-          <span className="dsh-ux-cardName">{props.name}</span>
-          <span className="dsh-ux-cardDescription">{props.summary}</span>
+    <section className={[
+      'dsh-ux-card',
+      open ? 'dsh-ux-cardOpen' : '',
+      off ? 'dsh-ux-cardOff' : '',
+    ].filter(part => part !== '').join(' ')}>
+      {/*
+        标题行分成两块：左边整块是"展开"按钮（整行可点，键盘可达），右边是从属控件 + 本栏开关。
+        不能在 <button> 里塞按钮（HTML 不允许、点击也会冒泡成"展开"），所以拆成兄弟节点。
+      */}
+      <div className="dsh-ux-cardHeaderRow">
+        <button
+          type="button"
+          className="dsh-ux-cardHeader"
+          aria-expanded={open}
+          onClick={() => { setOpen(current => !current) }}
+        >
+          <span className="dsh-ux-cardHeadText">
+            <span className="dsh-ux-cardName">{props.name}</span>
+            <span className="dsh-ux-cardDescription">
+              {off ? `未启用 · ${props.summary}` : props.summary}
+            </span>
+          </span>
+          <span className={open ? 'dsh-ux-cardChevron dsh-ux-cardChevronOpen' : 'dsh-ux-cardChevron'}>
+            <Chevron />
+          </span>
+        </button>
+        <span className="dsh-ux-cardControls">
+          {props.controls}
+          {props.toggle !== undefined && (
+            <Switch
+              small
+              label={`${props.name}：启用这一栏`}
+              checked={props.toggle.checked}
+              onChange={props.toggle.onChange}
+            />
+          )}
         </span>
-        <span className={open ? 'dsh-ux-cardChevron dsh-ux-cardChevronOpen' : 'dsh-ux-cardChevron'}>
-          <Chevron />
-        </span>
-      </button>
+      </div>
       {open && <div className="dsh-ux-cardBody">{props.children}</div>}
     </section>
   )
@@ -211,6 +249,77 @@ function KeyRow(props: {
   )
 }
 
+/**
+ * 开关（胶囊滑块）。
+ *
+ * 抽出来是因为它现在有两个尺码：卡片内容区里用 `md`（36×20），折叠卡**标题行**里
+ * 用 `sm`（30×16，跟 11px 的标题字一行放得下）。开关画两遍迟早会分叉。
+ */
+function Switch(props: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  /** 无障碍名字（标题行里的开关没有可见文字，必须给）。 */
+  label: string
+  small?: boolean
+}) {
+  const { checked, onChange, label, small = false } = props
+  const width = small ? 30 : 36
+  const height = small ? 16 : 20
+  const knob = small ? 12 : 14
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      onClick={() => { onChange(!checked) }}
+      style={{
+        width,
+        height,
+        borderRadius: 999,
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        cursor: 'pointer',
+        background: checked
+          ? 'var(--dsw-alias-button-primary-fill)'
+          : 'var(--dsw-alias-interactive-bg-hover)',
+        position: 'relative',
+        flex: '0 0 auto',
+        padding: 0,
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          top: small ? 1 : 2,
+          left: checked ? width - knob - (small ? 1 : 2) : (small ? 1 : 2),
+          width: knob,
+          height: knob,
+          borderRadius: '50%',
+          background: checked
+            ? 'var(--dsw-alias-label-primary-foreground)'
+            : 'var(--dsw-alias-label-secondary)',
+          transition: 'left 0.12s ease',
+        }}
+      />
+    </button>
+  )
+}
+
+/** 标题行里的"文字 + 小开关"（「导航滚动」「边缘缩放」这类）。 */
+function MiniToggle(props: {
+  label: string
+  checked: boolean
+  onChange: (next: boolean) => void
+}) {
+  return (
+    <span className="dsh-ux-miniToggle">
+      <span className="dsh-ux-miniToggleLabel">{props.label}</span>
+      <Switch small label={props.label} checked={props.checked} onChange={props.onChange} />
+    </span>
+  )
+}
+
 /** 开关行。 */
 function ToggleRow(props: {
   label: string
@@ -227,40 +336,7 @@ function ToggleRow(props: {
         <div style={rowTitle}>{label}</div>
         {desc !== undefined && desc !== '' && <div style={rowDesc}>{desc}</div>}
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => { onChange(!checked) }}
-        style={{
-          width: 36,
-          height: 20,
-          borderRadius: 999,
-          border: '0.5px solid var(--dsw-alias-border-l2)',
-          cursor: 'pointer',
-          background: checked
-            ? 'var(--dsw-alias-button-primary-fill)'
-            : 'var(--dsw-alias-interactive-bg-hover)',
-          position: 'relative',
-          flex: '0 0 auto',
-          padding: 0,
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: checked ? 18 : 2,
-            width: 14,
-            height: 14,
-            borderRadius: '50%',
-            background: checked
-              ? 'var(--dsw-alias-label-primary-foreground)'
-              : 'var(--dsw-alias-label-secondary)',
-            transition: 'left 0.12s ease',
-          }}
-        />
-      </button>
+      <Switch label={label} checked={checked} onChange={onChange} />
     </div>
   )
 }
@@ -526,12 +602,355 @@ function QuickPromptsEditor(props: {
   )
 }
 
+/** 候选按钮的样式：与胶囊同源，但要能显示长路径。 */
+const candidatePill: CSSProperties = {
+  ...pill,
+  textAlign: 'left',
+  maxWidth: '100%',
+  overflowWrap: 'anywhere',
+  lineHeight: 1.4,
+}
+
+/**
+ * 「默认终端」卡片内容（Windows：把终端的 pwsh 换成 Git Bash）。
+ *
+ * 与其它卡片的区别：状态、候选表、当前生效 shell 三项都是**宿主半**写的
+ * （settings 里的 terminalStatus / terminalCandidates / terminalEffective，见 HOST_OWNED_FIELDS），
+ * 这里只读展示；用户能改的只有「档位」与「路径」两项。
+ */
+function DefaultTerminalBody(props: {
+  readonly settings: ComposerUxSettings
+  readonly setField: (field: SettingsField, value: unknown) => void
+  /** 档位胶囊已经搬到折叠卡标题行时传 true（内容区不再重复一份）。 */
+  readonly hideMode?: boolean
+}) {
+  const { settings, setField, hideMode = false } = props
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const candidates = settings.terminalCandidates
+
+  if (settings.terminalEffective === 'unsupported') {
+    return (
+      <p style={hintInfo}>
+        本插件只在 Windows 上接管终端（Windows 上 DSH 默认给模型的是 PowerShell）。当前平台不需要它，
+        这里的设置不会生效。
+      </p>
+    )
+  }
+
+  /** 点「自动发现」：让宿主半重新扫一遍本机（浏览器碰不到文件系统）。 */
+  const discover = async (): Promise<void> => {
+    setBusy(true)
+    setNote('')
+    try {
+      const response = await fetch(TERMINAL_API_PATH, { method: 'POST' })
+      const parsed = await response.json() as { candidates?: unknown }
+      const found = sanitizeTerminalCandidates(parsed.candidates)
+      setNote(found.length === 0
+        ? '没有找到可用的 bash（WSL 的 bash.exe 会被忽略，它按 Linux 规则解释路径）'
+        : `找到 ${String(found.length)} 个候选，已列在下方`)
+    } catch (error: unknown) {
+      setNote(`自动发现失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      {!hideMode && (
+      <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+        <div style={rowText}>
+          <div style={rowTitle}>终端工具</div>
+          <div style={rowDesc}>
+            {TERMINAL_MODES.find(item => item.id === settings.terminalMode)?.hint ?? ''}
+          </div>
+        </div>
+        <PillChoice
+          items={TERMINAL_MODES}
+          value={settings.terminalMode}
+          onChange={mode => { setField(TERMINAL_MODE_FIELD, mode) }}
+          ariaLabel="终端工具"
+        />
+      </div>
+      )}
+
+      {settings.terminalMode !== 'pwsh' && (<>
+        <TextFieldRow
+          title="Git Bash 路径"
+          desc="留空 = 用自动探测到的那一个（先找 git，再由同一个安装反推 bash）"
+          value={settings.terminalBashPath}
+          placeholder="留空 = 自动"
+          maxLength={400}
+          onChange={next => { setField(TERMINAL_BASH_PATH_FIELD, next) }}
+          action={{ label: busy ? '探测中…' : '自动发现', onClick: () => { void discover() } }}
+        />
+        {candidates.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+            {candidates.map(candidate => (
+              <button
+                key={candidate.path}
+                type="button"
+                title={candidate.path}
+                style={candidate.path === settings.terminalBashPath ? { ...candidatePill, ...pillActive } : candidatePill}
+                onClick={() => { setField(TERMINAL_BASH_PATH_FIELD, candidate.path) }}
+              >
+                {candidate.label}：{candidate.path}{candidate.explicit ? '（你填的）' : ''}
+              </button>
+            ))}
+          </div>
+        )}
+        {note !== '' && <p style={hintInfo}>{note}</p>}
+      </>)}
+
+      <p style={hintInfo}>
+        状态：{settings.terminalStatus === '' ? '等待宿主半探测…' : settings.terminalStatus}
+      </p>
+      <p style={hintInfo}>
+        · 换成 Git Bash 后，模型看到的终端工具就叫 bash（命令按 bash/POSIX 写），PowerShell 那个工具
+        会从它的工具列表里消失 —— 一个会话只面对一个终端工具。
+      </p>
+      <p style={hintInfo}>
+        · 改档位会立刻重新下发给正在跑的会话。但会话历史里可能还留着旧工具名：如果哪儿报了
+        unknown tool 之类的错，让模型改用 bash 重试即可，不影响会话本身。
+      </p>
+      <p style={hintInfo}>
+        · 只对 Windows 生效；WSL 的 bash.exe 会被主动排除（它把 D:\ 这类路径解释成 /mnt/d，与模型手里的
+        Windows 工作目录不兼容）。沙箱、审批、超时与输出截断的行为与 DSH 自带终端一致。
+      </p>
+    </>
+  )
+}
+
+/**
+ * 「重启 DSH」：抬头右端一枚按钮 + 抬头正下方的确认条。
+ *
+ * 机制（宿主半，见 `src/restart.ts`）照搬插件市场：分离一个 node 助手进程 → 自己退出 →
+ * 助手等端口真的空出来 → 用隐藏控制台的 PowerShell 起新宿主 → 20 秒内确认端口有人监听。
+ * 界面这一侧只管三件事：**两步确认**、把"会怎么重启 / 有几个会话在跑"说清楚、
+ * 重启后靠 `boot` 号变了判断新进程真的起来了，然后刷新页面。
+ *
+ * 为什么是两步确认而不是市场那样一点就走：市场那枚按钮只出现在「有待重启的东西」的横幅里
+ * （那一刻你手里没别的事），而这枚常驻在抬头，任何时候都能点到 —— 包括你正跑着一轮长生成。
+ */
+
+/** 宿主半告诉界面的事实。 */
+interface RestartFacts {
+  /** 当前有几个会话在跑（重启会把它们打断）。 */
+  readonly running: number
+  /** 会怎么重启（重放用的命令，给用户看一眼）。 */
+  readonly command: string
+  /** 诊断日志落点（失败时告诉用户去哪看）。 */
+  readonly logHint: string
+  /** 非 null = 这个宿主不该被从界面里杀掉（调试器 / systemd）。 */
+  readonly blocked: string | null
+  /** 这次启动的标识；null = 宿主半还是 0.5.0 之前那版（没有这个字段）。 */
+  readonly boot: string | null
+}
+
+type RestartStage = 'idle' | 'asking' | 'restarting' | 'failed'
+
+interface RestartController {
+  readonly stage: RestartStage
+  readonly detail: string
+  readonly blocked: string | null
+  ask(): void
+  confirm(): void
+  cancel(): void
+}
+
+/** 最多等 60 秒：新宿主起来约 7 秒，但慢了也不该让用户对着"正在重启"无限干等。 */
+const RESTART_WAIT_MS = 60_000
+/** 轮询间隔（对齐插件市场：1.5 秒问一次状态）。 */
+const RESTART_POLL_MS = 1_500
+
+/** 「不该从界面里杀掉」的原因文案。 */
+function blockedText(blocked: string): string {
+  if (blocked === 'debugger') {
+    return '这个宿主正被调试器附着：从界面里杀掉它只会连调试会话一起丢掉，请从 IDE 或终端停止它再启动。'
+  }
+  if (blocked.startsWith('supervised:')) {
+    return `这个宿主由 ${blocked.slice('supervised:'.length)} 当服务在跑，重启该归它管`
+      + '（它会连同整个 cgroup 一起收掉，插件自己重启只会让服务再也起不来）。'
+  }
+  return `这个宿主当前不允许从界面重启（${blocked}）。`
+}
+
+/** 重启按钮的状态机：读状态 → 确认 → 排重启 → 等新进程。 */
+function useRestart(): RestartController {
+  const [stage, setStage] = useState<RestartStage>('idle')
+  const [detail, setDetail] = useState('')
+  const [blocked, setBlocked] = useState<string | null>(null)
+
+  /** 读宿主半的状态；`{ error }` = 读不到（HTTP 失败 / 连接断了）。 */
+  const readFacts = async (): Promise<RestartFacts | { error: string }> => {
+    const response = await fetch(RESTART_API_PATH, { cache: 'no-store' })
+    if (!response.ok) return { error: `HTTP ${String(response.status)}` }
+    const parsed = await response.json() as Record<string, unknown>
+    return {
+      running: typeof parsed.running === 'number' ? parsed.running : 0,
+      command: typeof parsed.command === 'string' ? parsed.command : '',
+      logHint: typeof parsed.logHint === 'string' ? parsed.logHint : '',
+      blocked: typeof parsed.blocked === 'string' ? parsed.blocked : null,
+      boot: typeof parsed.boot === 'string' ? parsed.boot : null,
+    }
+  }
+
+  /** 等新进程起来：`boot` 号一变就刷新页面。 */
+  const awaitNewBoot = async (previousBoot: string | null, logHint: string): Promise<void> => {
+    const deadline = Date.now() + RESTART_WAIT_MS
+    while (Date.now() < deadline) {
+      await new Promise<void>(done => { setTimeout(done, RESTART_POLL_MS) })
+      try {
+        const facts = await readFacts()
+        if ('error' in facts) continue
+        // 旧版宿主没有 boot 字段：只要拿到任何一个号，就说明新进程已经接管了这个端口。
+        if (facts.boot !== null && facts.boot !== previousBoot) {
+          location.reload()
+          return
+        }
+      } catch {
+        // 新进程还没起来（连接被拒）：正常，继续等。
+      }
+    }
+    setStage('failed')
+    setDetail('等了 60 秒也没等到新进程。请手动运行 restart-webui.bat 重启一次。'
+      + (logHint === '' ? '' : `宿主半的诊断日志在 ${logHint}。`))
+  }
+
+  /** 第一步：读"会怎么重启、现在有几个会话在跑"。 */
+  const ask = (): void => {
+    setStage('asking')
+    setDetail('正在读取重启方式…')
+    void (async () => {
+      try {
+        const facts = await readFacts()
+        if ('error' in facts) {
+          setStage('failed')
+          setDetail(`读不到重启状态（${facts.error}）—— 宿主半可能还没换到带这条路由的版本，`
+            + '请先手动运行一次 restart-webui.bat。')
+          return
+        }
+        setBlocked(facts.blocked)
+        if (facts.blocked !== null) {
+          setStage('failed')
+          setDetail(blockedText(facts.blocked))
+          return
+        }
+        setStage('asking')
+        // 宿主半没有 boot 字段 = 还是上一版（新路由要重启后才加载）。这时如实说明：
+        // 这一次会走旧机制，而且重启之后按钮才变成新版 —— 别让用户以为没生效。
+        setDetail((facts.boot === null
+          ? '宿主半还是上一版：这次重启会走旧机制（写脚本 + 自己退出），重启之后按钮就是新版了。'
+          : `重启方式：${facts.command}。`)
+          + `当前有 ${String(facts.running)} 个会话在跑 —— 重启会打断它们（包括正在生成的那一轮）。`)
+      } catch (error: unknown) {
+        setStage('failed')
+        setDetail(`读不到重启状态：${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }
+
+  /** 第二步：确认后让宿主半排重启，然后等新进程。 */
+  const confirm = (): void => {
+    setStage('restarting')
+    setDetail('已发出重启请求 —— 正在等新进程起来（这个页面会自己回来）…')
+    void (async () => {
+      let previousBoot: string | null = null
+      let logHint = ''
+      try {
+        const before = await readFacts()
+        if (!('error' in before)) {
+          previousBoot = before.boot
+          logHint = before.logHint
+        }
+      } catch {
+        // 读不到也无所谓：下面的轮询只需要"号变了"这一个条件。
+      }
+      try {
+        const response = await fetch(RESTART_API_PATH, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        })
+        const parsed = await response.json() as { ok?: boolean; error?: string }
+        if (response.status !== 202 && parsed.ok !== true) {
+          setStage('failed')
+          setDetail(`重启没成功：${parsed.error ?? `HTTP ${String(response.status)}`}`
+            + ' —— 请手动运行 restart-webui.bat。')
+          return
+        }
+      } catch {
+        // 宿主可能死在响应发完之前：那不是失败，继续等新进程。
+      }
+      await awaitNewBoot(previousBoot, logHint)
+    })()
+  }
+
+  const cancel = (): void => {
+    setStage('idle')
+    setDetail('')
+  }
+
+  return { stage, detail, blocked, ask, confirm, cancel }
+}
+
+/** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
+function RestartButton({ restart }: { readonly restart: RestartController }) {
+  const busy = restart.stage === 'restarting' || restart.stage === 'asking'
+  const blocked = restart.blocked
+  return (
+    <button
+      type="button"
+      className="dsh-ux-restartButton"
+      disabled={busy || blocked !== null}
+      title={blocked === null
+        ? '重启 DSH：让宿主半的新代码（默认终端、键位 schema）生效。点一下会先让你确认一次。'
+        : blockedText(blocked)}
+      onClick={() => { restart.ask() }}
+    >
+      {restart.stage === 'restarting' ? '重启中…' : '重启 DSH'}
+    </button>
+  )
+}
+
+/** 抬头正下方的确认条（市场那个「N 项变更需重启」横幅的位置）。 */
+function RestartBanner({ restart }: { readonly restart: RestartController }) {
+  if (restart.stage === 'idle') return null
+  const failed = restart.stage === 'failed'
+  return (
+    <div className={failed ? 'dsh-ux-restartBanner dsh-ux-restartBannerFailed' : 'dsh-ux-restartBanner'}>
+      <span className="dsh-ux-restartBannerText">{restart.detail}</span>
+      {restart.stage === 'asking' && (
+        <span className="dsh-ux-restartBannerActions">
+          <button type="button" className="dsh-ux-restartGo" onClick={() => { restart.confirm() }}>确认重启</button>
+          <button type="button" className="dsh-ux-restartCancel" onClick={() => { restart.cancel() }}>取消</button>
+        </span>
+      )}
+      {failed && (
+        <span className="dsh-ux-restartBannerActions">
+          <button type="button" className="dsh-ux-restartCancel" onClick={() => { restart.cancel() }}>知道了</button>
+        </span>
+      )}
+    </div>
+  )
+}
+
 /** 设置页主体。 */
 export function SettingsSection({ useLive, useBook, useBookStatus, actions }: SettingsSectionProps) {
   const settings = useLive(item => item)
   const book = useBook(item => item)
   const bookStatus = useBookStatus(item => item)
   const [conflict, setConflict] = useState<string | null>(null)
+  // 重启按钮在抬头、确认条在抬头正下方 —— 两处要读同一份状态，所以状态提到这一层。
+  const restart = useRestart()
+  /**
+   * 六栏各自的开关状态（总开关 + 栏开关），六张卡的标题行与内容都读它。
+   *
+   * 单项都走 `activeSections` 而不是在这里各写一遍 `settings.enabled && …`：
+   * 漏掉总闸是这套两层级开关最容易犯的错，判据只能有一处。
+   */
+  const sections = activeSections(settings)
 
   const setKey = (side: 'send' | 'newline', chord: string): void => {
     const other = side === 'send' ? settings.newlineKey : settings.sendKey
@@ -569,6 +988,16 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
   const headerStatusText = settings.headerEnabled
     ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
     : '未启用（打开上方开关即写入）'
+  // 终端卡片的概览：直接复用宿主半写回来的状态（'已生效：…' / '没找到可用的 bash' 这类）。
+  // 「这一栏没启用」优先于宿主半的状态 —— 没开的时候状态行写的是"未启用"，但那句话在概览里
+  // 不如「未启用」四个字直白（FoldCard 会再加一次前缀，所以这里只给被关掉时的档位描述）。
+  const terminalSummary = sections.terminal === false
+    ? (settings.terminalMode === 'pwsh' ? '保持 PowerShell' : '打开后接管终端')
+    : settings.terminalEffective === 'unsupported'
+      ? '非 Windows：不需要'
+      : settings.terminalMode === 'pwsh'
+        ? '当前：保持 PowerShell'
+        : (settings.terminalEffective === 'bash' ? '当前：Git Bash' : '当前：PowerShell（未接管）')
 
   return (
     <div style={{ padding: '4px 2px' }}>
@@ -581,7 +1010,29 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
               dsh-composer-ux · 主聊天输入框的键位、右键菜单与设置面板；设置即时生效并持久保存。
             </p>
           </span>
+          {/*
+            「重启 DSH」放在抬头右端、GitHub 链接左边：这是设置页第一眼就扫到的位置，
+            而它要解决的问题（宿主半改了要重启才生效）恰好是用户点进设置页时最想做的事。
+            确认条在抬头正下方（见下面的 RestartBanner），跟市场的「待重启」横幅同一个位置。
+          */}
+          <span className="dsh-ux-cardActions">
+            <RestartButton restart={restart} />
+            {/*
+              仓库入口：用真实的 <a>（新标签打开、不带 referrer），地址来自契约里的 REPO_URL ——
+              客户端不许硬编码第二份地址，否则改了仓库两处会分叉（有测试盯着）。
+            */}
+            <a
+              className="dsh-ux-cardLink"
+              href={REPO_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="在 GitHub 上查看这个插件（新标签打开）"
+            >
+              GitHub <span aria-hidden="true">↗</span>
+            </a>
+          </span>
         </div>
+        <RestartBanner restart={restart} />
         <div className="dsh-ux-cardBody">
           <ToggleRow
             first
@@ -600,7 +1051,14 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
       </section>
 
       {settings.enabled && (<>
-      <FoldCard name="键位" summary={keySummary}>
+      <FoldCard
+        name="键位"
+        summary={keySummary}
+        toggle={{
+          checked: sections.keys,
+          onChange: next => { actions.setField(KEYS_ENABLED_FIELD, next) },
+        }}
+      >
         <p style={bodyLead}>
           支持常用预设，也可以点击「自定义…」后直接按下任意组合键录制（Esc 取消，Backspace 清除）。
           未绑定的 Enter 系按键不会触发发送或换行；Ctrl+Enter / ⌘+Enter 未被绑定时保留原「加速提交」行为；
@@ -635,16 +1093,26 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
         </div>
       </FoldCard>
 
-      <FoldCard name="右键菜单" summary={menuSummary}>
+      {/*
+        三档说明与那 7 个条目开关**都在卡内**，且按当前档位只显示相关的那部分
+        （用户要求：点官方看官方的、点浏览器看浏览器的、点自定义看自定义的）。
+        0.5.0 先做的是「7 项开关搬到标题行的『7 项 ▼』条」，用户看过真实界面后改回卡内：
+        那 7 项本来就只对「自定义」档有意义，摆在标题行等于在任何档位都能改一堆当时不生效的东西。
+      */}
+      <FoldCard
+        name="右键菜单"
+        summary={menuSummary}
+        toggle={{
+          checked: sections.menu,
+          onChange: next => { actions.setField(MENU_ENABLED_FIELD, next) },
+        }}
+      >
         <p style={bodyLead}>
           右键点击输入框时弹出哪一种菜单。只影响右键，不影响键位与其它功能。
         </p>
         <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
           <div style={rowText}>
             <div style={rowTitle}>菜单来源</div>
-            <div style={rowDesc}>
-              {MENU_MODES.find(item => item.id === settings.menuMode)?.hint ?? ''}
-            </div>
           </div>
           <PillChoice
             items={MENU_MODES}
@@ -653,57 +1121,77 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
             ariaLabel="右键菜单来源"
           />
         </div>
-        <p style={hintInfo}>
-          官方：本插件完全不介入，DSH 与其它插件自己的右键处理原样生效（DSH 官方输入框本身没有
-          右键菜单，所以通常看到的就是浏览器的菜单）。
-        </p>
-        <p style={hintInfo}>
-          浏览器：固定用浏览器自带的菜单（样子随浏览器而变），并在本插件这一层挡住其它插件的菜单；
-          好处是粘贴免授权、零配置。
-        </p>
-        <p style={hintInfo}>
-          自定义：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）。这一档的「粘贴」
-          要读剪贴板，浏览器会先要一次授权——三家浏览器的处理不一样：
-        </p>
-        <p style={hintInfo}>
-          · Chrome / Edge（谷歌 / 微软浏览器）：弹出后点「允许」即可，之后会记住这个站点、不再问。
-          要改或撤销授权：点地址栏最左边的网站图标 → 网站设置（Edge 叫「此站点的权限」）→ 剪贴板；
-          也可以直接在地址栏输入 chrome://settings/content/clipboard（Edge 输入
-          edge://settings/content/clipboard）。
-        </p>
-        <p style={hintInfo}>
-          · Firefox：不允许网页静默读剪贴板——你点本插件的「粘贴」后，它会先弹一个只有「粘贴(P)」
-          一项的小窗（约 1 秒后才可点），点它才完成这次粘贴。这是 Firefox 的安全机制，插件关不掉
-          （实测：about:config 里的剪贴板首选项对它无效）。不想多这一步就直接按 Ctrl+V，
-          或把上面的「菜单来源」换成「浏览器 / 官方」档——那两档用的是浏览器自己的粘贴。
-        </p>
-        <p style={hintInfo}>
-          注意：chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
-          或复制上面那串粘贴到地址栏。
-        </p>
-        {settings.menuMode === 'custom' && (<>
-        {MENU_ITEMS.map(item => (
-          <ToggleRow
-            key={item.field}
-            label={item.label}
-            desc={item.shortcut !== '' ? `快捷键 ${item.shortcut}` : ''}
-            checked={settings[item.field]}
-            onChange={next => { actions.setField(item.field as MenuField, next) }}
-          />
-        ))}
-        <div style={{ marginTop: 10 }}>
-          <button
-            type="button"
-            style={pill}
-            onClick={() => { for (const item of MENU_ITEMS) actions.setField(item.field as MenuField, true) }}
-          >
-            全部开启
-          </button>
-        </div>
-        </>)}
+        {settings.menuMode === 'official' && (
+          <p style={hintInfo}>
+            <strong>官方</strong>：本插件完全不介入，DSH 与其它插件自己的右键处理原样生效
+            （DSH 官方输入框本身没有右键菜单，所以通常看到的就是浏览器的菜单）。
+          </p>
+        )}
+        {settings.menuMode === 'browser' && (
+          <p style={hintInfo}>
+            <strong>浏览器</strong>：固定用浏览器自带的菜单（样子随浏览器而变），并在本插件这一层
+            挡住其它插件的菜单；好处是粘贴免授权、零配置。
+          </p>
+        )}
+        {settings.menuMode === 'custom' && (
+          <>
+            <p style={hintInfo}>
+              <strong>自定义</strong>：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）。
+              这一档的「粘贴」要读剪贴板，浏览器会先要一次授权——三家浏览器的处理不一样：
+            </p>
+            <p style={hintInfo}>
+              · Chrome / Edge（谷歌 / 微软浏览器）：弹出后点「允许」即可，之后会记住这个站点、不再问。
+              要改或撤销授权：点地址栏最左边的网站图标 → 网站设置（Edge 叫「此站点的权限」）→ 剪贴板；
+              也可以直接在地址栏输入 chrome://settings/content/clipboard（Edge 输入
+              edge://settings/content/clipboard）。
+            </p>
+            <p style={hintInfo}>
+              · Firefox：不允许网页静默读剪贴板——你点本插件的「粘贴」后，它会先弹一个只有「粘贴(P)」
+              一项的小窗（约 1 秒后才可点），点它才完成这次粘贴。这是 Firefox 的安全机制，插件关不掉
+              （实测：about:config 里的剪贴板首选项对它无效）。不想多这一步就直接按 Ctrl+V，
+              或把上面的「菜单来源」换成「浏览器 / 官方」档——那两档用的是浏览器自己的粘贴。
+            </p>
+            <p style={hintInfo}>
+              注意：chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
+              或复制上面那串粘贴到地址栏。
+            </p>
+            <div style={{ ...row, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+              <div style={rowText}>
+                <div style={rowTitle}>菜单条目</div>
+                <div style={rowDesc}>这 7 个开关决定自定义菜单里出现哪些条目，关掉的不显示。</div>
+              </div>
+            </div>
+            {MENU_ITEMS.map((item, index) => (
+              <ToggleRow
+                key={item.field}
+                first={index === 0}
+                label={item.label}
+                desc={item.shortcut !== '' ? `快捷键 ${item.shortcut}` : ''}
+                checked={settings[item.field]}
+                onChange={next => { actions.setField(item.field as MenuField, next) }}
+              />
+            ))}
+            <div style={{ padding: '8px 0 2px' }}>
+              <button
+                type="button"
+                style={pill}
+                onClick={() => { for (const item of MENU_ITEMS) actions.setField(item.field as MenuField, true) }}
+              >
+                全部开启
+              </button>
+            </div>
+          </>
+        )}
       </FoldCard>
 
-      <FoldCard name="快捷指令" summary={quickSummary}>
+      <FoldCard
+        name="快捷指令"
+        summary={quickSummary}
+        toggle={{
+          checked: sections.quick,
+          onChange: next => { actions.setField(QUICK_ENABLED_FIELD, next) },
+        }}
+      >
         <p style={bodyLead}>
           输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框。
           每条右侧的三选一决定<strong>发送时怎么附加</strong>：
@@ -751,25 +1239,34 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
         </div>
       </FoldCard>
 
-      <FoldCard name="设置面板" summary={panelSummary}>
+      <FoldCard
+        name="设置面板"
+        summary={panelSummary}
+        toggle={{
+          checked: sections.panel,
+          onChange: next => { actions.setField(PANEL_ENABLED_FIELD, next) },
+        }}
+        // 两个开关从内容区搬到标题行（用户要求：卡内已有的开关都移到标题栏）。
+        controls={(
+          <>
+            <MiniToggle
+              label="导航滚动"
+              checked={settings.panelScroll}
+              onChange={next => { actions.setField(PANEL_SCROLL_FIELD, next) }}
+            />
+            <MiniToggle
+              label="边缘缩放"
+              checked={settings.panelResize}
+              onChange={next => { actions.setField(PANEL_RESIZE_FIELD, next) }}
+            />
+          </>
+        )}
+      >
         <p style={bodyLead}>
           插件装得多时设置条目很长：开启「导航可滚动」后，左侧导航在溢出时会出现滚动条。
           开启「边缘调整大小」后，把鼠标移到设置面板的边或角上（出现高亮或光标变化）拖动即可改变面板大小，
-          尺寸会记住，下次打开保持。
+          尺寸会记住，下次打开保持。（这两个开关在标题行上。）
         </p>
-        <ToggleRow
-          first
-          label="导航可滚动"
-          desc="设置条目超出面板高度时显示滚动条"
-          checked={settings.panelScroll}
-          onChange={next => { actions.setField(PANEL_SCROLL_FIELD, next) }}
-        />
-        <ToggleRow
-          label="边缘调整大小"
-          desc="拖动面板四边 / 四角改变面板尺寸"
-          checked={settings.panelResize}
-          onChange={next => { actions.setField(PANEL_RESIZE_FIELD, next) }}
-        />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
           <span style={rowDesc}>尺寸预设：</span>
           <button
@@ -802,7 +1299,15 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
         </div>
       </FoldCard>
 
-      <FoldCard name="OpenCode 请求头" summary={headerSummary}>
+      <FoldCard
+        name="OpenCode 请求头"
+        summary={headerSummary}
+        // 这一栏没有新键：原来的「附加请求头」本来就是"这一栏要不要生效"，直接当卡级开关。
+        toggle={{
+          checked: sections.header,
+          onChange: next => { actions.setField(HEADER_ENABLED_FIELD, next) },
+        }}
+      >
         {/* 用户实测踩过的坑，放区块最前面：这一栏是为了 OpenCode 的 API 地址服务的，
             用 DSH 自带的地址配置发图片会报错。 */}
         <p style={hintError}>
@@ -817,13 +1322,6 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           只对 llm-pi-ai 里「已存在」的 opencode 系路由生效，不会凭空新建 provider；
           总开关关闭或本栏目停用时，写入的头会自动撤销。
         </p>
-        <ToggleRow
-          first
-          label="附加请求头"
-          desc="打开即写入，并在每次启动时补齐；关闭即撤销"
-          checked={settings.headerEnabled}
-          onChange={next => { actions.setField(HEADER_ENABLED_FIELD, next) }}
-        />
         <TextFieldRow
           title="头名"
           desc={`默认 ${DEFAULT_HEADER_NAME}（OpenCode 官方要求的那一个）`}
@@ -853,6 +1351,33 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           onChange={next => { actions.setField(HEADER_ROUTES_FIELD, next) }}
         />
         <p style={hintInfo}>状态：{headerStatusText}</p>
+      </FoldCard>
+
+      <FoldCard
+        name="默认终端"
+        summary={terminalSummary}
+        toggle={{
+          checked: sections.terminal,
+          onChange: next => { actions.setField(TERMINAL_ENABLED_FIELD, next) },
+        }}
+        // 三档从内容区搬到标题行（它比开关更适合当"这一栏当前是什么状态"的展示）。
+        controls={(
+          <PillChoice
+            compact
+            items={TERMINAL_MODES}
+            value={settings.terminalMode}
+            onChange={mode => { actions.setField(TERMINAL_MODE_FIELD, mode) }}
+            ariaLabel="终端工具"
+          />
+        )}
+      >
+        <p style={bodyLead}>
+          Windows 上 DSH 给模型的终端工具是 PowerShell，而模型对 bash 语法的把握明显更好。这一栏把终端
+          换成 Git Bash：模型看到的工具就叫 bash、PowerShell 那个工具会从它的工具列表里消失，
+          命令里的路径与引号按 bash 规则写。本机不需要装 Git for Windows 到默认目录——探测会先找
+          git，再由同一个安装反推 bash。（档位在标题行上：自动 / Git Bash / PowerShell。）
+        </p>
+        <DefaultTerminalBody settings={settings} setField={actions.setField} hideMode />
       </FoldCard>
       </>)}
     </div>

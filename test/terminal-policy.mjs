@@ -1045,5 +1045,101 @@ const run = (files, options = {}) => pure.discoverBashCandidates({
       && pure.unpreparedBashRoot('C:/msys64/usr/bin/bash.exe') === 'C:/msys64')
   }
 
+// ══════════════ 19. 「要么整套换上、要么一点不换」：注册失败必须回滚 restrict ════════
+// 这一节是从 A（converk/dsh-tweaks 的 git-bash-terminal-tool）的 `src/host/replace.ts`
+// 里抄回来的纪律：它注册失败时调 `releaseRestriction()`，注释原话是「避免留下
+// 『两个都看不见』的坏状态」。我们原来的实现只记一行 notes，restrict 留在那儿 →
+// 该会话变成「pwsh 被挡住 + bash 不在」= 一个 shell 工具都调不到，而状态行还说"已生效"。
+console.log('19. 注册失败要回滚 restrict（否则该会话没有任何 shell 工具）')
+{
+  /** 一个假 agent：可注入"注册抛错 / 注册不返回 disposer / restrict 抛错"三种故障。 */
+  const makeAgent = (options = {}) => {
+    const capture = { restricts: [], registers: [], sections: [], waterfalls: [], lifted: 0 }
+    return {
+      capture,
+      ctx: {
+        tools: {
+          restrict: options.restrictThrows === true
+            ? () => { throw new Error('names unknown global tool "pwsh"') }
+            : (filter) => { capture.restricts.push(filter); return () => { capture.lifted += 1 } },
+          register: options.register === 'throws'
+            ? () => { throw new Error('unsupported JSON schema') }
+            : options.register === 'no-disposer'
+              ? (definition) => { capture.registers.push(definition); return undefined }
+              : (definition) => { capture.registers.push(definition); return () => {} },
+        },
+        systemPrompt: { section: (section) => { capture.sections.push(section); return () => {} } },
+        on: (event, listener) => { capture.waterfalls.push({ event, listener }); return () => {} },
+      },
+    }
+  }
+  const makeCtx = (agents) => ({
+    get: name => (name === 'agents'
+      ? { list: () => agents }
+      : name === 'connection' ? { requestRejection: () => undefined } : undefined),
+    on: () => () => {},
+    effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose() } },
+    webServer: { register: () => () => {} },
+  })
+  const settingsWith = (row) => {
+    const writes = []
+    return {
+      writes,
+      get: () => row,
+      mutate: async (_ns, ops) => {
+        for (const op of ops) {
+          if (op.op === 'set') { row[op.path[0]] = op.value; writes.push({ path: op.path[0], value: op.value }) }
+        }
+      },
+    }
+  }
+  const writeOf = (settings, field) => settings.writes.filter(write => write.path === field).at(-1)?.value
+  const found = {
+    candidates: [{ path: 'D:/Git/bin/bash.exe', kind: 'git', label: 'Git for Windows', explicit: false }],
+    excluded: [],
+  }
+  const deps = () => ({ subprocess: {} })
+  const boot = (agent, settings) => {
+    pure.installTerminalPolicy(makeCtx([agent]), 'composer-ux', settings, deps, {
+      platform: 'win32', discover: () => found, exists: () => true,
+    })
+    return new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  {
+    const agent = makeAgent({ register: 'throws' })
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'gitbash', terminalBashPath: '' })
+    await boot(agent, settings)
+    check('注册抛错时：restrict 被回滚（该会话保住 pwsh 可用）',
+      agent.capture.lifted === 1, String(agent.capture.lifted))
+    check('注册抛错时：terminalEffective 不谎报已生效',
+      writeOf(settings, 'terminalEffective') === 'pwsh', String(writeOf(settings, 'terminalEffective')))
+    check('注册抛错时：状态行说的是"没能换上"（不是"没找到 bash"）',
+      String(writeOf(settings, 'terminalStatus')).includes('没能换上'), String(writeOf(settings, 'terminalStatus')))
+    check('注册抛错时：原因如实回传（下发失败：…）',
+      String(writeOf(settings, 'terminalStatus')).includes('下发失败'), String(writeOf(settings, 'terminalStatus')))
+  }
+  {
+    const agent = makeAgent({ register: 'no-disposer' })
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'gitbash', terminalBashPath: '' })
+    await boot(agent, settings)
+    check('register 不返回 disposer（这一版注册面不可用）同样回滚 restrict',
+      agent.capture.lifted === 1, String(agent.capture.lifted))
+    check('register 不返回 disposer 时：状态回落 pwsh',
+      writeOf(settings, 'terminalEffective') === 'pwsh', String(writeOf(settings, 'terminalEffective')))
+  }
+  {
+    // 子代理已继承父层的处理结果 → restrict 抛错，但注册成功：这是**良性跳过**，不是失败。
+    // 这条用来防止上面那次回滚"改过头"，把正常的子代理也判成失败。
+    const agent = makeAgent({ restrictThrows: true })
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'gitbash', terminalBashPath: '' })
+    await boot(agent, settings)
+    check('restrict 抛错（子代理已继承）不算失败：bash 照样注册',
+      agent.capture.registers.length === 1, String(agent.capture.registers.length))
+    check('restrict 抛错（子代理已继承）不算失败：状态照旧报已生效',
+      writeOf(settings, 'terminalEffective') === 'bash', String(writeOf(settings, 'terminalEffective')))
+  }
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exitCode = failures === 0 ? 0 : 1

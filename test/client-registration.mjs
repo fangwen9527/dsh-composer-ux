@@ -179,6 +179,21 @@ const ctx = {
     const dispose = fn()
     return () => { if (typeof dispose === 'function') dispose() }
   },
+  /**
+   * 假的 `ctx.inject`：与 cordis 同语义 —— **依赖全在场才回调，缺席就静默不调**。
+   *
+   * 本插件用它各等一次 `configForms`（DSH 0.1.7）与 `settingsScope`（0.1.6 及以前），
+   * 哪个在场就用哪个（见 src/client.tsx 的 adoptSettings）。这里只备了 settingsScope，
+   * 所以走的正是 0.1.6 那条路；0.1.7 那条路由 test/settings-service-adopt.mjs 覆盖。
+   */
+  inject: (deps, callback) => {
+    const view = {}
+    for (const name of deps) {
+      if (ctx[name] === undefined) return
+      view[name] = ctx[name]
+    }
+    callback(view)
+  },
 }
 
 moduleExports.apply(ctx)

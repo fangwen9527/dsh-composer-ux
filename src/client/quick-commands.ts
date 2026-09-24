@@ -202,6 +202,13 @@ export function sendButtonOf(target: EventTarget | null): HTMLButtonElement | nu
   return last
 }
 
+/** 一条被宿主丢掉的条目（面板据此如实告诉用户"丢了几条、为什么"）。 */
+export interface OptimizeDropped {
+  readonly id: string
+  readonly kind: string
+  readonly reason: string
+}
+
 /** 一次优化的结果。 */
 export interface OptimizeOutcome {
   readonly ok: boolean
@@ -211,6 +218,42 @@ export interface OptimizeOutcome {
   readonly error?: string
   /** 成功时：实际使用的路由（用于「优化没生效」时的排查）。 */
   readonly route?: string
+  /** 0.6.0 起：通过逐字依据校验、真的进入成品的条目数。 */
+  readonly itemCount?: number
+  /** 0.6.0 起：被丢掉的条目（引文对不上原话 / 超上限 / 超篇幅预算）。 */
+  readonly dropped?: readonly OptimizeDropped[]
+  /** 0.6.0 起：宿主给的警告（截断、忽略的 op、预算降级……）。 */
+  readonly warnings?: readonly string[]
+  /** 0.6.0 起：true = 降级路径（模型没按 JSON 契约输出，整段照收，未做依据校验）。 */
+  readonly fallback?: boolean
+  /** 0.6.0 起：true = 空产出后重试过一次。 */
+  readonly retried?: boolean
+  /** 0.6.0 起：'custom' = 用了设置页里那份提示词；'builtin' = 内置那份。 */
+  readonly promptSource?: string
+  /** 0.6.0 起：被 rewrite 覆盖掉的原话字符数。 */
+  readonly rewrittenChars?: number
+}
+
+/** 把宿主回的 `dropped` 收窄成安全形状（响应体按不可信输入处理）。 */
+function droppedOf(value: unknown): readonly OptimizeDropped[] {
+  if (!Array.isArray(value)) return []
+  const out: OptimizeDropped[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const row = entry as Record<string, unknown>
+    out.push({
+      id: typeof row.id === 'string' ? row.id : '',
+      kind: typeof row.kind === 'string' ? row.kind : '',
+      reason: typeof row.reason === 'string' ? row.reason : '',
+    })
+  }
+  return out
+}
+
+/** 把宿主回的 `warnings` 收窄成字符串数组。 */
+function warningsOf(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string')
 }
 
 /**
@@ -245,12 +288,24 @@ export async function optimizeDraft(text: string, tier: string): Promise<Optimiz
     return { ok: false, error: '宿主半返回的不是 JSON' }
   }
   const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
+  const retried = record.retried === true
   if (record.ok !== true) {
     const message = typeof record.error === 'string' && record.error !== '' ? record.error : '优化失败'
-    return { ok: false, error: message }
+    return { ok: false, error: message, retried }
   }
   const optimized = typeof record.text === 'string' ? record.text.trim() : ''
-  if (optimized === '') return { ok: false, error: '模型没有产出任何内容' }
+  if (optimized === '') return { ok: false, error: '模型没有产出任何内容', retried }
   const route = `${String(record.provider ?? '')}/${String(record.model ?? '')}`
-  return { ok: true, text: optimized, route }
+  return {
+    ok: true,
+    text: optimized,
+    route,
+    itemCount: typeof record.itemCount === 'number' ? record.itemCount : 0,
+    dropped: droppedOf(record.dropped),
+    warnings: warningsOf(record.warnings),
+    fallback: record.fallback === true,
+    retried,
+    promptSource: typeof record.promptSource === 'string' ? record.promptSource : '',
+    rewrittenChars: typeof record.rewrittenChars === 'number' ? record.rewrittenChars : 0,
+  }
 }

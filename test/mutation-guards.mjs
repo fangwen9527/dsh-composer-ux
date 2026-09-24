@@ -113,8 +113,8 @@ const cases = [
   {
     name: 'M 五栏开关改成带默认值（"从没碰过"与"明确关掉"再也分不出来）',
     file: 'src/host.ts',
-    from: '        [KEYS_ENABLED_FIELD]: z.boolean().required(false),',
-    to: '        [KEYS_ENABLED_FIELD]: z.boolean().default(false),',
+    from: '    [KEYS_ENABLED_FIELD]: z.boolean().required(false),',
+    to: '    [KEYS_ENABLED_FIELD]: z.boolean().default(false),',
     test: 'test/quick-commands.mjs',
     expect: '五栏开关在 schema 里是可缺省的',
   },
@@ -196,6 +196,56 @@ const cases = [
     to: '        {true && (',
     test: 'test/settings-render.mjs',
     expect: '一行条目开关都没有',
+  },
+  // ── 0.1.7 适配（0.6.0）后的新护栏 ────────────────────────────────────────
+  // 这一组针对的失败模式是"插件整块不挂载"：静态 inject 绑错代、或某一代的服务
+  // 认领被删掉，表现都只是"界面里少了一块"，构建期完全看不出来。
+  {
+    name: 'W 客户端静态 inject 又绑回某一代的服务名（另一代上整块不挂载）',
+    file: 'src/client.tsx',
+    from: "export const inject = ['slots']",
+    to: "export const inject = ['slots', 'settingsScope']",
+    test: 'test/settings-service-adopt.mjs',
+    expect: 'inject 只含 slots',
+  },
+  {
+    name: 'X 0.1.7 那条认领整段被删掉（新版的服务永远没人认领 → 设置页只看到默认值）',
+    file: 'src/client.tsx',
+    from: "  whenService(['configForms'], view => { adoptSettings(view.configForms, 'get') })\n",
+    to: '',
+    // 单删注入那一行还不够：下面的"直接读一次"兜底仍会认领同一个服务。
+    // 真正的失败模式是**两条都删**（认领彻底消失），所以这里一起删。
+    also: [{ from: "  adoptSettings(ctx.configForms, 'get')\n", to: '' }],
+    test: 'test/settings-service-adopt.mjs',
+    expect: '认领的是 get(composer-ux)',
+  },
+  {
+    name: 'Y register 不再按能力调用（0.1.7 上没有 register ⇒ 宿主半抛异常挂不上）',
+    file: 'src/host.ts',
+    from: '    if (typeof settings.register === \'function\') settings.register(NAMESPACE, Config)',
+    to: '    settings.register(NAMESPACE, Config)',
+    test: 'test/host-settings-generations.mjs',
+    expect: '0.1.7 形状下 apply 不抛',
+  },
+  {
+    // 标记必须真的落在**字段**上（0.1.7 靠它判定"哪些字段可编辑"）。
+    // 变异点选「用方法的那条分支」：随包 schemastery 3.18.4 有 `.volatile()`，
+    // 标记走的就是它——所以要让护栏咬得住，必须动这一行（动 meta 兜底那行在
+    // 3.18.4 上根本不参与执行，护栏会"咬不住"，2026-09-23 实测过）。
+    name: 'Z volatile 标记不再写进字段（0.1.7 认为这一行没有可编辑字段）',
+    file: 'src/host.ts',
+    from: '  if (typeof withMethod.volatile === \'function\') return withMethod.volatile()',
+    to: '  if (typeof withMethod.volatile === \'function\') return node',
+    test: 'test/host-settings-generations.mjs',
+    expect: '每个字段都带 volatile 标记',
+  },
+  {
+    name: 'AA Config 读不出来时不再退回 describe（自己的行被判成"没有值"）',
+    file: 'src/host.ts',
+    from: '        if (own !== undefined) return own',
+    to: '        return own',
+    test: 'test/host-settings-generations.mjs',
+    expect: '自己那一行从 describe 读得到',
   },
 ]
 

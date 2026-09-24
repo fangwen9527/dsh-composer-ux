@@ -306,21 +306,37 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
   const schema = app.schema
   check('插件确实注册了 schema', schema !== null && typeof schema === 'function')
 
-  const empty = schema({})
+  /**
+   * 解开 volatile 引用。
+   *
+   * 随包的 schemastery 升到 3.18.4 后，被标 `volatile` 的节点在**解析结果里就是引用**
+   * （只有 `get()`）而不是普通值；宿主半读值时同样先 `plainConfig` 解一遍。
+   * 本节断言的对象是"解析后的值"，所以统一解引用 —— 要分的那三件事（没设过 /
+   * 明确写 false / 写了新字段）本身没有变。
+   */
+  const plain = value => (value !== null && typeof value === 'object'
+    ? typeof value.get === 'function'
+      ? plain(value.get())
+      : Array.isArray(value)
+        ? value.map(plain)
+        : Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plain(item)]))
+    : value)
+
+  const empty = plain(schema({}))
   check('两个键都没有 → 解析后仍然没有（「从没设过」可辨）',
     empty.menuMode === undefined && empty.menuNative === undefined,
     JSON.stringify({ menuMode: empty.menuMode, menuNative: empty.menuNative }))
 
-  const off = schema({ menuNative: false })
+  const off = plain(schema({ menuNative: false }))
   check('明确写 false → 保留 false（「关过旧开关」可辨）', off.menuNative === false)
 
-  const on = schema({ menuNative: true })
+  const on = plain(schema({ menuNative: true }))
   check('明确写 true → 保留 true（旧档位不是浏览器菜单）', on.menuNative === true)
 
-  const mode = schema({ menuMode: 'custom' })
+  const mode = plain(schema({ menuMode: 'custom' }))
   check('新字段写了就照它来', mode.menuMode === 'custom')
 
-  const other = schema({})
+  const other = plain(schema({}))
   check('其它字段的默认值照旧生效（可选键没把整张表带坏）', other.enabled === true)
 }
 

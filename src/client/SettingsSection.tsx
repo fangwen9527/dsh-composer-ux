@@ -15,12 +15,12 @@ import {
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
-  PANEL_RESIZE_FIELD, PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
+  PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, activeSections,
-  insertModeOf, newQuickPromptId, newSessionId,
+  insertModeOf, newQuickPromptId, newSessionId, optimizerPromptFieldOf,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from '../settings-contract.ts'
@@ -34,6 +34,7 @@ import {
   sanitizeTerminalCandidates,
 } from '../terminal/contracts.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
+import { OptimizerPromptEditor } from './OptimizerPromptEditor.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { PillChoice } from './PillChoice.tsx'
 import {
@@ -53,6 +54,11 @@ export interface SettingsSectionInjected {
     book: SnapshotStore<QuickPromptBook>
     /** '' = 正常；'saving' = 正在写；其余 = 上一次的错误文案。 */
     bookStatus: SnapshotStore<string>
+    /**
+     * 设置写入的说明行：'' = 正常；其余是"被拒 / 写了但没生效"的原因。
+     * 存在的意义就是让「点了没反应」这种故障至少说得出话（见 client.tsx 的 setField）。
+     */
+    writeNotice: SnapshotStore<string>
   }
   actions: {
     /** 写一个字段（键位为规范串，开关为布尔，尺寸为数字）。 */
@@ -67,6 +73,8 @@ export interface SettingsSectionInjected {
     reloadBook: () => void
     /** 恢复内置 9 条（写回默认本）。 */
     resetBook: () => void
+    /** 关掉顶部那条写入失败/未生效的说明。 */
+    dismissNotice: () => void
   }
 }
 
@@ -937,10 +945,12 @@ function RestartBanner({ restart }: { readonly restart: RestartController }) {
 }
 
 /** 设置页主体。 */
-export function SettingsSection({ useLive, useBook, useBookStatus, actions }: SettingsSectionProps) {
+export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotice, actions }: SettingsSectionProps) {
   const settings = useLive(item => item)
   const book = useBook(item => item)
   const bookStatus = useBookStatus(item => item)
+  /** '' = 写入正常；其余是"被拒 / 写了但运行时没变"的说明（见 client.tsx 的 setField）。 */
+  const writeNotice = useWriteNotice(item => item)
   const [conflict, setConflict] = useState<string | null>(null)
   // 重启按钮在抬头、确认条在抬头正下方 —— 两处要读同一份状态，所以状态提到这一层。
   const restart = useRestart()
@@ -974,8 +984,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
     : settings.menuMode === 'browser'
       ? '当前：浏览器菜单（粘贴免授权）'
       : `当前：自定义菜单 · ${menuEnabled} / ${MENU_ITEMS.length} 项开启`
-  const panelSummary = `导航滚动 ${settings.panelScroll ? '开' : '关'}`
-    + ` · 边缘缩放 ${settings.panelResize ? '开' : '关'}`
+  const panelSummary = `边缘缩放 ${settings.panelResize ? '开' : '关'}`
     + ` · ${settings.panelWidth}×${settings.panelHeight}`
   // 请求头栏目的概览直接复用宿主半写回来的执行结果（'已写入 opencode-go' 这类）。
   const headerSummary = settings.headerEnabled
@@ -1033,6 +1042,22 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           </span>
         </div>
         <RestartBanner restart={restart} />
+        {/*
+          写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。
+          为什么值得占这个位置：2026-09-23 的真机事故里，设置写入被一把孤儿写入锁挡住，
+          用户看到的只有"开关不动"，**一句提示都没有**，排查只能靠翻宿主日志。
+          所以这条横幅的作用是让下一次同类故障当场说得出话（判据见 client.tsx 的 setField）。
+        */}
+        {writeNotice !== '' && (
+          <div className="dsh-ux-restartBanner dsh-ux-restartBannerFailed" role="status">
+            <span className="dsh-ux-restartBannerText">设置未生效：{writeNotice}</span>
+            <span className="dsh-ux-restartBannerActions">
+              <button type="button" className="dsh-ux-restartCancel" onClick={() => { actions.dismissNotice() }}>
+                知道了
+              </button>
+            </span>
+          </div>
+        )}
         <div className="dsh-ux-cardBody">
           <ToggleRow
             first
@@ -1200,6 +1225,9 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           多条按列表顺序拼接，输入框里不提前显示。
           「优化提示词」会用另一个 AI 把输入框里的话整理成一条能直接发出去的清晰指令，
           结果直接写回输入框（Ctrl+Z 可还原）——不会污染当前对话，也不占你的对话轮次。
+          0.6.0 起它不再"自由改写"：它只能产出<strong>能指回你原话某一句话</strong>的条目，
+          宿主逐条做字面比对，对不上就丢掉那一条并在状态行里记账 ——
+          所以"替你发明一条你没说过的需求"在结构上做不到。下面可以改每一档用的提示词。
         </p>
         <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
           <div style={rowText}>
@@ -1222,6 +1250,11 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
             ))}
           </div>
         </div>
+        <OptimizerPromptEditor
+          tier={settings.optimizerTier}
+          value={settings[optimizerPromptFieldOf(settings.optimizerTier) as keyof ComposerUxSettings] as string}
+          onChange={next => { actions.setField(optimizerPromptFieldOf(settings.optimizerTier) as SettingsField, next) }}
+        />
         <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
           <div style={rowText}>
             <div style={rowTitle}>快捷指令清单</div>
@@ -1246,26 +1279,19 @@ export function SettingsSection({ useLive, useBook, useBookStatus, actions }: Se
           checked: sections.panel,
           onChange: next => { actions.setField(PANEL_ENABLED_FIELD, next) },
         }}
-        // 两个开关从内容区搬到标题行（用户要求：卡内已有的开关都移到标题栏）。
+        // 只留「边缘缩放」：导航滚动已由 DSH 0.1.7 官方设置页自带，本插件不再提供那个开关。
         controls={(
-          <>
-            <MiniToggle
-              label="导航滚动"
-              checked={settings.panelScroll}
-              onChange={next => { actions.setField(PANEL_SCROLL_FIELD, next) }}
-            />
-            <MiniToggle
-              label="边缘缩放"
-              checked={settings.panelResize}
-              onChange={next => { actions.setField(PANEL_RESIZE_FIELD, next) }}
-            />
-          </>
+          <MiniToggle
+            label="边缘缩放"
+            checked={settings.panelResize}
+            onChange={next => { actions.setField(PANEL_RESIZE_FIELD, next) }}
+          />
         )}
       >
         <p style={bodyLead}>
-          插件装得多时设置条目很长：开启「导航可滚动」后，左侧导航在溢出时会出现滚动条。
+          导航列的滚动由 DSH 官方的设置页自己负责，本插件不再介入。
           开启「边缘调整大小」后，把鼠标移到设置面板的边或角上（出现高亮或光标变化）拖动即可改变面板大小，
-          尺寸会记住，下次打开保持。（这两个开关在标题行上。）
+          尺寸会记住，下次打开保持。（这个开关在标题行上。）
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
           <span style={rowDesc}>尺寸预设：</span>

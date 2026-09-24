@@ -65,10 +65,10 @@ import { DEFAULT_SETTINGS, defaultQuickBook } from '../settings-contract.ts'
 
 const actions = {
   setField() {}, clearField() {}, resetAll() {},
-  saveBook() {}, reloadBook() {}, resetBook() {},
+  saveBook() {}, reloadBook() {}, resetBook() {}, dismissNotice() {},
 }
 
-export function renderWith(mode) {
+export function renderWith(mode, notice = '') {
   const settings = {
     ...DEFAULT_SETTINGS, menuMode: mode,
     keysEnabled: true, menuEnabled: true, quickEnabled: true, panelEnabled: true, terminalEnabled: true,
@@ -78,6 +78,7 @@ export function renderWith(mode) {
     useLive: selector => selector(settings),
     useBook: selector => selector(book),
     useBookStatus: selector => selector(''),
+    useWriteNotice: selector => selector(notice),
     actions,
   }))
 }
@@ -206,6 +207,20 @@ for (const [mode, source] of Object.entries(html)) {
   } else {
     check(`${mode}：一行条目开关都没有`, !hasRows && !text.includes('快捷键 Ctrl+') && !text.includes('菜单条目'))
   }
+}
+
+console.log('\n5. 写入失败 / 未生效的说明条（0.6.1：点了没反应必须说得出话）')
+{
+  const clean = render('official')
+  check('正常时不渲染说明条',
+    !clean.includes('设置未生效') && !clean.includes('dismissNotice'))
+
+  const notice = '写入「enabled」被宿主拒绝。常见原因：profile 的写入锁被占用。'
+  const shown = render('official', notice)
+  check('有原因时渲染出来，且带上原因原文',
+    shown.includes('设置未生效') && shown.includes(notice))
+  check('说明条带关闭按钮（知道了）', shown.includes('知道了'))
+  check('说明条走的是失败态样式', shown.includes('dsh-ux-restartBannerFailed'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

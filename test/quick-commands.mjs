@@ -10,7 +10,10 @@
  *
  *   node test/quick-commands.mjs
  */
-import { mkdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { build } from 'esbuild'
 import { apply } from '../lib/index.js'
 
@@ -27,8 +30,26 @@ function check(label, condition, detail) {
   console.log(`  ✗ ${label}${detail === undefined ? '' : ` — ${detail}`}`)
 }
 
-// ── 现场打包纯函数出口 ──────────────────────────────────────────────────────
-mkdirSync(new URL('./.build/', import.meta.url), { recursive: true })
+/**
+ * 解开 volatile 引用。
+ *
+ * 0.1.7 起设置 schema 里被标 `volatile` 的节点，**解析结果本身是引用**（只有 `get()`），
+ * 不再是普通值——宿主半读值时同样先 `plainConfig` 解一遍。本套件第 6 节断言的是
+ * "解析后的值"，所以统一从这里解引用。
+ *
+ * 为什么现在才需要：DSH 今天升级到随包的 schemastery 3.18.4，它开始认 `meta.volatile`
+ * 并在解析时把节点包成引用（3.18.2 没有这个分支，那时同样的 schema 返回普通对象）。
+ */
+function plain(value) {
+  if (value !== null && typeof value === 'object') {
+    if (typeof value.get === 'function') return plain(value.get())
+    if (Array.isArray(value)) return value.map(plain)
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plain(item)]))
+  }
+  return value
+}
+
+// ── 现场打包纯函数出口 ──────────────────────────────────────────────────────mkdirSync(new URL('./.build/', import.meta.url), { recursive: true })
 await build({
   entryPoints: ['test/pure-entry.ts'],
   outfile: 'test/.build/pure.mjs',
@@ -50,6 +71,20 @@ console.log('1. 快捷指令的净化（防脏数据）')
 {
   const clean = pure.sanitizeSettings({ quickPrompts: [] })
   check('空数组保持全空（全删光不会自己长回来）', clean.quickPrompts.length === 0)
+}
+{
+  // 0.6.0：三档自定义提示词（留空 = 用内置那份，所以默认必须是空串）。
+  check('自定义提示词默认空串（= 用内置）',
+    pure.DEFAULT_SETTINGS.optimizerPromptBasic === '' && pure.DEFAULT_SETTINGS.optimizerPromptAdvanced === ''
+    && pure.DEFAULT_SETTINGS.optimizerPromptExtreme === '')
+  const kept = pure.sanitizeSettings({ optimizerPromptExtreme: 'x'.repeat(5000) })
+  check('自定义提示词原样保留（够长也不截）', kept.optimizerPromptExtreme.length === 5000, String(kept.optimizerPromptExtreme.length))
+  const clipped = pure.sanitizeSettings({ optimizerPromptBasic: 'x'.repeat(pure.OPTIMIZER_PROMPT_MAX + 100) })
+  check("超上限被截断（不整份丢掉：这是用户自己敲的内容）", clipped.optimizerPromptBasic.length === pure.OPTIMIZER_PROMPT_MAX, String(clipped.optimizerPromptBasic.length))
+  check('字段名映射（未知档回落默认档）',
+    pure.optimizerPromptFieldOf('basic') === 'optimizerPromptBasic'
+    && pure.optimizerPromptFieldOf('extreme') === 'optimizerPromptExtreme'
+    && pure.optimizerPromptFieldOf('???') === pure.OPTIMIZER_PROMPT_FIELDS.advanced)
 }
 {
   const clean = pure.sanitizeSettings({
@@ -343,13 +378,14 @@ console.log('3. 发送按钮识别（不依赖界面文案）')
     pure.sendButtonOf(card({ stop: true, innerSvg: new FakeSvgNode() }).innerSvg) === null)
 }
 
-// ══════════════ 4. 提示词资产（提取自 WestFox 的插件） ══════════════════════
-console.log('4. 优化提示词：三档与传话包装')
+// ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
+console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {
   const advanced = pure.buildOptimizeSystem('advanced')
   check('三档齐全', Object.keys(pure.OPTIMIZER_SPECS).join(',') === 'basic,advanced,extreme')
-  check('人设段在（传话器）', advanced.includes('传话器/改写器'))
-  check('禁元话语段在', advanced.includes('绝对禁止'))
+  check('人设段在（传话器）', advanced.includes('传话器/意图补全器'))
+  check('依据纪律段在（要求逐字引文）', advanced.includes('依据纪律') && advanced.includes('逐字存在'))
+  check('禁元话语段在', advanced.includes('不要元话语'))
   check('高级档要求补全没说出口的必要要求', advanced.includes('没说出口'))
   check('普通档只修语言、不添需求', pure.buildOptimizeSystem('basic').includes('只做语言层修复'))
   check('极端档要求分阶段计划与预案', pure.buildOptimizeSystem('extreme').includes('多情况预案'))
@@ -357,11 +393,153 @@ console.log('4. 优化提示词：三档与传话包装')
   check('温度：普通 0.2', pure.buildOptimizeTemperature('basic') === 0.2)
   check('温度：高级 0.3', pure.buildOptimizeTemperature('advanced') === 0.3)
   check('温度：未知回落高级', pure.buildOptimizeTemperature('???') === 0.3)
+  // 输出契约必须**永远在最后**（模型对最后一条指令服从度最高），且不可能被自定义提示词顶掉。
+  check('输出契约在末尾', advanced.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
+  check('契约里给出 items/kind 的取值', advanced.includes('"items"') && advanced.includes('rewrite'))
+  check('自定义提示词整体替换任务段，契约仍追加',
+    pure.buildOptimizeSystem('advanced', '我的任务段').startsWith('我的任务段')
+    && pure.buildOptimizeSystem('advanced', '我的任务段').includes(pure.OPTIMIZER_OUTPUT_CONTRACT))
+  check('空白的自定义提示词 = 用内置', pure.buildOptimizeSystem('advanced', '   ') === advanced)
+  check('promptSource 判定', pure.optimizePromptSource('') === 'builtin'
+    && pure.optimizePromptSource('x') === 'custom')
   const user = pure.buildOptimizeUser('把那个页面弄好看点')
   check('用户消息包成「待转达内容」', user.includes('【待转达内容】') && user.includes('<原文>'))
   check('原文原样在内', user.includes('把那个页面弄好看点'))
-  check('明确要求只输出命令本身', user.includes('只输出这条命令本身'))
+  check('要求只输出契约要求的东西', user.includes('只输出那份 JSON 契约要求的东西'))
+  check('重试话术只在 retry=true 时出现',
+    !user.includes('你上一次的输出是空的')
+    && pure.buildOptimizeUser('x', { retry: true }).includes('你上一次的输出是空的'))
 }
+
+// ══════════════ 4b. 依据校验与宿主装配（0.6.0 的机制内核） ════════════════════
+console.log('4b. 依据校验与装配：模型能不能凭空加需求')
+{
+  const original = '把那个页面弄好看点，动画也加上'
+
+  // ── 逐字定位
+  const exact = pure.findQuoteSpan(original, '弄好看点')
+  check('逐字引文能定位到原话', exact !== undefined && original.slice(exact.start, exact.end) === '弄好看点')
+  const wrapped = '第一行\n第二行   带多空格'
+  const loose = pure.findQuoteSpan(wrapped, '第二行 带多空格')
+  check('空白差异（折行/多空格）也能定位并映射回真实下标',
+    loose !== undefined && wrapped.slice(loose.start, loose.end).replace(/\s+/g, ' ') === '第二行 带多空格')
+  check('对不上的引文 → undefined', pure.findQuoteSpan(original, '改成深色主题') === undefined)
+  check('空引文 → undefined', pure.findQuoteSpan(original, '   ') === undefined)
+
+  // ── 解析：单点不得废整轮
+  const json = JSON.stringify({
+    items: [
+      { kind: 'rewrite', quote: '弄好看点', text: '做得更好看' },
+      { kind: 'requirement', quote: '动画也加上', text: '动画不要拖慢交互' },
+      { kind: 'requirement', quote: '必须离线可用', text: '必须离线可用' },
+      { kind: 'quality', text: '好看=界面精致' },
+      { kind: 'bogus', text: '种类不对' },
+    ],
+  })
+  const parsed = pure.parseOptimizeOutput(json, original)
+  check('整轮不作废（ok=true）', parsed.ok === true)
+  check('只保留能核对的条目', parsed.items.length === 2, JSON.stringify(parsed.items?.map(i => i.kind)))
+  check('被丢的条目全都有原因', parsed.dropped.length === 3 && parsed.dropped.every(d => d.reason !== ''))
+  check('引文对不上 → 丢掉并写明原因',
+    parsed.dropped.some(d => d.reason.includes('逐字片段')))
+  check('缺 quote → 丢掉', parsed.dropped.some(d => d.reason.includes('缺少 quote')))
+  check('kind 不在白名单 → 丢掉', parsed.dropped.some(d => d.reason.includes('kind 不在允许列表')))
+  check('通过校验的条目带上引文位置', parsed.items[0].span !== undefined && parsed.items[0].quoteSource === 'user')
+  check('容忍 ```json 围栏', pure.parseOptimizeOutput('```json\n' + json + '\n```', original).ok === true)
+  check('容忍前后废话', pure.parseOptimizeOutput('好的，这是结果：\n' + json + '\n希望有帮助', original).ok === true)
+  // 兼容对方 0.6 的 ops 形态（模型见过那份契约时会写成这样）
+  const opsJson = JSON.stringify({ ops: [{ op: 'add_item', item: { kind: 'rewrite', quote: '弄好看点', text: '更精致' } }, { op: 'set_item_status', id: 'x', status: 'superseded' }] })
+  const opsParsed = pure.parseOptimizeOutput(opsJson, original)
+  check('认得 ops[].item 形态', opsParsed.ok === true && opsParsed.items.length === 1)
+  check('不支持的 op 如实记账', opsParsed.warnings.some(w => w.includes('add_item')))
+
+  // ── 装配：原话为骨架
+  const assembled = pure.assembleCommand(original, parsed.items, { tier: 'advanced' })
+  check('rewrite 按位置回填，未被覆盖的原文原样保留',
+    assembled.text.startsWith('把那个页面做得更好看，动画也加上'), assembled.text)
+  check('补全要求带逐字依据',
+    assembled.text.includes('【补全要求') && assembled.text.includes('（依据："动画也加上"）'))
+  check('成品在预算内', assembled.chars <= assembled.budget, `${String(assembled.chars)}/${String(assembled.budget)}`)
+  check('记账：被改写的原话字符数', assembled.rewrittenChars === '弄好看点'.length)
+  check('记账：进入成品的条目数', assembled.itemCount === 2)
+
+  // ── 同一段原话被两条 rewrite 引用 → 只留一条（回填顺序才可解释）
+  const dup = pure.parseOptimizeOutput(JSON.stringify({
+    items: [
+      { kind: 'rewrite', quote: '弄好看点', text: '甲' },
+      { kind: 'rewrite', quote: '弄好看点', text: '乙' },
+    ],
+  }), original)
+  check('重复引用同一段原话 → 第二条被丢',
+    dup.items.length === 1 && dup.dropped.some(d => d.reason.includes('同一段原话')))
+
+  // ── 上限：截断并记账，而不是整轮作废
+  const many = pure.parseOptimizeOutput(JSON.stringify({
+    items: Array.from({ length: pure.OPTIMIZE_MAX_ITEMS + 2 }, (_, i) => ({ kind: 'plan', text: `第 ${String(i)} 条` })),
+  }), original)
+  check('超出单轮上限 → 截断保留前 N 条', many.items.length === pure.OPTIMIZE_MAX_ITEMS)
+  check('截断同样记账', many.dropped.some(d => d.reason.includes('截断丢弃')))
+  const long = pure.parseOptimizeOutput(JSON.stringify({
+    items: [{ kind: 'plan', text: 'x'.repeat(pure.OPTIMIZE_ITEM_MAX_CHARS + 50) }],
+  }), original)
+  check('单条超长 → 就地截断并记账',
+    long.items[0].text.length === pure.OPTIMIZE_ITEM_MAX_CHARS && long.warnings.some(w => w.includes('截断')))
+
+  // ── 篇幅闸门：预算按档位给，降级要出声
+  check('basic 预算：短原话走下限、长原话走倍数',
+    pure.optimizeBudgetFor('basic', 10) === 400 && pure.optimizeBudgetFor('basic', 1_000) === 1_400,
+    JSON.stringify([pure.optimizeBudgetFor('basic', 10), pure.optimizeBudgetFor('basic', 1_000)]))
+  check('advanced 预算比 basic 宽', pure.optimizeBudgetFor('advanced', 100) > pure.optimizeBudgetFor('basic', 100))
+  check('预算有绝对上限（不随档位无限涨）',
+    pure.optimizeBudgetFor('extreme', 1_000_000) <= 12_000)
+  // 档位门：普通档不该出现 requirement / quality / plan / risk（提示词是请求，这里是保证）
+  check('档位允许的条目种类',
+    pure.allowedKindsFor('basic').join(',') === 'rewrite,unknown'
+    && pure.allowedKindsFor('advanced').includes('requirement')
+    && pure.allowedKindsFor('advanced').includes('plan') === false
+    && pure.allowedKindsFor('extreme').includes('risk')
+    && pure.allowedKindsFor('???').join(',') === pure.allowedKindsFor('advanced').join(','))
+  const tierGated = pure.assembleCommand(original, parsed.items, { tier: 'basic' })
+  check('普通档即使拿到 requirement 也不渲染（档位承诺由宿主保证）',
+    !tierGated.text.includes('【补全要求')
+    && tierGated.dropped.some(d => d.reason.includes('当前档位')))
+  const bulky = pure.assembleCommand(original, [
+    { id: 'u1', kind: 'unknown', text: 'u'.repeat(400), unknownClass: 'lookupable_fact', quoteSource: 'none' },
+    { id: 'u2', kind: 'unknown', text: 'v'.repeat(400), unknownClass: 'lookupable_fact', quoteSource: 'none' },
+    { id: 'r1', kind: 'risk', text: 'r'.repeat(400) },
+    { id: 'r2', kind: 'risk', text: 'q'.repeat(400) },
+  ], { tier: 'extreme' })
+  check('超预算时按固定顺序丢可选的节（risk 先于 unknown）',
+    bulky.dropped.length > 0
+    && bulky.dropped.every(d => d.kind === 'risk' && d.reason.includes('budget'))
+    && !bulky.dropped.some(d => d.kind === 'unknown'))
+  check('还没被丢的节照常渲染', bulky.text.includes('【不明确处'))
+  check('降级写明省略了几条', bulky.text.includes('因篇幅预算省略'))
+  check('预算警告进了 warnings', bulky.warnings.some(w => w.includes('篇幅预算')))
+
+  // ── 兜底口径：新机制永不比旧行为更差
+  const fb = pure.runOptimizePipeline('优化后的指令', original, { tier: 'advanced' })
+  check('模型没给 JSON → 按旧行为整段照收（fallback）',
+    fb.ok === true && fb.fallback === true && fb.text === '优化后的指令')
+  const broken = pure.runOptimizePipeline('{"items":[', original, { tier: 'advanced' })
+  check('半截 JSON → 失败，绝不把坏 JSON 写进输入框',
+    broken.ok === false && broken.code === 'BAD_JSON')
+  const shape = pure.runOptimizePipeline('{"items":"not-an-array"}', original, { tier: 'advanced' })
+  check('有 items 键但类型不对 → 也判失败', shape.ok === false && shape.code === 'BAD_SHAPE')
+  const other = pure.runOptimizePipeline('把这段配置写进 config.json：\n\n{"port":8080}', original, { tier: 'advanced' })
+  check('旧式自由文本里夹着 JSON → 仍走兜底照收（不误判成信封）',
+    other.ok === true && other.fallback === true)
+  const braceOnly = pure.runOptimizePipeline('{"port":8080}', original, { tier: 'advanced' })
+  check('整段就是一个不相干的 JSON 对象 → 也走兜底，不当成信封写坏',
+    braceOnly.ok === true && braceOnly.fallback === true)
+  const empty = pure.runOptimizePipeline('{"items":[]}', original, { tier: 'advanced' })
+  check('空数组 → 原话原样写回（每一轮必有成品）', empty.ok === true && empty.text === original)
+  const viaPipeline = pure.runOptimizePipeline(json, original, { tier: 'advanced' })
+  check('整条流水线：解析→核对→装配一次跑通',
+    viaPipeline.ok === true && viaPipeline.fallback === false
+    && viaPipeline.text.startsWith('把那个页面做得更好看') && viaPipeline.dropped.length === 3)
+}
+
 
 // ══════════════ 5. 宿主半的优化接口 ═════════════════════════════════════════
 console.log('5. 宿主半优化接口（假的 webServer + llm）')
@@ -371,21 +549,50 @@ async function bootHost(options = {}) {
   const routes = []
   const llmCalls = []
   let schema = null
-  const settingsState = { 'composer-ux': { enabled: true } }
+  const settingsState = { 'composer-ux': { enabled: true, ...(options.settings ?? {}) } }
   const settings = {
-    get: ns => settingsState[ns],
+    // `modernSettings: true` 模拟 DSH 0.1.7：**没有 `get`**，自己的行只能从 `describe()` 读。
+    // 自定义提示词是 0.6.0 新增的读设置路径，两代都得验（readOwnSetting → makeReader）。
+    // `settingsThrows: true` 模拟"裸读服务就抛"（cordis Proxy 上没 inject 的读会这样）：
+    // 优化路由只 inject 了 webServer/llm，读设置必须自己兜住，不能让整条路由挂掉。
+    ...(options.settingsThrows === true
+      ? {
+        get: () => { throw new Error('service not injected') },
+        describe: () => { throw new Error('service not injected') },
+      }
+      : options.modernSettings === true
+        ? { describe: () => Object.entries(settingsState).map(([ns, value]) => ({ ns, value })) }
+        : { get: ns => settingsState[ns] }),
     // 捕获宿主半真实注册的那一个 schema —— 它的默认值决定旧设置文档读出来是什么。
     register: (_ns, registered) => { schema = registered },
     mutate: async () => {},
   }
+  /**
+   * 假模型：默认吐**符合 0.6 契约的条目 JSON**（这才是产品路径）。
+   * `options.chunksSeq` 让"第一次空、第二次有"这种重试用例也能造假。
+   */
+  const defaultChunks = [
+    {
+      type: 'text-delta',
+      index: 0,
+      text: JSON.stringify({
+        items: [
+          { kind: 'rewrite', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
+          { kind: 'requirement', quote: '弄好看点', text: '改完页面能正常打开' },
+        ],
+      }),
+    },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+  let callIndex = 0
   const llm = {
     stream: (callOptions) => {
       llmCalls.push(callOptions)
-      const chunks = options.chunks ?? [
-        { type: 'text-delta', index: 0, text: '优化' },
-        { type: 'text-delta', index: 0, text: '后的指令' },
-        { type: 'finish', reason: { kind: 'stop' } },
-      ]
+      const seq = options.chunksSeq
+      const chunks = Array.isArray(seq)
+        ? (seq[Math.min(callIndex, seq.length - 1)] ?? [])
+        : (options.chunks ?? defaultChunks)
+      callIndex += 1
       return (async function* stream() {
         for (const chunk of chunks) yield chunk
       })()
@@ -428,6 +635,9 @@ async function bootHost(options = {}) {
  */
 const optimizerRoute = host => host.routes.find(route => route.path === pure.OPTIMIZER_API_PATH)
 const storeRoute = host => host.routes.find(route => route.path === pure.QUICK_PROMPTS_API_PATH)
+
+/** 直接驱动优化路由（后面的用例只关心这一条路由，不必每次写两遍）。 */
+const handler0 = (host, req, res) => optimizerRoute(host).handler(req, res)
 
 /**
  * 假请求：可被 for-await 读取的 body。
@@ -478,15 +688,145 @@ const json = res => JSON.parse(res.captured.body)
   await handler(makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
   const body = json(res)
   check('HTTP 200', res.captured.status === 200, String(res.captured.status))
-  check('返回拼好的优化正文', body.ok === true && body.text === '优化后的指令', JSON.stringify(body))
+  check('按条目装配：rewrite 回填原话', body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
+  check('补全要求带逐字依据', body.text.includes('（依据："弄好看点"）'), JSON.stringify(body.text))
   check('回报实际路由', body.provider === 'go' && body.model === 'deepseek-flash')
+  check('回报记账信息（条数/丢弃/降级/重试/提示词来源）',
+    body.itemCount === 2 && body.dropped.length === 0 && body.fallback === false
+    && body.retried === false && body.promptSource === 'builtin',
+    JSON.stringify({ itemCount: body.itemCount, dropped: body.dropped, fallback: body.fallback, promptSource: body.promptSource }))
+  check('回报篇幅预算与成品长度', typeof body.budget === 'number' && body.chars === body.text.length)
 
   const call = host.llmCalls[0]
   check('用的是当前默认模型的 provider/model', call.provider === 'go' && call.model === 'deepseek-flash')
   check('高级档温度 0.3', call.temperature === 0.3, String(call.temperature))
   check('system 是高级档提示词', call.system.includes('没说出口'))
+  check('system 末尾是固定的输出契约', call.system.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
   check('user 消息包了传话框架', call.messages[0].content[0].text.includes('【待转达内容】'))
   check('消息来源标为 user', call.messages[0].source.kind === 'user')
+}
+{
+  // 自定义提示词（设置页里那份）必须真的被用上，且契约仍然追加在末尾。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    settings: { optimizerPromptAdvanced: '我的自定义任务段' },
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  check('用了设置里的自定义提示词', host.llmCalls[0].system.startsWith('我的自定义任务段'))
+  check('自定义提示词不顶掉输出契约', host.llmCalls[0].system.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
+  check('回报 promptSource=custom', json(res).promptSource === 'custom', JSON.stringify(json(res).promptSource))
+}
+{
+  // DSH 0.1.7 那一代没有 `settings.get`：自定义提示词必须能从 describe() 里读到。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    modernSettings: true,
+    settings: { optimizerPromptExtreme: '一代新版用的任务段' },
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'extreme' })), res)
+  check('0.1.7 形状（没有 get）也能读到自定义提示词',
+    host.llmCalls[0].system.startsWith('一代新版用的任务段'), host.llmCalls[0].system.slice(0, 30))
+}
+{
+  // 设置服务读一下就抛（cordis Proxy 上裸读会这样）：不该因此不注册路由，更不该让优化失败。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    settingsThrows: true,
+  })
+  check('设置读不动也照常注册优化路由', optimizerRoute(host) !== undefined)
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  const body = json(res)
+  check('读设置抛异常 → 回落内置提示词，优化照常成功',
+    body.ok === true && body.promptSource === 'builtin'
+    && host.llmCalls[0].system.includes('没说出口'), JSON.stringify({ ok: body.ok, src: body.promptSource }))
+}
+{
+  // 模型没按契约输出 → 按旧行为整段照收（保证这次改造不会让原本能用的优化变成失败）。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunks: [
+      { type: 'text-delta', index: 0, text: '优化' },
+      { type: 'text-delta', index: 0, text: '后的指令' },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ],
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  const body = json(res)
+  check('没给 JSON → 整段照收（fallback）', body.ok === true && body.text === '优化后的指令' && body.fallback === true, JSON.stringify(body))
+}
+{
+  // 半截 JSON 绝不能写进输入框。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunks: [
+      { type: 'text-delta', index: 0, text: '{"items":[{"kind":"rewrite",' },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ],
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  const body = json(res)
+  check('半截 JSON → ok:false，不写回坏内容', body.ok === false && body.error.includes('BAD_JSON'), JSON.stringify(body))
+}
+{
+  // 空产出重试一次（对方 0.6 的 retryEmpty）：第一次空、第二次给出条目。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunksSeq: [
+      [{ type: 'finish', reason: { kind: 'stop' } }],
+      [
+        { type: 'text-delta', index: 0, text: JSON.stringify({ items: [{ kind: 'rewrite', quote: '原文', text: '改过的原文' }] }) },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+    ],
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  const body = json(res)
+  check('空产出重试一次后成功', body.ok === true && body.retried === true && body.text === '改过的原文', JSON.stringify(body))
+  check('确实调了两次模型', host.llmCalls.length === 2, String(host.llmCalls.length))
+  check('第二次的用户消息点明了"上一次是空的"',
+    host.llmCalls[1].messages[0].content[0].text.includes('你上一次的输出是空的'))
+}
+{
+  // 两次都空 → 仍按原来的失败口径（ok:false），不空手写回。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunks: [{ type: 'finish', reason: { kind: 'stop' } }],
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  const body = json(res)
+  check('两次都空 → ok:false 且带重试标记', body.ok === false && body.retried === true, JSON.stringify(body))
+}
+{
+  // 引文对不上原话 → 只丢那一条，其余照常成成品（这是这套机制的核心断言）。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunks: [
+      {
+        type: 'text-delta',
+        index: 0,
+        text: JSON.stringify({
+          items: [
+            { kind: 'rewrite', quote: '原文', text: '改过的原文' },
+            { kind: 'requirement', quote: '用户根本没说过的话', text: '凭空加的需求' },
+          ],
+        }),
+      },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ],
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
+  const body = json(res)
+  check('凭空加的需求进不了成品', body.ok === true && !body.text.includes('凭空加的需求'), JSON.stringify(body.text))
+  check('那条被丢弃并记账', body.dropped.length === 1 && body.dropped[0].reason.includes('逐字片段'))
+  check('其余条目照常成成品', body.itemCount === 1 && body.text === '改过的原文')
 }
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
@@ -568,16 +908,21 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
 
   // 旧设置文档（没有 quickPrompts 键）读出来必须直接得到内置 9 条 —— 否则升级后
   // 面板是空的，用户会以为功能没做出来。
-  const fresh = schema({})
+  const fresh = plain(schema({}))
   check('旧文档 → 快捷指令回落内置 9 条', fresh.quickPrompts?.length === 9, String(fresh.quickPrompts?.length))
   check('旧文档 → 档位回落高级', fresh.optimizerTier === 'advanced', fresh.optimizerTier)
+  check('旧文档 → 三档自定义提示词回落空串（= 内置）',
+    fresh.optimizerPromptBasic === '' && fresh.optimizerPromptAdvanced === '' && fresh.optimizerPromptExtreme === '',
+    JSON.stringify([fresh.optimizerPromptBasic, fresh.optimizerPromptAdvanced, fresh.optimizerPromptExtreme]))
+  check('自定义提示词能透过 schema 原样回来',
+    plain(schema({ optimizerPromptAdvanced: '我的任务段' })).optimizerPromptAdvanced === '我的任务段')
   check('旧文档 → 原有字段仍齐', fresh.enabled === true && fresh.sendKey === 'Enter' && fresh.headerName === 'x-opencode-session')
   check('内置条目结构正确', fresh.quickPrompts[0].id === 'builtin-1' && fresh.quickPrompts[0].always === false)
 
-  const custom = schema({ quickPrompts: [{ id: 'x', label: 'L', prompt: 'P', always: true }] })
+  const custom = plain(schema({ quickPrompts: [{ id: 'x', label: 'L', prompt: 'P', always: true }] }))
   check('已有列表原样保留', custom.quickPrompts.length === 1 && custom.quickPrompts[0].id === 'x')
 
-  const empty = schema({ quickPrompts: [] })
+  const empty = plain(schema({ quickPrompts: [] }))
   check('空列表是合法值（被尊重，不回落）', empty.quickPrompts.length === 0)
 
   // 0.5.0 五栏开关：schema 里**故意不给默认值**（`.required(false)`）。
@@ -589,8 +934,8 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
     && empty.panelEnabled === undefined && empty.terminalEnabled === undefined,
     JSON.stringify([empty.keysEnabled, empty.menuEnabled, empty.quickEnabled, empty.panelEnabled, empty.terminalEnabled]))
   check('用户写过的 false 原样解析回来（不会被默认值顶掉）',
-    schema({ menuEnabled: false }).menuEnabled === false
-    && schema({ panelEnabled: false, panelScroll: true }).panelEnabled === false)
+    plain(schema({ menuEnabled: false })).menuEnabled === false
+    && plain(schema({ panelEnabled: false, panelScroll: true })).panelEnabled === false)
 }
 
 // ══════════════ 7. 样式：实色按钮的「填充 + 前景」必须成对 ═══════════════════
@@ -1050,6 +1395,64 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     }), r4)
     check('POST 带转发头 → 403', r4.captured.status === 403, r4.captured.body)
   }
+}
+
+// ══════════════ 12. 孤儿写入锁的回收（0.6.1） ═══════════════════════════════
+//
+// 这段逻辑会删文件，所以逐条钉住"什么情况下**不许**删"。
+// 真机事故（2026-09-23）：硬杀重启留下 <profile>/package.json.lock，
+// 此后整个 profile 的每一次设置写入都 2 秒超时，界面只表现为"点了没反应"。
+console.log('12. 孤儿写入锁：判据与回收')
+{
+  const never = () => false
+  const always = () => true
+
+  const remove = pure.staleLockDecision('16684\n', never)
+  check('持有者已不存在 → 回收', remove.action === 'remove' && remove.pid === 16684, JSON.stringify(remove))
+  const keep = pure.staleLockDecision('45564\n', always)
+  check('持有者还活着 → 保持不动', keep.action === 'keep' && keep.pid === 45564, JSON.stringify(keep))
+
+  for (const junk of ['', '\n', 'abc', '0', '-1', '12 34', '16684\n16685\n', '0x10', '99999999999999']) {
+    const decision = pure.staleLockDecision(junk, never)
+    check(`认不出的锁内容一律不动（${JSON.stringify(junk)}）`,
+      decision.action === 'ignore', JSON.stringify(decision))
+  }
+
+  // 真机判据：自己的进程在，已退出的子进程不在。
+  check('isProcessAlive(自己) === true', pure.isProcessAlive(process.pid) === true)
+  const dead = spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' })
+  check('isProcessAlive(已退出的子进程) === false',
+    typeof dead.pid === 'number' && pure.isProcessAlive(dead.pid) === false,
+    `pid=${String(dead.pid)}`)
+
+  check('profile 目录 = patch 的父目录',
+    pure.profileDirOfPatchPath(join('C:', 'u', '.dsh', 'profiles', 'web', 'cordis.patch.yml'))
+      === join('C:', 'u', '.dsh', 'profiles', 'web'),
+    pure.profileDirOfPatchPath(join('C:', 'u', '.dsh', 'profiles', 'web', 'cordis.patch.yml')))
+
+  // 真实文件系统上的四条路径。
+  const dir = mkdtempSync(join(tmpdir(), 'composer-ux-lock-'))
+  const lock = join(dir, pure.SETTINGS_LOCK_FILENAME)
+  const notes = []
+  const log = message => { notes.push(message) }
+
+  check('没有锁 → absent', await pure.recoverStaleSettingsLock(dir, log) === 'absent')
+
+  writeFileSync(lock, 'not-a-pid\n')
+  check('内容认不出 → ignored 且不删',
+    await pure.recoverStaleSettingsLock(dir, log) === 'ignored' && existsSync(lock))
+
+  writeFileSync(lock, `${process.pid}\n`)
+  check('持有者活着 → kept 且不删',
+    await pure.recoverStaleSettingsLock(dir, log) === 'kept' && existsSync(lock))
+
+  writeFileSync(lock, `${dead.pid}\n`)
+  const removed = await pure.recoverStaleSettingsLock(dir, log)
+  check('持有者已死 → removed 且文件消失',
+    removed === 'removed' && !existsSync(lock), `${removed} exists=${String(existsSync(lock))}`)
+  check('回收时留下一行可追溯的说明', notes.some(note => note.includes(String(dead.pid))), notes.join(' | '))
+
+  rmSync(dir, { recursive: true, force: true })
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

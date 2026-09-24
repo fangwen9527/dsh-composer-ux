@@ -169,7 +169,7 @@ export function QuickCommandsPanel({
         <button
           type="button"
           disabled={busy}
-          title="把输入框里的话交给另一个 AI 整理成一条可以直接发出去的清晰指令，结果直接写回输入框"
+          title="把输入框里的话交给另一个 AI 整理成一条可以直接发出去的清晰指令，结果直接写回输入框。它只能产出能指回你原话某一句的补全，指不回去的会被丢掉并记账"
           style={busy ? quickPrimaryButtonDisabled : quickPrimaryButton}
           onMouseDown={event => { event.preventDefault() }}
           onClick={() => { actions.optimize() }}

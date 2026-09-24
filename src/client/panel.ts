@@ -71,37 +71,16 @@ export const RESIZE_OUTLINE_STYLE: CSSProperties = {
   pointerEvents: 'none',
 }
 
-/** 注入的滚动样式（由 html.dsh-ux-panel-scroll 门控）。 */
-const PANEL_CSS = `
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) { min-height: 320px; }
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) > nav {
-  min-height: 0;
-}
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-}
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child::-webkit-scrollbar {
-  width: 8px;
-}
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child::-webkit-scrollbar-thumb {
-  background: var(--dsh-scrollbar-thumb, var(--dsw-alias-scrollbar-bg-l2));
-  border-radius: 8px;
-}
-html.dsh-ux-panel-scroll [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child::-webkit-scrollbar-thumb:hover {
-  background: var(--dsh-scrollbar-thumb-hover, var(--dsw-alias-scrollbar-hover-l2));
-}
-`
-
 /**
  * 尺寸手柄样式。
  *
  * 手柄层挂在**设置面板内部**（见文件头的层叠上下文说明），所以这些规则里的
  * 定位一律相对面板；`pointer-events` 在层上关掉、只在具体手柄上打开，
  * 免得整层吃掉面板本身的点击。
+ *
+ * ⚠️ 0.6.0 删掉了这里另一半「导航列滚动」样式（原 PANEL_CSS +
+ * `html.dsh-ux-panel-scroll` 门控）：DSH 0.1.7 的官方设置页已经给 `.navList`
+ * 自带 `overflow-y: auto`，我们再注入一套就成了重复实现，故整项移除。
  */
 const RESIZE_CSS = `
 .${RESIZE_LAYER_CLASS} { position: absolute; inset: 0; pointer-events: none; }
@@ -125,24 +104,14 @@ const RESIZE_CSS = `
 .${RESIZE_GRIP_CLASS}:hover { color: rgba(127, 127, 137, .95); background: rgba(127, 127, 137, .16); }
 `
 
-/** 注入样式表驱动滚动开关（随设置变化即时更新）；返回卸载器。 */
-export function installPanelStyle(
-  settings: () => boolean,
-  subscribe: (listener: () => void) => () => void,
-): () => void {
+/** 注入尺寸手柄样式表；返回卸载器。 */
+export function installPanelResizeStyle(): () => void {
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-composer-ux-panel'
-  tag.textContent = `${PANEL_CSS}\n${RESIZE_CSS}`
+  tag.textContent = RESIZE_CSS
   document.head.appendChild(tag)
-  const applyClass = (): void => {
-    document.documentElement.classList.toggle('dsh-ux-panel-scroll', settings())
-  }
-  applyClass()
-  const unsubscribe = subscribe(applyClass)
   return () => {
-    unsubscribe()
     tag.remove()
-    document.documentElement.classList.remove('dsh-ux-panel-scroll')
   }
 }
 

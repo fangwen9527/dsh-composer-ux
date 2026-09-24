@@ -12,6 +12,7 @@ export {
 export {
   DEFAULT_CATEGORY_NAME, OPTIMIZE_TEXT_MAX, QUICK_BOOK_VERSION, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_PROMPTS_API_PATH, INSERT_MODES, MENU_MODES,
+  OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_PROMPT_MAX, optimizerPromptFieldOf,
   alwaysQuickPrompts, appendBatchForSend, bookToFile, defaultQuickBook, firstOnlyQuickPrompts,
   flattenQuickPrompts, insertModeOf, menuModeFrom, newQuickCategoryId, sanitizeBook,
 } from '../src/settings-contract.ts'
@@ -31,8 +32,18 @@ export {
   withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from '../src/client/prompt-book.ts'
 export {
-  OPTIMIZER_SPECS, buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser,
+  OPTIMIZER_SPECS, OPTIMIZER_OUTPUT_CONTRACT, OPTIMIZE_ITEM_KINDS, OPTIMIZE_ITEM_MAX_CHARS,
+  OPTIMIZE_MAX_ITEMS,
+  buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource,
 } from '../src/optimizer-prompt.ts'
+/**
+ * 依据校验 + 宿主装配（0.6.0 的机制内核）：这些函数是"模型能不能凭空加需求"的唯一防线，
+ * 每一条判据都要能在 node 里单独钉住，所以整组出口。
+ */
+export {
+  allowedKindsFor, assembleCommand, extractJson, findQuoteSpan, optimizeBudgetFor,
+  parseOptimizeOutput, runOptimizePipeline,
+} from '../src/optimizer-assemble.ts'
 /** 样式表也当数据测：实色按钮的「填充 + 前景」必须成对（见测试第 7 节）。 */
 export * as styles from '../src/client/styles.ts'
 /** 入口按钮的注入样式表：只取类名常量（installX 会碰 document，不在 node 里跑）。 */
@@ -91,3 +102,14 @@ export {
 export { sectionEnabledOf, activeSections, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD, TERMINAL_ENABLED_FIELD } from '../src/settings-contract.ts'
 /** 设置契约里那几个跨端常量（重启接口路径等）。 */
 export { REPO_URL, RESTART_API_PATH } from '../src/settings-contract.ts'
+/**
+ * 孤儿写入锁的判据（0.6.1）。
+ *
+ * 这段逻辑会**删文件**（`<profile>/package.json.lock`），所以每一条判据都必须能单独
+ * 钉住：认不出 PID 不删、持有者活着不删、只有确认持有者已不存在才删。
+ * "误删一把活锁"的代价是两个写入者交错提交同一个 profile patch，比不删更糟。
+ */
+export {
+  SETTINGS_LOCK_FILENAME, isProcessAlive, profileDirOfPatchPath, recoverStaleSettingsLock,
+  staleLockDecision,
+} from '../src/settings-lock.ts'

@@ -1,6 +1,6 @@
 {
   "name": "dsh-composer-ux",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头 + Windows 默认终端切换（把模型的 PowerShell 工具换成 Git Bash）（含设置页）+ 设置页抬头一键重启 DSH（助手进程 + 等端口 + 隐藏控制台）",
   "type": "module",
   "main": "./lib/index.js",
@@ -42,8 +42,7 @@
     "client": {
       "platform": "web",
       "inject": [
-        "slots",
-        "settingsScope"
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     },
     "bundle": {
@@ -52,7 +51,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/host-header-mirror.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/client-registration.mjs"
+    "test": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/client-registration.mjs && node test/settings-service-adopt.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

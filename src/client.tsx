@@ -8,7 +8,7 @@ import {
   DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
   HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD,
   MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
-  NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD,
+  NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
   activeSections, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
@@ -23,7 +23,7 @@ import {
   withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from './client/prompt-book.ts'
 import { installInterceptors, runMenuAction } from './client/interceptors.ts'
-import { installPanelStyle } from './client/panel.ts'
+import { installPanelResizeStyle } from './client/panel.ts'
 import { installSettingsCardStyle } from './client/settings-style.ts'
 import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
@@ -36,18 +36,61 @@ import {
 } from './client/quick-commands.ts'
 
 export const name = 'composer-ux'
-export const inject = ['slots', 'settingsScope']
+/**
+ * 只硬依赖 `slots`。
+ *
+ * 设置服务换了名字与形状，而且**不能同时写进 `inject`**：
+ *   0.1.6 及以前 = `ctx.settingsScope.bind({ namespace })`
+ *   0.1.7 起     = `ctx.configForms.get(namespace)`
+ * 谁在对方那一代都不存在，静态 inject 一旦写错，插件就永远等不到依赖而整块不挂载
+ * （设置页、键位、右键菜单、快捷指令一起消失）。所以这里只硬依赖 slots，
+ * 两个名字各用 `ctx.inject` 等一次，谁先到就用谁（见 `adoptSettings`）。
+ */
+export const inject = ['slots']
+
+/** 一个设置作用域的最小用法：两代 `SettingsScope` / `ConfigForm` 的交集。 */
+interface SettingsScopeLike {
+  getSnapshot(): { status: string; value?: unknown }
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<unknown>
+  unset(field: string): Promise<unknown>
+  mutate(ops: readonly { op: 'set' | 'unset'; path: readonly string[]; value?: unknown }[]): Promise<unknown>
+}
+
+/**
+ * 设置服务缺席时的替身：界面以默认值照常可用。
+ *
+ * 存在的意义是"降级而不是消失"——两代 DSH 都有这个服务，所以它只在
+ * 组合里根本没有设置 provider 时兜底。
+ */
+const NULL_SCOPE: SettingsScopeLike = {
+  getSnapshot: () => ({ status: 'unavailable', value: undefined }),
+  subscribe: () => () => {},
+  set: async () => false,
+  unset: async () => false,
+  mutate: async () => false,
+}
 
 /** 客户端插件入口。 */
 export function apply(ctx: any): void {
   const slots = ctx.slots
-  const scope = ctx.settingsScope.bind<ComposerUxSettings>({ namespace: NAMESPACE })
 
   const live = createSnapshotStore<ComposerUxSettings>({ ...DEFAULT_SETTINGS })
   const menu = createSnapshotStore<MenuState | null>(null)
   const panel = createSnapshotStore<QuickPanelAnchor | null>(null)
   const optimizing = createSnapshotStore<boolean>(false)
   const panelNotice = createSnapshotStore<string>('')
+  /**
+   * 设置写入的说明行；'' = 正常。渲染在设置卡片顶部（与「重启 DSH」横幅同位置）。
+   *
+   * 存在的理由：`ConfigForm.set` 返回 `true` 只代表宿主**收下**了这次写入，不保证运行时
+   * 的活值跟着变。真机事故（2026-09-23）里，设置写入被一把孤儿锁挡住，用户能看到的
+   * 只有"开关不动"——一句提示都没有。所以布尔字段写完回读一次，对不上就把话说出来。
+   */
+  const writeNotice = createSnapshotStore<string>('')
+
+  /** 当前设置作用域；真的那个到了之后被 `adoptSettings` 换掉（见文件上方 inject 那段）。 */
+  let scope: SettingsScopeLike = NULL_SCOPE
 
   const sync = (): void => {
     const snapshot = scope.getSnapshot()
@@ -56,15 +99,110 @@ export function apply(ctx: any): void {
       : { ...DEFAULT_SETTINGS })
   }
   sync()
-  ctx.effect(() => scope.subscribe(sync), 'composer-ux: settings sync')
 
+  /**
+   * 认领第一个出现的设置服务。
+   *
+   * 0.1.7 的 `ConfigForm.set/unset/mutate` 返回 `Promise<boolean>`（`false` = 宿主拒绝，
+   * 例如字段不是 volatile、或修订号被别人抢先）；0.1.6 返回 `Promise<void>`。
+   * 所以这里只在明确拿到 `false` 时记一条警告，两代都不会误报。
+   */
+  let adopted = false
+  const adoptSettings = (service: unknown, shape: 'get' | 'bind'): void => {
+    if (adopted || service === null || service === undefined) return
+    const api = service as {
+      get?: (namespace: string) => unknown
+      bind?: (spec: { namespace: string }) => unknown
+    }
+    const next = shape === 'get' ? api.get?.(NAMESPACE) : api.bind?.({ namespace: NAMESPACE })
+    if (next === null || next === undefined) return
+    if (typeof (next as SettingsScopeLike).getSnapshot !== 'function') return
+    adopted = true
+    scope = next as SettingsScopeLike
+    sync()
+    ctx.effect(() => scope.subscribe(sync), 'composer-ux: settings sync')
+  }
+  /**
+   * 等一个服务出现（cordis 的 `inject` 语义）。
+   *
+   * `ctx.inject` 理论上一定在（宿主半也在用），但它是这一块唯一会让 apply 抛出的调用 ——
+   * 抛出意味着整块消失，所以缺席时静默跳过：下面的"直接读一次"兜底仍会认领已到位的服务。
+   */
+  const whenService = (deps: string[], callback: (view: Record<string, unknown>) => void): void => {
+    if (typeof ctx.inject !== 'function') return
+    try {
+      ctx.inject(deps, callback)
+    } catch (error: unknown) {
+      console.warn('[composer-ux] settings service inject failed', error)
+    }
+  }
+  whenService(['configForms'], view => { adoptSettings(view.configForms, 'get') })
+  whenService(['settingsScope'], view => { adoptSettings(view.settingsScope, 'bind') })
+  /**
+   * 直接读一次属性，两代各试一次（`adoptSettings` 内部有 `adopted` 闸，不会重复认领）。
+   *
+   * 必须包 try：cordis 的上下文代理对**未出现在 inject 里**的服务名直接抛出
+   * `cannot get property "X" without inject`。本插件只声明 `inject = ['slots']`，
+   * 所以在缺这一代服务的 DSH 上（0.1.6 没有 `configForms`、0.1.7 没有
+   * `settingsScope`），裸读属性会让整个 apply 抛出 —— 设置页、键位、右键菜单、
+   * 快捷指令一起消失，正是上面注释要避免的那种"整块不挂载"。
+   */
+  const peekService = (name: string): unknown => {
+    try {
+      return (ctx as Record<string, unknown>)[name]
+    } catch {
+      return undefined
+    }
+  }
+  adoptSettings(peekService('configForms'), 'get')
+  adoptSettings(peekService('settingsScope'), 'bind')
+
+  /**
+   * 写入一个字段；被宿主拒绝（新版返回 false）时在控制台留痕，并把原因留给设置页。
+   *
+   * 为什么还要**回读校验**：`ConfigForm.set` 返回 `true` 只说明宿主收下了写入，不保证
+   * 运行时的活值跟着变。真机上出现过两种"点了没反应"：
+   *   · 写入被拒（false）—— profile 的写入锁被占/是孤儿锁，等 2 秒超时；
+   *   · 写入落盘、但进程里的活值没接住 —— 界面继续显示旧值。
+   * 两种都要重启（或手工回收锁）才能恢复，而用户唯一的线索就是"开关不动"。所以这里
+   * 回读一次，对不上就把说明挂到设置页顶部。
+   *
+   * 为什么只校验布尔字段：布尔不会被净化层夹取，也没有"写入同一个值"的正常场景，
+   * 于是"回读仍不等于刚写的值"就是明确异常；尺寸/文本有夹取与截断，拿它们判等会误报。
+   */
+  const WRITE_READBACK_MS = 1200
   const setField = (field: SettingsField, value: unknown): void => {
-    void scope.set(field, value as never).catch((error: unknown) => {
+    writeNotice.set('')
+    const verify = typeof value === 'boolean'
+    void scope.set(field, value as never).then((accepted: unknown) => {
+      if (accepted === false) {
+        console.warn('[composer-ux] settings write refused', field)
+        writeNotice.set(
+          `写入「${field}」被宿主拒绝。常见原因：profile 的写入锁被占用，或是一把孤儿锁`
+          + '（硬杀重启留下的）——见 README「设置写不进去」一节；重启 DSH 后仍无效，'
+          + '就手工删掉 profiles/<你的 profile>/package.json.lock。',
+        )
+        return
+      }
+      if (!verify) return
+      setTimeout(() => {
+        const now = (live.getSnapshot() as unknown as Record<string, unknown>)[field]
+        if (now === value) return
+        console.warn('[composer-ux] settings write had no visible effect', field, now, value)
+        writeNotice.set(
+          `写入「${field}」已被宿主接受，但运行时的值没有变化（仍是 ${String(now)}）。`
+          + '配置可能已经落盘，只是这个进程没接住——重启 DSH 即可生效。',
+        )
+      }, WRITE_READBACK_MS)
+    }, (error: unknown) => {
       console.error('[composer-ux] settings write failed', error)
+      writeNotice.set(`写入「${field}」失败：${error instanceof Error ? error.message : String(error)}`)
     })
   }
   const clearField = (field: SettingsField): void => {
-    void scope.unset(field).catch((error: unknown) => {
+    void scope.unset(field).then((accepted: unknown) => {
+      if (accepted === false) console.warn('[composer-ux] settings clear refused', field)
+    }, (error: unknown) => {
       console.error('[composer-ux] settings clear failed', error)
     })
   }
@@ -150,7 +288,7 @@ export function apply(ctx: any): void {
         MENU_MODE_FIELD,
         // 旧的布尔字段也一并清掉：它只是迁移线索，留着会把「恢复默认」后的档位又拉回旧值。
         MENU_NATIVE_FIELD,
-        PANEL_SCROLL_FIELD, PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
+        PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
         HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_VALUE_FIELD, HEADER_ROUTES_FIELD,
         OPTIMIZER_TIER_FIELD,
         // 0.5.0 新增的用户配置：终端档位/路径（「恢复默认」也该把它们恢复）。
@@ -218,7 +356,16 @@ export function apply(ctx: any): void {
           }
           replaceDraft(result.text ?? '')
           focusComposer()
-          note(`已写回输入框（${result.route}）· Ctrl+Z 可还原`)
+          // 状态行如实交代这一轮到底发生了什么（0.6.0 起宿主会回报记账信息）：
+          // 用了几个条目、丢了几条、走没走降级/重试 —— 用户据此判断这次优化可不可信。
+          const bits: string[] = []
+          if (result.fallback === true) bits.push('模型没按条目契约输出，已整段照收（未校验依据）')
+          else bits.push(`${String(result.itemCount ?? 0)} 条补全`)
+          const lost = result.dropped?.length ?? 0
+          if (lost > 0) bits.push(`丢弃 ${String(lost)} 条`)
+          if (result.promptSource === 'custom') bits.push('自定义提示词')
+          if (result.retried === true) bits.push('重试过一次')
+          note(`已写回输入框（${result.route}）· ${bits.join(' · ')} · Ctrl+Z 可还原`)
         },
         (error: unknown) => {
           optimizing.set(false)
@@ -245,12 +392,13 @@ export function apply(ctx: any): void {
     order: 40,
     label: '输入体验',
     inject: () => ({
-      hooks: { live, book, bookStatus },
+      hooks: { live, book, bookStatus, writeNotice },
       actions: {
         setField, clearField, resetAll,
         saveBook: bookActions.saveBook,
         reloadBook: bookActions.reload,
         resetBook: bookActions.resetBook,
+        dismissNotice: () => { writeNotice.set('') },
       },
     }),
   }, SettingsSection))
@@ -322,17 +470,9 @@ export function apply(ctx: any): void {
   // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。
   ctx.effect(() => installQuickButtonStyle(), 'composer-ux: quick button style')
 
-  // 设置面板导航滚动样式（随 panelScroll 开关切换；「设置面板」栏或总开关关闭时一并停用）。
-  ctx.effect(
-    () => installPanelStyle(
-      () => {
-        const settings = live.getSnapshot()
-        return activeSections(settings).panel && settings.panelScroll
-      },
-      listener => live.subscribe(listener),
-    ),
-    'composer-ux: panel style',
-  )
+  // 设置面板尺寸手柄样式（常驻；「设置面板」栏关掉时手柄组件自己返回 null，样式留着无副作用）。
+  // 0.6.0 起这里只剩尺寸手柄：导航列滚动由 DSH 0.1.7 的官方设置页自带。
+  ctx.effect(() => installPanelResizeStyle(), 'composer-ux: panel resize style')
 
   // 键位拦截 + 右键菜单打开 + 官方发送按钮上的条目附加（三件事共用这一组捕获监听）。
   // 安装条件放宽成"三栏里任意一栏开着"，各自在自己的处理函数里按栏判断 ——

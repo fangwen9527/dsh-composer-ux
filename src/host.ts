@@ -29,10 +29,10 @@ import {
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
-  OPTIMIZER_API_PATH, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
-  PANEL_SCROLL_FIELD, PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
+  OPTIMIZER_API_PATH, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
+  PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
-  SEND_KEY_FIELD, defaultQuickBook, newSessionId, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
+  SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
   type QuickPromptBook,
 } from './settings-contract.ts'
 import {
@@ -46,8 +46,10 @@ import {
   scheduleRestart, servingPort, trustedRestartRequest,
 } from './restart.ts'
 import type { RestartIo } from './restart.ts'
-import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser } from './optimizer-prompt.ts'
+import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
+import { runOptimizePipeline } from './optimizer-assemble.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
+import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
 
 export const name = 'composer-ux'
 
@@ -60,10 +62,66 @@ type PathOp =
   | { op: 'set'; path: readonly string[]; value: unknown }
   | { op: 'unset'; path: readonly string[] }
 
-/** 本插件用到的 settings 能力（保持结构最小，避免依赖具体实现类）。 */
+/**
+ * 本插件用到的 settings 能力（保持结构最小，避免依赖具体实现类）。
+ *
+ * ⚠️ 两代 DSH 的服务形状不同（2026-09 实测）：
+ *   · 0.1.6 及以前：有 `get(ns)` 读解析后的值、有 `register(ns, schema)` 注册命名空间。
+ *   · 0.1.7 起：`get` 与 `register` 都被删除；命名空间由导出的 Config 推导，
+ *     别人的行只能从 `describe()` 的快照里读。
+ * 所以三个成员都声明成可选，按能力用 —— 见 {@link makeReader} 与 {@link ownSchema}。
+ */
 interface SettingsLike {
-  get(ns: string): unknown
+  get?(ns: string): unknown
+  register?(ns: string, schema: unknown): unknown
+  describe?(options?: { redactSecrets?: boolean }): readonly { ns?: string; value?: unknown }[]
   mutate(ns: string, ops: readonly PathOp[]): Promise<void>
+}
+
+/** 读一个命名空间的普通值。 */
+type ReadRow = (ns: string) => Record<string, unknown> | undefined
+
+/** 把 volatile 引用解引用成普通值（0.1.6 的普通值原样返回）。 */
+function plainConfig(value: unknown): unknown {
+  if (typeof value === 'object' && value !== null
+    && typeof (value as { get?: unknown }).get === 'function') {
+    return plainConfig((value as { get: () => unknown }).get())
+  }
+  if (Array.isArray(value)) return value.map(plainConfig)
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, plainConfig(child)]))
+  }
+  return value
+}
+
+/**
+ * 造一个「按命名空间读值」的读口，把两代 settings 服务的读取差异收在这一处。
+ *
+ * - 0.1.6 及以前：服务有 `get(ns)`，直接取解析后的值。
+ * - 0.1.7 起：`get` 没了。**自己的行**由导出的 {@link Config} 给出 —— 字段是
+ *   volatile 引用，得先解引用（{@link plainConfig}）；**别人的行**（本插件只读
+ *   llm-pi-ai 的 providers.headers）只能从 `describe()` 的快照里找。
+ *
+ * @param settings 设置服务（可能缺席）。
+ * @param config 本行的 Config：0.1.7 是 volatile 引用树，0.1.6 是解析后的普通值。
+ */
+function makeReader(settings: SettingsLike | undefined, config: unknown): ReadRow {
+  return (ns: string) => {
+    try {
+      if (typeof settings?.get === 'function') return objectOf(settings.get(ns))
+      if (ns === NAMESPACE) {
+        const own = objectOf(plainConfig(config))
+        // Config 读不出东西时继续走 describe，而不是当成"这一行没有值"——
+        // 这条路径在 Config 缺席（组合没给 config）时是真会走到的。
+        if (own !== undefined) return own
+      }
+      const row = (settings?.describe?.() ?? []).find(candidate => candidate?.ns === ns)
+      return objectOf(row?.value)
+    } catch {
+      // 读不到就当作"没有"：调用方全都按"缺席 ⇒ 不写"处理（幂等、不会误删用户配置）。
+      return undefined
+    }
+  }
 }
 
 /** 收窄成普通对象（数组与 null 都不算）。 */
@@ -76,6 +134,31 @@ function objectOf(value: unknown): Record<string, unknown> | undefined {
 /** 只接受字符串，其余一律视为空串。 */
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+/**
+ * 读本插件自己那一行里的一个字符串字段（读不到一律返回空串）。
+ *
+ * ⚠️ 为什么不用 `ctx.settings` 那种裸属性读：不在 `inject` 列表里的服务，
+ * 裸属性读会在 cordis 的 Proxy 上抛（本插件踩过一次，见 client.tsx 的 peekService）；
+ * 而 `get(name)` 不抛。提示词优化路由只 inject 了 webServer / llm ——
+ * 自定义提示词属于"锦上添花"，不该让整条路由因为 settings 缺席而干脆不注册，
+ * 所以这里走 `get` + try/catch：读不到就退回内置提示词。
+ *
+ * @param scope - 任意带 `get` 的上下文（宿主 ctx 或注入后的子 ctx）。
+ * @param config - 本行的 Config（0.1.7 是 volatile 引用树，解引用后即当前值）。
+ * @param field - 字段名。
+ * @returns 字段值；任何异常都归一成空串。
+ */
+function readOwnSetting(scope: unknown, config: unknown, field: string): string {
+  try {
+    const get = (scope as { get?: (name: string) => unknown } | undefined)?.get
+    if (typeof get !== 'function') return ''
+    const service = get.call(scope, 'settings') as SettingsLike | undefined
+    return textOf(makeReader(service, config)(NAMESPACE)?.[field])
+  } catch {
+    return ''
+  }
 }
 
 /** 取头值的第一个（Node 对重复头会给出数组）。 */
@@ -164,10 +247,11 @@ function errorText(error: unknown): string {
 /**
  * 把「请求头」栏目对齐到 llm-pi-ai 配置。幂等：算出的目标与现状一致时不写任何东西，
  * 因此本函数既可在插件启动时跑一次，也可在每次 settings 变更后被反复调用。
- * @param settings - settings 服务。
+ * @param settings - settings 服务（用于写入）。
+ * @param read - 按命名空间读值的读口（两代服务差异在 {@link makeReader} 里收口）。
  */
-async function mirrorHeader(settings: SettingsLike): Promise<void> {
-  const own = objectOf(settings.get(NAMESPACE))
+async function mirrorHeader(settings: SettingsLike, read: ReadRow): Promise<void> {
+  const own = read(NAMESPACE)
   if (own === undefined) return
 
   const enabled = own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true
@@ -182,7 +266,7 @@ async function mirrorHeader(settings: SettingsLike): Promise<void> {
     await settings.mutate(NAMESPACE, [{ op: 'set', path: [HEADER_VALUE_FIELD], value }])
   }
 
-  const llm = objectOf(settings.get(LLM_NAMESPACE))
+  const llm = read(LLM_NAMESPACE)
   const providers = llm === undefined ? undefined : objectOf(llm.providers)
 
   const writes: PathOp[] = []
@@ -260,72 +344,188 @@ async function mirrorHeader(settings: SettingsLike): Promise<void> {
   if (ownOps.length > 0) await settings.mutate(NAMESPACE, ownOps)
 }
 
-/** 注册 durable section；settings 服务缺席（无 provider）时静默跳过。 */
-export function apply(ctx: Context): void {
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.register(
-      NAMESPACE,
-      z.object({
-        [ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.enabled),
-        // 五栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
-        // —— 没有 ⇒ 从没碰过这一栏 ⇒ 关闭；有 ⇒ 用户碰过 ⇒ 保持他写下的值。
-        // 给了静态默认值就再也分不出这两种情况了（净化的 sectionEnabledOf 靠它）。
-        [KEYS_ENABLED_FIELD]: z.boolean().required(false),
-        [MENU_ENABLED_FIELD]: z.boolean().required(false),
-        [QUICK_ENABLED_FIELD]: z.boolean().required(false),
-        [PANEL_ENABLED_FIELD]: z.boolean().required(false),
-        [TERMINAL_ENABLED_FIELD]: z.boolean().required(false),
-        [SEND_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.sendKey),
-        [NEWLINE_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.newlineKey),
-        ...Object.fromEntries(MENU_FIELDS.map(field => [
-          field,
-          z.boolean().default(DEFAULT_SETTINGS[field]),
-        ])),
-        // 右键菜单模式（0.5.0 起三档）。**故意不给默认值、且声明成可选**：
-        // 「文档里没有这个键」本身就是迁移要用的信息——净化据此按旧布尔 menuNative
-        // 推断（见 menuModeFrom）。给了默认值就再也分不出「从没设置过」与「明确设成了它」。
-        [MENU_MODE_FIELD]: z.string().required(false),
-        // 旧的布尔字段：只作迁移线索，故同样不给默认值——旧文档里的 true / false
-        // 都要保住原意（true = 浏览器菜单、false = 明确选过自定义菜单）。
-        [MENU_NATIVE_FIELD]: z.boolean().required(false),
-        [PANEL_SCROLL_FIELD]: z.boolean().default(DEFAULT_SETTINGS.panelScroll),
-        [PANEL_RESIZE_FIELD]: z.boolean().default(DEFAULT_SETTINGS.panelResize),
-        // schemastery 无 .optional()：可选键用 .required(false)。
-        [PANEL_WIDTH_FIELD]: z.number().min(PANEL_MIN).max(PANEL_MAX).required(false),
-        [PANEL_HEIGHT_FIELD]: z.number().min(320).max(PANEL_MAX).required(false),
-        // OpenCode 请求头栏目（值由宿主半按 llm-pi-ai 的 Fetch 规则自校验后再写入）。
-        [HEADER_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.headerEnabled),
-        [HEADER_NAME_FIELD]: z.string().default(DEFAULT_HEADER_NAME),
-        [HEADER_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerValue),
-        [HEADER_ROUTES_FIELD]: z.string().default(DEFAULT_SETTINGS.headerRoutes),
-        [HEADER_APPLIED_NAME_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedName),
-        [HEADER_APPLIED_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedValue),
-        [HEADER_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.headerStatus),
-        // 快捷指令列表：结构固定为 {id,label,prompt,always}，逐条自带默认值，
-        // 让旧设置文档（没有这个键）在读取时直接得到内置 9 条。
-        [QUICK_PROMPTS_FIELD]: z.array(z.object({
-          id: z.string().default(''),
-          label: z.string().default(''),
-          prompt: z.string().default(''),
-          always: z.boolean().default(false),
-        })).default(DEFAULT_QUICK_PROMPTS.map(item => ({ ...item }))),
-        [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
-        // 「默认终端」（0.5.0 起）：用户档位与可选路径。
-        [TERMINAL_MODE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalMode),
-        [TERMINAL_BASH_PATH_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalBashPath),
-        // 宿主半自持的三项：探测候选、状态行、当前生效 shell（见 HOST_OWNED_FIELDS）。
-        [TERMINAL_CANDIDATES_FIELD]: z.array(z.object({
-          path: z.string().default(''),
-          label: z.string().default(''),
-          kind: z.string().default('path'),
-          explicit: z.boolean().default(false),
-        })).default([]),
-        [TERMINAL_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalStatus),
-        [TERMINAL_EFFECTIVE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalEffective),
-      }),
-    )
+/**
+ * 本插件的字段表 —— 设置页可编辑的字段全在这里。
+ *
+ * 抽成函数是为了让模块级常量 {@link Config} 与旧版的显式注册共用一份真相
+ * （0.1.6 及以前必须 `settings.register(NAMESPACE, schema)`）。
+ */
+function ownSchema(): z {
+  return z.object({
+    [ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.enabled),
+    // 五栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
+    // —— 没有 ⇒ 从没碰过这一栏 ⇒ 关闭；有 ⇒ 用户碰过 ⇒ 保持他写下的值。
+    // 给了静态默认值就再也分不出这两种情况了（净化的 sectionEnabledOf 靠它）。
+    [KEYS_ENABLED_FIELD]: z.boolean().required(false),
+    [MENU_ENABLED_FIELD]: z.boolean().required(false),
+    [QUICK_ENABLED_FIELD]: z.boolean().required(false),
+    [PANEL_ENABLED_FIELD]: z.boolean().required(false),
+    [TERMINAL_ENABLED_FIELD]: z.boolean().required(false),
+    [SEND_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.sendKey),
+    [NEWLINE_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.newlineKey),
+    ...Object.fromEntries(MENU_FIELDS.map(field => [
+      field,
+      z.boolean().default(DEFAULT_SETTINGS[field]),
+    ])),
+    // 右键菜单模式（0.5.0 起三档）。**故意不给默认值、且声明成可选**：
+    // 「文档里没有这个键」本身就是迁移要用的信息——净化据此按旧布尔 menuNative
+    // 推断（见 menuModeFrom）。给了默认值就再也分不出「从没设置过」与「明确设成了它」。
+    [MENU_MODE_FIELD]: z.string().required(false),
+    // 旧的布尔字段：只作迁移线索，故同样不给默认值——旧文档里的 true / false
+    // 都要保住原意（true = 浏览器菜单、false = 明确选过自定义菜单）。
+    [MENU_NATIVE_FIELD]: z.boolean().required(false),
+    // 「导航滚动」在 0.6.0 随功能一起删掉了（DSH 0.1.7 的官方设置页自带导航列滚动）。
+    // 旧文档里可能仍留着 panelScroll：schemastery 对未声明键是**原样放行**（已实测），
+    // 所以不需要为它保留一个宽容字段，升级时也不会因此判非法。
+    [PANEL_RESIZE_FIELD]: z.boolean().default(DEFAULT_SETTINGS.panelResize),
+    // schemastery 无 .optional()：可选键用 .required(false)。
+    [PANEL_WIDTH_FIELD]: z.number().min(PANEL_MIN).max(PANEL_MAX).required(false),
+    [PANEL_HEIGHT_FIELD]: z.number().min(320).max(PANEL_MAX).required(false),
+    // OpenCode 请求头栏目（值由宿主半按 llm-pi-ai 的 Fetch 规则自校验后再写入）。
+    [HEADER_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.headerEnabled),
+    [HEADER_NAME_FIELD]: z.string().default(DEFAULT_HEADER_NAME),
+    [HEADER_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerValue),
+    [HEADER_ROUTES_FIELD]: z.string().default(DEFAULT_SETTINGS.headerRoutes),
+    [HEADER_APPLIED_NAME_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedName),
+    [HEADER_APPLIED_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedValue),
+    [HEADER_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.headerStatus),
+    // 快捷指令列表：结构固定为 {id,label,prompt,always}，逐条自带默认值，
+    // 让旧设置文档（没有这个键）在读取时直接得到内置 9 条。
+    [QUICK_PROMPTS_FIELD]: z.array(z.object({
+      id: z.string().default(''),
+      label: z.string().default(''),
+      prompt: z.string().default(''),
+      always: z.boolean().default(false),
+    })).default(DEFAULT_QUICK_PROMPTS.map(item => ({ ...item }))),
+    [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
+    // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
+    [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
+    [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
+    [OPTIMIZER_PROMPT_FIELDS.extreme]: z.string().default(DEFAULT_SETTINGS.optimizerPromptExtreme),
+    // 「默认终端」（0.5.0 起）：用户档位与可选路径。
+    [TERMINAL_MODE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalMode),
+    [TERMINAL_BASH_PATH_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalBashPath),
+    // 宿主半自持的三项：探测候选、状态行、当前生效 shell（见 HOST_OWNED_FIELDS）。
+    [TERMINAL_CANDIDATES_FIELD]: z.array(z.object({
+      path: z.string().default(''),
+      label: z.string().default(''),
+      kind: z.string().default('path'),
+      explicit: z.boolean().default(false),
+    })).default([]),
+    [TERMINAL_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalStatus),
+    [TERMINAL_EFFECTIVE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalEffective),
+  })
+}
 
+/**
+ * 给一个 schema 节点打 volatile 标记。
+ *
+ * ⚠️ 为什么不无条件调 `.volatile()`：宿主半把 schemastery **内联**进 lib/index.js
+ * （见 build.mjs 的 HOST_ALIASES，取自 DSH 检出的 vendor/ 目录），所以"这个方法存不存在"
+ * 取决于**构建时**那份 DSH —— 在 0.1.6 上构建出来的包拿到的是 schemastery 3.18.2，
+ * 它根本没有 `volatile()`（3.18.3 才加的）。而标记真正起作用的形态是
+ * `schema.meta.volatile` 这个**数据**：0.1.7 的设置服务读的就是它
+ * （`volatileForm` 判根、`isVolatilePath` 判路径），跟这棵树是谁构造的无关。
+ * 所以：有方法就用方法，没有就直接写 meta —— 两条路的结果一致，
+ * 于是同一个产物在 0.1.6 与 0.1.7 上都能被正确识别。
+ * @param node 待标记的 schema 节点（`ownSchema()` 的一个字段）。
+ * @returns 带标记的节点（有 `.volatile()` 时是它的克隆，否则是原节点）。
+ */
+function markVolatileField(node: z): z {
+  const withMethod = node as unknown as { volatile?: () => z }
+  if (typeof withMethod.volatile === 'function') return withMethod.volatile()
+  const target = node as unknown as { meta?: { volatile?: boolean } }
+  if (target.meta !== undefined) target.meta.volatile = true
+  return node
+}
+
+/**
+ * 逐字段打标记：**标字段，不标根**。
+ *
+ * ⚠️ 为什么不能标根（2026-09-23 实测，DSH 0.1.7 + 随包 schemastery 3.18.4）：
+ * 解析时一旦看到**根**带 volatile，schemastery 就把**整棵解析结果**包成**一个根引用** ——
+ * `Config({}).enabled === undefined`，值只在 `.get()` 里。官方形状则是"普通对象壳 +
+ * 叶子引用"：`ui-theme` / `locale` / `llm-deepseek` / `ui-conversation` …
+ * **一律逐字段标，没有一个标根**。根引用与本插件对不上的是运行时把配置变更提交回
+ * **运行中引用**的那条路（loader 的 `_commitVolatile`，按**叶子路径**设计）：
+ * 真机表现就是**写入落了盘、界面却还是旧值**（开关"点了没反应"）。
+ * @param schema `ownSchema()` 的结果。
+ * @returns 同一棵 schema（形状不变，只给每个字段补上 volatile 数据）。
+ */
+function markVolatile(schema: z): z {
+  const dict = (schema as unknown as { dict?: Record<string, z> }).dict
+  if (dict === undefined) return schema
+  for (const key of Object.keys(dict)) dict[key] = markVolatileField(dict[key]!)
+  return schema
+}
+
+/**
+ * 插件 Config —— DSH 0.1.7 起，`settings.register()` 被删除，命名空间改由
+ * **插件导出的 Config** 推导。
+ *
+ * ⚠️ 关键在于 volatile：新版**只有** volatile 字段会被服务（`volatileForm`）、
+ * 也**只有** volatile 路径能被设置页写入（`isVolatilePath`）。本节字段全部是用户可编辑项
+ * （含宿主半回写的状态字段），所以**一个不漏地逐字段标**——漏一个，那个字段在设置页上
+ * 就读不到 / 写不进去。标记放在**字段**上而不是整棵对象上，理由见 {@link markVolatile}。
+ *
+ * 0.1.6 没有 volatile：那时 Config 只是一份同形状的 schema，
+ * 命名空间仍由 `apply` 里的 `settings.register(NAMESPACE, Config)` 显式注册。
+ */
+export const Config: z = markVolatile(ownSchema())
+
+/**
+ * 注册 durable section；settings 服务缺席（无 provider）时静默跳过。
+ *
+ * 两代 DSH 的差别（2026-09 实测，见文件头与 {@link Config}）：
+ *   · 0.1.6 及以前：`settings.register(命名空间, schema)` 是**唯一**的注册入口。
+ *   · 0.1.7 起：没有 register，命名空间由导出的 {@link Config} 自动被服务。
+ * 所以这里按能力分支，两代都能挂上。
+ *
+ * @param ctx 宿主半上下文。
+ * @param config 本行的 Config：0.1.7 是 volatile 引用树；0.1.6 是解析后的普通值
+ *   （那时读值仍走 `settings.get`，这个参数只用作兜底）。
+ */
+export function apply(ctx: Context, config?: unknown): void {
+  /** 把「读口」包成终端子系统期望的形状：只替换 `get`，`mutate` 原样转发。 */
+  const readView = (
+    service: unknown,
+  ): { get: (ns: string) => unknown; mutate: (ns: string, ops: readonly PathOp[]) => Promise<void> } | undefined => {
+    if (service === null || service === undefined) return undefined
+    const real = service as SettingsLike
+    return { get: makeReader(real, config), mutate: (ns, ops) => real.mutate(ns, ops) }
+  }
+
+  /**
+   * 孤儿写入锁的回收（背景与判据见 `src/settings-lock.ts`）。
+   *
+   * 为什么放在启动路径上：设置写入用的锁是 `<profile>/package.json.lock`，而**硬杀**
+   * （`restart-webui.bat` 的 `taskkill /T /F`）正好落在一次设置写入中间时会把它留下；
+   * 此后该 profile 的**每一次**设置写入都超时失败，界面上只表现为"点了没反应"，
+   * 一句报错都没有。写入失败之后再做就已经晚了，所以这件事只在启动时做一次。
+   *
+   * 判据收紧到"能证明持有者已不存在"：认不出 PID、PID 还活着、权限不足无法判定
+   * → 一律保持不动。误删一把活锁会让两个写入者交错提交同一个 profile patch，
+   * 比不删更糟（真机事故见 `README.md`「设置写不进去」一节）。
+   */
+  ctx.inject(['configEditor'], (lockCtx) => {
+    try {
+      const documentPath = (lockCtx.configEditor as { documentPath?: unknown }).documentPath
+      if (typeof documentPath !== 'string' || documentPath === '') return
+      void recoverStaleSettingsLock(profileDirOfPatchPath(documentPath), message => {
+        console.warn(`[composer-ux] ${message}`)
+      }).catch((error: unknown) => {
+        console.error('[composer-ux] 孤儿写入锁检查失败', error)
+      })
+    } catch (error: unknown) {
+      console.error('[composer-ux] 孤儿写入锁检查失败', error)
+    }
+  })
+
+  ctx.inject(['settings'], (settingsCtx) => {
     const settings = settingsCtx.settings as unknown as SettingsLike
+    // 0.1.6 及以前：命名空间必须显式注册。0.1.7 起 register 不存在，什么都不做。
+    if (typeof settings.register === 'function') settings.register(NAMESPACE, Config)
+    const read = makeReader(settings, config)
     // 串行化：本插件自己的写入也会再触发 settings/updated，用 busy/again 保证
     // 一次只跑一轮镜像，且不漏掉期间到达的变更。
     let busy = false
@@ -336,7 +536,7 @@ export function apply(ctx: Context): void {
         return
       }
       busy = true
-      void mirrorHeader(settings)
+      void mirrorHeader(settings, read)
         .catch((error: unknown) => {
           console.error('[composer-ux] 请求头镜像失败', error)
         })
@@ -349,10 +549,19 @@ export function apply(ctx: Context): void {
         })
     }
 
+    /**
+     * 设置变化后重跑镜像。
+     *
+     * ⚠️ 事件名也换代了：0.1.7 起是 `settings/document-updated`（参数是 `(ns, revision)`），
+     * 而旧名 `settings/updated` 在 0.1.7 里**整个不存在**（服务已经不发它了）。
+     * 两个都听：任一世代只会有一个真的触发，且 `sync()` 本身幂等、不产生回环。
+     */
     const onSettingsUpdated = (ns: unknown): void => {
       if (ns === NAMESPACE || ns === LLM_NAMESPACE) sync()
     }
-    ctx.on('settings/updated' as never, onSettingsUpdated as never)
+    for (const event of ['settings/updated', 'settings/document-updated']) {
+      ctx.on(event as never, onSettingsUpdated as never)
+    }
     // 启动即对齐一次：启用状态下的头即使在别处被抹掉，也会在此补回。
     sync()
   })
@@ -447,56 +656,110 @@ export function apply(ctx: Context): void {
         return
       }
 
+      // 本档的系统提示词：设置页里写过就用用户那份，否则用内置那份。
+      // 读设置走 `optCtx.get('settings')`（**不在 inject 列表**里也安全：`get` 不抛，
+      // 裸属性读才会抛）。读不到就当作"没有自定义"——内置那份永远可用。
+      const customPrompt = readOwnSetting(optCtx, config, optimizerPromptFieldOf(tier))
+      const system = buildOptimizeSystem(tier, customPrompt)
+
       const controller = new AbortController()
       const timer = setTimeout(() => { controller.abort() }, LLM_TIMEOUT_MS)
-      let out = ''
-      let failure = ''
-      try {
-        const stream = optCtx.llm.stream({
-          provider: route.provider,
-          model: route.model,
-          system: buildOptimizeSystem(tier),
-          temperature: buildOptimizeTemperature(tier),
-          signal: controller.signal,
-          messages: [{
-            id: `optimize-${Date.now().toString(36)}`,
-            role: 'user',
-            content: [{ type: 'text', text: buildOptimizeUser(text) }],
-            source: { kind: 'user' },
-          }],
-        })
-        for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
-          if (chunk.type === 'text-delta') {
-            out += String(chunk.text ?? '')
-            if (out.length > OPTIMIZE_OUTPUT_MAX) break
-          } else if (chunk.type === 'finish') {
-            const reason = objectOf(chunk.reason)
-            if (reason?.kind === 'error' || reason?.kind === 'aborted') {
-              const detail = objectOf(reason.failure)
-              failure = textOf(detail?.message) || (reason.kind === 'aborted' ? '优化被中断' : '模型返回错误')
+
+      /** 跑一次模型调用，返回原始正文与失败原因（重试时会被调用第二次）。 */
+      const runOnce = async (userText: string): Promise<{ out: string; failure: string }> => {
+        let out = ''
+        let failure = ''
+        try {
+          const stream = optCtx.llm.stream({
+            provider: route.provider,
+            model: route.model,
+            system,
+            temperature: buildOptimizeTemperature(tier),
+            signal: controller.signal,
+            messages: [{
+              id: `optimize-${Date.now().toString(36)}`,
+              role: 'user',
+              content: [{ type: 'text', text: userText }],
+              source: { kind: 'user' },
+            }],
+          })
+          for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
+            if (chunk.type === 'text-delta') {
+              out += String(chunk.text ?? '')
+              // 原始 JSON 会比成品长不少（每条都带引文与字段名），上限按成品的 4 倍给。
+              if (out.length > OPTIMIZE_OUTPUT_MAX * 4) break
+            } else if (chunk.type === 'finish') {
+              const reason = objectOf(chunk.reason)
+              if (reason?.kind === 'error' || reason?.kind === 'aborted') {
+                const detail = objectOf(reason.failure)
+                failure = textOf(detail?.message) || (reason.kind === 'aborted' ? '优化被中断' : '模型返回错误')
+              }
             }
           }
+        } catch (error: unknown) {
+          failure = errorText(error)
         }
-      } catch (error: unknown) {
-        failure = errorText(error)
+        return { out, failure }
+      }
+
+      let retried = false
+      let result: { out: string; failure: string }
+      try {
+        result = await runOnce(buildOptimizeUser(text))
+        // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
+        // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
+        // 只在**没报错**时重试（报错重试一次只是白等一轮）。
+        if (result.out.trim() === '' && result.failure === '') {
+          retried = true
+          const second = await runOnce(buildOptimizeUser(text, { retry: true, reason: '宿主没有收到任何条目' }))
+          if (second.out.trim() !== '') result = second
+          else if (result.failure === '') result = second
+        }
       } finally {
         clearTimeout(timer)
       }
 
-      const optimized = out.trim()
-      if (optimized === '') {
+      if (result.out.trim() === '') {
         sendJson(res, 200, {
           ok: false,
-          error: failure === '' ? '模型没有产出任何内容' : `优化失败：${failure}`,
+          error: result.failure === '' ? '模型没有产出任何内容' : `优化失败：${result.failure}`,
+          retried,
         })
+        return
+      }
+
+      // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
+      const assembled = runOptimizePipeline(result.out, text, { tier })
+      if (!assembled.ok) {
+        sendJson(res, 200, {
+          ok: false,
+          error: `模型输出不是可用的条目 JSON（${assembled.code}）：${assembled.reason}`,
+          retried,
+        })
+        return
+      }
+      const optimized = assembled.text.trim()
+      if (optimized === '') {
+        sendJson(res, 200, { ok: false, error: '装配后是空的（模型没有给出可核实的条目）', retried })
         return
       }
       sendJson(res, 200, {
         ok: true,
-        text: optimized.slice(0, OPTIMIZE_OUTPUT_MAX),
-        truncated: out.length > OPTIMIZE_OUTPUT_MAX,
+        text: optimized,
+        // 语义收窄：`truncated` 现在专指"篇幅闸门真的动过手"（装了必保节仍超预算）。
+        truncated: assembled.overBudget,
         provider: route.provider,
         model: route.model,
+        // ── 以下为 0.6.0 新增的**附加**字段：老客户端不读它们也不会坏。
+        promptSource: optimizePromptSource(customPrompt),
+        retried,
+        fallback: assembled.fallback,
+        itemCount: assembled.itemCount,
+        rewrittenChars: assembled.rewrittenChars,
+        dropped: assembled.dropped,
+        warnings: assembled.warnings,
+        budget: assembled.budget,
+        chars: assembled.chars,
       })
     }
 
@@ -549,7 +812,7 @@ export function apply(ctx: Context): void {
     const legacyPrompts = (): readonly unknown[] | undefined => {
       try {
         const settings = storeCtx.get('settings') as SettingsLike | undefined
-        const row = objectOf(settings?.get(NAMESPACE))
+        const row = makeReader(settings, config)(NAMESPACE)
         const list = row?.[QUICK_PROMPTS_FIELD]
         return Array.isArray(list) ? list as readonly unknown[] : undefined
       } catch {
@@ -648,10 +911,12 @@ export function apply(ctx: Context): void {
         ...(shellEnv === undefined ? {} : { shellEnv: shellEnv as never }),
       }
     }
+    // 终端子系统只用到「读自己这一行 + mutate」两件事，而读口按世代不同（见 makeReader），
+    // 所以这里把它包成该子系统期望的 get/mutate 形状 —— terminal/host.ts 一行都不用改。
     installTerminalPolicy(
       termCtx as never,
       NAMESPACE,
-      termCtx.get('settings') as never,
+      readView(termCtx.get('settings')) as never,
       readToolDeps,
     )
   })
@@ -668,7 +933,7 @@ export function apply(ctx: Context): void {
     void (async () => {
       const service = migrateCtx.get('settings') as SettingsLike | undefined
       if (service === undefined) return
-      const row = objectOf(service.get(NAMESPACE))
+      const row = makeReader(service, config)(NAMESPACE)
       if (row === undefined || row[QUICK_ENABLED_FIELD] !== undefined) return
       try {
         const outcome = await readQuickBook(quickStorePath())

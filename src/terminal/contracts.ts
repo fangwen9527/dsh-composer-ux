@@ -165,6 +165,12 @@ export interface StatusInput {
   readonly effectivePath?: string
   /** 下发到 agent 时遇到的失败原因（restrict/register 失败）。 */
   readonly failure?: string
+  /**
+   * 这一轮**没能真的换上**（例如 `tools.register` 失败，restrict 已回滚）。
+   *
+   * 用来把那句"候选不可用"换成准确说法：候选是有的、bash 也存在，只是没装上。
+   */
+  readonly deliveryFailed?: boolean
 }
 
 /**
@@ -196,6 +202,9 @@ export function terminalStatusText(input: StatusInput): string {
     if (input.candidates.length === 0) {
       const excluded = input.excludedCount > 0 ? `（已排除 ${input.excludedCount} 个 WSL 的 bash.exe）` : ''
       return `没找到可用的 bash${excluded}，暂时保持 PowerShell`
+    }
+    if (input.deliveryFailed === true) {
+      return '找到了 bash 但没能换上（已回滚，pwsh 照旧可用），暂时保持 PowerShell'
     }
     return `候选不可用，暂时保持 PowerShell`
   })()

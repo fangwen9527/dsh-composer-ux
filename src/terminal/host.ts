@@ -92,6 +92,8 @@ interface Installed {
   readonly dispose: () => void
   /** 下发时遇到的问题（第一条），用于状态行如实说明。 */
   readonly failure?: string
+  /** 良性跳过（例如该 agent 已继承父层的处理结果）—— 不算失败，只在排障时有用。 */
+  readonly skipped?: string
 }
 
 /** 取普通对象。 */
@@ -141,6 +143,14 @@ export function installTerminalPolicy(
   let lastEffective = ''
   let lastCandidates = ''
   let failure = ''
+  /**
+   * 上一轮"没能真的换上"的原因（例如 `tools.register` 失败）。
+   *
+   * 与 `failure` 分开记：`failure` 是"这个子系统本身不健全"（例如上下文没有事件能力），
+   * 这里是"设置说要用 bash、候选也有，但某个 agent 那侧没装上" —— 后者必须让
+   * `terminalEffective` 回落成 pwsh，否则状态行是在说谎（详见 install 的收尾回滚）。
+   */
+  let lastDeliveryFailure = ''
   let busy = false
   let again = false
 
@@ -172,7 +182,10 @@ export function installTerminalPolicy(
   const install = (agent: AgentLike, bashPath: string): Installed | undefined => {
     const scoped: ScopedLike = agent.ctx
     const cleanups: (() => void)[] = []
+    /** 真失败（要回滚、要进状态行的那些）。 */
     const notes: string[] = []
+    /** 良性跳过（例如子代理已继承父层的处理结果）。**不算失败**，不进状态行。 */
+    const skips: string[] = []
 
     // 1) 压掉预设的 pwsh。名字必须已在全局注册表里，否则官方会抛
     //    `names unknown global tool "pwsh"` —— 那种情况说明该 agent 本来就看不到 pwsh，
@@ -181,11 +194,14 @@ export function installTerminalPolicy(
       const lift = scoped.tools?.restrict({ deny: ['pwsh'] })
       if (typeof lift === 'function') cleanups.push(lift)
     } catch (error: unknown) {
-      notes.push(`restrict(pwsh) 跳过：${errorText(error)}`)
+      skips.push(`restrict(pwsh) 跳过：${errorText(error)}`)
     }
 
     // 2) 注册 bash 工具。注册在**该 agent 自己的 scope**：restrict 只作用于全局工具，
     //    不会隐藏自身注册（官方 view() 的语义）。
+    //    `registered` 是"整套换上"的唯一凭据：拿不到 disposer 就等于没装上，
+    //    此时第 1 步的 restrict 必须回滚（见下面收尾那段）。
+    let registered = false
     try {
       const deps = readToolDeps()
       if (deps === undefined) {
@@ -193,7 +209,12 @@ export function installTerminalPolicy(
       } else {
         const definition = createBashTool(deps, { bashPath, sep, isAbsolute })
         const unregister = scoped.tools?.register(definition as ToolDefinitionLike)
-        if (typeof unregister === 'function') cleanups.push(unregister)
+        if (typeof unregister === 'function') {
+          cleanups.push(unregister)
+          registered = true
+        } else {
+          notes.push('tools.register 没有返回 disposer（这一版的注册面不可用）')
+        }
       }
     } catch (error: unknown) {
       notes.push(`注册 bash 失败：${errorText(error)}`)
@@ -219,6 +240,23 @@ export function installTerminalPolicy(
       notes.push(`提示词段失败：${errorText(error)}`)
     }
 
+    // 收尾：**要么整套换上、要么一点不换**。
+    //
+    // bash 没注册上就不能留着 pwsh 的压制 —— 否则该会话变成「pwsh 被挡住 + bash 不在」，
+    // 一个 shell 工具都调不到，而状态行还会说"已生效"。这一步是 A 的实现里专门做的回滚
+    // （`git-bash-terminal-tool/src/host/replace.ts` 注册失败时调 `releaseRestriction()`，
+    // 注释原话是"避免留下『两个都看不见』的坏状态"）。
+    //
+    // 注意区分：第 1 步 `restrict` 自己抛错（子代理已继承父层的处理结果）属于良性跳过，
+    // 那种情况会带着 `skips` 走到下面正常返回，不会触发这条回滚。
+    if (!registered) {
+      for (const cleanup of [...cleanups].reverse()) {
+        try { cleanup() } catch { /* 已随 agent 释放 */ }
+      }
+      lastDeliveryFailure = notes.length === 0 ? 'bash 工具没有注册上' : notes.join('；')
+      return undefined
+    }
+
     return {
       path: bashPath,
       dispose: () => {
@@ -227,6 +265,7 @@ export function installTerminalPolicy(
         }
       },
       ...(notes.length === 0 ? {} : { failure: notes.join('；') }),
+      ...(skips.length === 0 ? {} : { skipped: skips.join('；') }),
     }
   }
 
@@ -277,6 +316,8 @@ export function installTerminalPolicy(
       const usable = bashPath !== '' && existsFn(bashPath)
 
       if (usable) {
+        // 本轮重新记账：下面每个 agent 只要有一个"没真的换上"，就会把它写回来。
+        lastDeliveryFailure = ''
         for (const agent of agents?.list() ?? []) {
           const current = installed.get(agent)
           if (current !== undefined && current.path === bashPath) continue
@@ -294,6 +335,12 @@ export function installTerminalPolicy(
       }
 
       const firstFailure = [...installed.values()].find(entry => entry.failure !== undefined)?.failure
+      // 「生效」必须是**真的下发成功**：注册失败时 restrict 已经回滚，该会话用的还是 pwsh，
+      // 状态行不能再说"已生效"。这条是上面那次回滚的另一半 —— 回滚解决"两个都看不见"，
+      // 这里解决"界面说谎"。
+      // `usable` 是前提，不能省：选了 PowerShell / 一个候选都没有时根本没下发过。
+      const delivered = usable && firstFailure === undefined && lastDeliveryFailure === ''
+      const failureText = firstFailure ?? (lastDeliveryFailure === '' ? failure : lastDeliveryFailure)
       writeState(ops, {
         status: terminalStatusText({
           platform,
@@ -301,11 +348,12 @@ export function installTerminalPolicy(
           candidates,
           excludedCount: found.excluded.length,
           ...(found.explicit === undefined ? {} : { explicit: found.explicit }),
-          effective: usable ? 'bash' : 'pwsh',
-          ...(usable ? { effectivePath: bashPath } : {}),
-          ...(firstFailure === undefined && failure === '' ? {} : { failure: firstFailure ?? failure }),
+          effective: delivered ? 'bash' : 'pwsh',
+          ...(delivered ? { effectivePath: bashPath } : {}),
+          ...(delivered ? {} : { deliveryFailed: true }),
+          ...(failureText === '' ? {} : { failure: failureText }),
         }),
-        effective: usable ? 'bash' : 'pwsh',
+        effective: delivered ? 'bash' : 'pwsh',
         candidates,
       })
       await flush(ops)

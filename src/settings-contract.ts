@@ -65,8 +65,13 @@ export const TERMINAL_ENABLED_FIELD = 'terminalEnabled'
 export const SEND_KEY_FIELD = 'sendKey'
 export const NEWLINE_KEY_FIELD = 'newlineKey'
 
-/** 设置面板字段名。 */
-export const PANEL_SCROLL_FIELD = 'panelScroll'
+/**
+ * 设置面板字段名。
+ *
+ * 0.6.0 起**没有** `panelScroll`：DSH 0.1.7 的官方设置页给导航列自带
+ * `overflow-y: auto`（`ui-settings-general` 的 `.navList`），我们那套
+ * `html.dsh-ux-panel-scroll` 注入样式已被官方取代，故整项删除。
+ */
 export const PANEL_RESIZE_FIELD = 'panelResize'
 export const PANEL_WIDTH_FIELD = 'panelWidth'
 export const PANEL_HEIGHT_FIELD = 'panelHeight'
@@ -256,8 +261,10 @@ export function insertModeOf(prompt: Pick<QuickPrompt, 'always' | 'firstOnly'>):
 /**
  * 优化强度档位。
  *
- * 三档的系统提示词提取自 WestFox-AwA/dsh-prompt-optimizer（BSD-3-Clause，
- * 作者「啃轮胎的西狐」）的 `lib/index.js`，见 `optimizer-prompt.ts`。
+ * 提示词初版逐字提取自 WestFox-AwA/dsh-prompt-optimizer（BSD-3-Clause，作者「啃轮胎的西狐」）；
+ * 0.6.0 起按对方 **0.6 线**（`po06/lib/interpreter.js`）的机制重写：模型不再自由改写，
+ * 而是产出「可定位到原话某一段」的条目，由宿主逐条做字面比对后再装配成一条命令。
+ * 档位语义也随之对齐对方「档位 = 依据预算」的说法（见 `optimizer-prompt.ts`）。
  */
 export type OptimizerTier = 'basic' | 'advanced' | 'extreme'
 
@@ -267,13 +274,47 @@ export const OPTIMIZER_TIERS: readonly {
   readonly label: string
   readonly hint: string
 }[] = [
-  { id: 'basic', label: '普通', hint: '只做语言层修复：病句、错别字、指代与含糊词，不新增任何需求，篇幅与原文相当。' },
-  { id: 'advanced', label: '高级', hint: '在不动目标的前提下，把「你显然想要、但没说出口」的必要要求补成对 AI 的要求，让它一次做对。' },
-  { id: 'extreme', label: '极端', hint: '按复杂任务处理：固化命令结构 + 分阶段执行计划 + 2~4 种情况的预案。' },
+  { id: 'basic', label: '普通', hint: '只做语言层修复：病句、错别字、指代与含糊词，不新增任何需求，篇幅约为原文 1.4 倍。' },
+  { id: 'advanced', label: '高级', hint: '在不动目标的前提下，把「你显然想要、但没说出口」的必要要求补成对 AI 的要求，每条都要指回你原话里的某一句。' },
+  { id: 'extreme', label: '极端', hint: '按复杂任务处理：在上面基础上再加分阶段执行计划与 2~4 种情况的预案。' },
 ]
 
 /** 默认档位。 */
 export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'advanced'
+
+/**
+ * 每个档位的「自定义系统提示词」字段名。
+ *
+ * 为什么是三个平铺字符串而不是一个对象：与本插件其它可编辑项一致（设置页按字段名读写、
+ * 宿主半的 schema 也是平铺 key），且**留空 = 用内置那份**这个语义用空串表达最直接 ——
+ * 不需要额外一个"是否自定义"的布尔（多一个布尔就多一种自相矛盾的状态）。
+ */
+export const OPTIMIZER_PROMPT_FIELDS = {
+  basic: 'optimizerPromptBasic',
+  advanced: 'optimizerPromptAdvanced',
+  extreme: 'optimizerPromptExtreme',
+} as const
+
+/** 全部档位的自定义提示词字段名（顺序即档位顺序）。 */
+export const OPTIMIZER_PROMPT_FIELD_LIST: readonly string[] =
+  OPTIMIZER_TIERS.map(item => OPTIMIZER_PROMPT_FIELDS[item.id])
+
+/**
+ * 自定义提示词的字数上限。
+ *
+ * 与 `QUICK_TEXT_MAX` 不同：这里存的是**模型指令**而不是用户内容，内置那三份都在 3–5 KB，
+ * 给 2 万字符足够容纳用户的改写，又能挡住"把设置文档撑成一本书"。
+ */
+export const OPTIMIZER_PROMPT_MAX = 20_000
+
+/**
+ * 按档位取自定义提示词的字段名。
+ * @param tier - 档位 id；未知值回落到默认档（与 `buildOptimizeSystem` 同一口径）。
+ * @returns 该档位对应的设置字段名。
+ */
+export function optimizerPromptFieldOf(tier: string): string {
+  return OPTIMIZER_PROMPT_FIELDS[tier as OptimizerTier] ?? OPTIMIZER_PROMPT_FIELDS[DEFAULT_OPTIMIZER_TIER]
+}
 
 /**
  * 内置的 9 条快捷指令 = 用户口述的 4 条 + 提取自 congyaqwq/dsh-quick-prompts 的 5 条。
@@ -563,7 +604,6 @@ export type SettingsField =
   | typeof TERMINAL_ENABLED_FIELD
   | typeof SEND_KEY_FIELD
   | typeof NEWLINE_KEY_FIELD
-  | typeof PANEL_SCROLL_FIELD
   | typeof PANEL_RESIZE_FIELD
   | typeof PANEL_WIDTH_FIELD
   | typeof PANEL_HEIGHT_FIELD
@@ -575,6 +615,9 @@ export type SettingsField =
   | typeof HEADER_ROUTES_FIELD
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
+  | typeof OPTIMIZER_PROMPT_FIELDS.basic
+  | typeof OPTIMIZER_PROMPT_FIELDS.advanced
+  | typeof OPTIMIZER_PROMPT_FIELDS.extreme
   | typeof TERMINAL_MODE_FIELD
   | typeof TERMINAL_BASH_PATH_FIELD
   | MenuField
@@ -619,8 +662,6 @@ export interface ComposerUxSettings {
    * 文档里没有这个字段时按旧布尔 `menuNative` 推断，见 `menuModeFrom`。
    */
   menuMode: MenuMode
-  /** 设置面板：条目过多时导航列可滚动。 */
-  panelScroll: boolean
   /** 设置面板：允许拖拽边缘调整大小。 */
   panelResize: boolean
   /** 设置面板宽（px）；缺省使用官方默认 800。 */
@@ -644,6 +685,15 @@ export interface ComposerUxSettings {
   quickPrompts: readonly QuickPrompt[]
   /** 提示词优化强度档位。 */
   optimizerTier: OptimizerTier
+  /**
+   * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
+   *
+   * 改的是「任务与风格」那一段；JSON 输出契约由插件在末尾追加、不由这里控制
+   * （它的作用是让宿主能按逐字依据校验每一条，被改掉整个机制就失效了）。
+   */
+  optimizerPromptBasic: string
+  optimizerPromptAdvanced: string
+  optimizerPromptExtreme: string
   /**
    * 「默认终端」档位：自动 / Git Bash / PowerShell。只对 Windows 生效
    * （非 Windows 上宿主半直接跳过，卡片显示"不需要"）。
@@ -679,7 +729,6 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   menuDelete: true,
   menuSelectAll: true,
   menuMode: 'official',
-  panelScroll: true,
   panelResize: true,
   headerEnabled: false,
   headerName: DEFAULT_HEADER_NAME,
@@ -690,6 +739,10 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   headerStatus: '',
   quickPrompts: DEFAULT_QUICK_PROMPTS,
   optimizerTier: DEFAULT_OPTIMIZER_TIER,
+  // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
+  optimizerPromptBasic: '',
+  optimizerPromptAdvanced: '',
+  optimizerPromptExtreme: '',
   terminalMode: DEFAULT_TERMINAL_MODE,
   terminalBashPath: '',
   terminalCandidates: [],
@@ -790,8 +843,7 @@ const SECTION_SIGNALS: Readonly<Record<string, (source: Record<string, unknown>)
       && source[QUICK_PROMPTS_FIELD].length !== DEFAULT_QUICK_PROMPTS.length)
     || touched(source, OPTIMIZER_TIER_FIELD, DEFAULT_OPTIMIZER_TIER),
   [PANEL_ENABLED_FIELD]: source =>
-    touched(source, PANEL_SCROLL_FIELD, true)
-    || touched(source, PANEL_RESIZE_FIELD, true)
+    touched(source, PANEL_RESIZE_FIELD, true)
     || source[PANEL_WIDTH_FIELD] !== undefined
     || source[PANEL_HEIGHT_FIELD] !== undefined,
   [TERMINAL_ENABLED_FIELD]: source =>
@@ -834,6 +886,18 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
   const asText = (field: string, max: number): string => {
     const v = source[field]
     return typeof v === 'string' && v.length <= max ? v : ''
+  }
+  /**
+   * 自定义提示词专用：**超上限就截断**，而不是像 `asText` 那样整份丢掉。
+   *
+   * 为什么这里与 headerName 那条相反：头名非法是"写进去会出网出错"，丢掉是对的；
+   * 而提示词是**用户自己敲的内容**，静默丢弃等于把他的工作弄没了。截断至少留得下大半，
+   * 且设置页里当场看得见被截断后的样子（textarea 有 maxLength，正常根本走不到这里，
+   * 只有手改 settings.yaml 才会）。
+   */
+  const asPrompt = (field: string, max: number): string => {
+    const v = source[field]
+    return typeof v === 'string' ? v.slice(0, max) : ''
   }
   const asBool = (field: string): boolean => {
     const v = source[field]
@@ -895,7 +959,6 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     menuDelete: asBool('menuDelete'),
     menuSelectAll: asBool('menuSelectAll'),
     menuMode: menuModeFrom(source[MENU_MODE_FIELD], source[MENU_NATIVE_FIELD]),
-    panelScroll: asBool(PANEL_SCROLL_FIELD),
     panelResize: asBool(PANEL_RESIZE_FIELD),
     panelWidth: asSize(PANEL_WIDTH_FIELD),
     panelHeight: asSize(PANEL_HEIGHT_FIELD),
@@ -910,6 +973,9 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     headerStatus: asText(HEADER_STATUS_FIELD, HEADER_VALUE_MAX),
     quickPrompts: asQuickPrompts(),
     optimizerTier: asTier(),
+    optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
+    optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
+    optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),
     terminalMode: terminalModeFrom(source[TERMINAL_MODE_FIELD]),
     // 路径只做长度与归一化收窄，不在这里判"存不存在"——那是宿主半的探测结论，
     // 由状态行告诉用户（用户看得见自己填了什么，比悄悄清空好）。

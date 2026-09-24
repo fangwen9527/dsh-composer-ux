@@ -78,7 +78,8 @@
 - **volatile 标记靠数据、不靠方法**：宿主半把 schemastery **内联**进产物（取自构建时的 DSH 检出），
   所以"在 0.1.6 上构建出来的包"里没有 `.volatile()`（它是 schemastery 3.18.3 才加的）。
   改为直接写 `schema.meta.volatile = true` —— 0.1.7 的设置服务读的正是这个标记，与构造它的库版本无关。
-  0.1.7 里**只有 volatile 字段会被服务、也只有 volatile 路径能被写入**，所以整棵 Config 标 volatile。
+  0.1.7 里**只有 volatile 字段会被服务、也只有 volatile 路径能被写入**，所以当时把整棵 Config 标了 volatile
+  （**这一做法在 0.6.1 里被推翻：改成逐字段标记** —— 根标记在 schemastery 3.18.4 下会让"写入不生效"，见上方 0.6.1 段）。
 
 ### 提示词优化改成「条目 + 逐字依据」（机制取自对方 0.6 线）
 

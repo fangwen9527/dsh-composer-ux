@@ -25,8 +25,8 @@ import {
   sanitizeTerminalCandidates, terminalModeFrom, terminalStatusText,
   type TerminalCandidate, type TerminalMode,
 } from './contracts.ts'
-import { BASH_SECTION_TEXT, TOOL_BASH_SECTION_ORDER, TOOL_PWSH_SECTION_ORDER, createBashTool } from './tool.ts'
-import type { BashToolDeps, ToolDefinitionLike } from './tool.ts'
+import { BASH_SECTION_TEXT, PROBE_TIMEOUT_MS, TOOL_BASH_SECTION_ORDER, TOOL_PWSH_SECTION_ORDER, createBashTool, probeBashExecution } from './tool.ts'
+import type { BashToolDeps, ProbeOutcome, ToolDefinitionLike, ToolRunContextLike } from './tool.ts'
 import { TERMINAL_ENABLED_FIELD, sectionEnabledOf } from '../settings-contract.ts'
 
 /**
@@ -133,6 +133,17 @@ export function installTerminalPolicy(
     readonly discover?: (explicitPath: string) => DiscoverResult
     /** 存在性判定（默认 existsSync）。 */
     readonly exists?: (path: string) => boolean
+    /**
+     * 接管前的自检探针（默认 {@link probeBashExecution}：走与真工具完全相同的执行路径）。
+     *
+     * 只在**受限模式**下才会被调用（`danger-full-access` 跳过 confine，实测那条路径正常）。
+     * 可注入：测试用它把"探针不过"这一支变成确定性输入。
+     */
+    readonly probe?: (
+      deps: BashToolDeps,
+      options: { readonly bashPath: string; readonly sep?: string; readonly isAbsolute?: (path: string) => boolean },
+      exec: ToolRunContextLike,
+    ) => Promise<ProbeOutcome>
   } = {},
 ): void {
   const platform = options.platform ?? process.platform
@@ -153,6 +164,14 @@ export function installTerminalPolicy(
   let lastDeliveryFailure = ''
   let busy = false
   let again = false
+  /**
+   * 自检结论缓存：键是 `<bashPath>|<沙箱模式>`。
+   *
+   * 键变了（换路径 / 换文件策略）就重探 —— 这正是用户从受限模式切到 `danger-full-access`
+   * （或反过来）后能自愈的路径。设置改动会重载插件、缓存随之清零，所以不会长期卡在旧结论上。
+   */
+  let probeKey = ''
+  let probeOutcome: ProbeOutcome | undefined
 
   /** 走一遍探测（唯一碰 node API 的地方都在这里）。 */
   const discover = options.discover ?? ((explicitPath: string): DiscoverResult => probeBash(
@@ -269,6 +288,71 @@ export function installTerminalPolicy(
     }
   }
 
+  /**
+   * 这一轮要不要做自检：**只有受限模式**才做。
+   *
+   * `danger-full-access` 会跳过 `confine()`（官方与插件同判据，见 tool.ts 的执行体），
+   * 那条路上沙箱 runner 根本不参与 —— 2026-09-25 在同一台桌面版上实测正常，所以不必多起
+   * 一个进程，也不该因为一次探针抖动把功能关掉。
+   * @param deps 工具依赖（可能缺席）。
+   * @param agent 目标会话（**必须**：见下面那条 ⚠️）。
+   * @returns 需要自检时返回该受限模式名，否则空串。
+   */
+  const confinedModeOf = (deps: BashToolDeps | undefined, agent: AgentLike | undefined): string => {
+    if (deps?.sandbox === undefined || deps.sandboxPolicy === undefined) return ''
+    try {
+      // ⚠️ 必须带 `session` 解析。不带 session 拿到的是**部署默认**
+      // （base bundle：`mode: process.env.DSH_PERMISSION_MODE ?? 'workspace-write'`），
+      // 而工具真正执行时用的是**该会话自己**的策略（tool.ts：`{ session: exec.agent.session }`）。
+      // 2026-09-25 真机实测踩到过这个坑：会话说 danger-full-access（命令本来跑得通），
+      // 门控却按部署默认的 workspace-write 去探，于是自检按预期失败、整栏被误撤。
+      // 同一个 `resolve` 调用形状必须与工具侧一致，否则这道闸门会自己制造误判。
+      const session = (agent as { session?: unknown } | undefined)?.session
+      const mode = deps.sandboxPolicy.resolve(session === undefined ? {} : { session }).mode
+      return mode === 'read-only' || mode === 'workspace-write' ? mode : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * 跑一次自检（结果按 `路径|模式` 缓存；异常收敛成"不过" —— fail-closed）。
+   * @param deps 工具依赖。
+   * @param bashPath 本轮要用的 bash。
+   * @param mode 本次判定的受限模式（进缓存键与状态行）。
+   * @param agent 借它的执行上下文（拿它的 session 解析策略/工作目录）——必须与
+   *   {@link confinedModeOf} 用的是同一个 agent，否则探的就不是这个会话要走的路。
+   * @returns 探针结论。
+   */
+  const runProbe = async (
+    deps: BashToolDeps,
+    bashPath: string,
+    mode: string,
+    agent: AgentLike | undefined,
+  ): Promise<ProbeOutcome> => {
+    const key = `${bashPath}|${mode}`
+    if (probeOutcome !== undefined && probeKey === key) return probeOutcome
+    const controller = new AbortController()
+    const timer = setTimeout(() => { controller.abort() }, PROBE_TIMEOUT_MS * 2)
+    try {
+      probeOutcome = await (options.probe ?? probeBashExecution)(
+        deps,
+        { bashPath, sep, isAbsolute },
+        {
+          callId: 'composer-ux-self-check',
+          signal: controller.signal,
+          ...(agent === undefined ? {} : { agent: agent as never }),
+        },
+      )
+    } catch (error: unknown) {
+      probeOutcome = { ok: false, detail: error instanceof Error ? error.message : String(error) }
+    } finally {
+      clearTimeout(timer)
+    }
+    probeKey = key
+    return probeOutcome
+  }
+
   /** 按当前设置重新下发（幂等；只有真的变化才动）。 */
   const reconcile = (): void => {
     if (busy) {
@@ -314,11 +398,36 @@ export function installTerminalPolicy(
       const candidates = candidatesToStored(found.candidates)
       const bashPath = activeBashPath(mode, explicit, candidates, found.explicit)
       const usable = bashPath !== '' && existsFn(bashPath)
+      /**
+       * 自检没过的那条原因（本轮；写入状态行时优先于泛泛的"没能换上"）。
+       *
+       * 声明在这里而不是 `if (usable)` 里面：状态回写在那块之外。
+       */
+      let probeFailure = ''
 
       if (usable) {
+        // 接管前自检（**只在受限模式下**，且逐会话判定）：桌面版打包形态下沙箱 runner 起不来时，
+        // 照旧接管会把该会话的 shell 打死（restrict 已生效 + 自带 bash 跑不动）。
+        // 详见 tool.ts 的 probeBashExecution 与交接文档 §7.32/§7.34。
+        const probeDeps = readToolDeps()
         // 本轮重新记账：下面每个 agent 只要有一个"没真的换上"，就会把它写回来。
         lastDeliveryFailure = ''
         for (const agent of agents?.list() ?? []) {
+          // ⚠️ 逐会话解析策略（不能拿部署默认去套），理由见 confinedModeOf 的注释。
+          const confinedMode = probeDeps === undefined ? '' : confinedModeOf(probeDeps, agent)
+          if (confinedMode !== '') {
+            const probe = await runProbe(probeDeps as BashToolDeps, bashPath, confinedMode, agent)
+            if (!probe.ok) {
+              // 这个会话**不接管**（并撤掉先前下发的），但别的会话不受连带影响。
+              probeFailure = `${probe.detail}；受限模式 ${confinedMode}`
+              const current = installed.get(agent)
+              if (current !== undefined) {
+                current.dispose()
+                installed.delete(agent)
+              }
+              continue
+            }
+          }
           const current = installed.get(agent)
           if (current !== undefined && current.path === bashPath) continue
           if (current !== undefined) {
@@ -328,6 +437,7 @@ export function installTerminalPolicy(
           const record = install(agent, bashPath)
           if (record !== undefined) installed.set(agent, record)
         }
+        if (probeFailure !== '') lastDeliveryFailure = probeFailure
       } else {
         for (const entry of installed.values()) entry.dispose()
         installed.clear()
@@ -350,7 +460,9 @@ export function installTerminalPolicy(
           ...(found.explicit === undefined ? {} : { explicit: found.explicit }),
           effective: delivered ? 'bash' : 'pwsh',
           ...(delivered ? { effectivePath: bashPath } : {}),
-          ...(delivered ? {} : { deliveryFailed: true }),
+          // 自检没过时优先用那条更准确的说法（"预检就没过、根本没试"），
+          // 而不是泛泛的"找到了 bash 但没能换上"。
+          ...(delivered ? {} : probeFailure === '' ? { deliveryFailed: true } : { probeFailed: probeFailure }),
           ...(failureText === '' ? {} : { failure: failureText }),
         }),
         effective: delivered ? 'bash' : 'pwsh',

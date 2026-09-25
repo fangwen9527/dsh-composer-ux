@@ -532,6 +532,39 @@ console.log('12. confine 必须 await（装在你机器上的 B 就栽在这里�
     tool.output.render({}, value)[0].text.includes('file access denied under workspace-write mode')
     && tool.output.render({}, value)[0].text.endsWith('[exit code: 1]'))
 }
+{
+  // 打包形态（Electron 桌面版）的 spawn 环境：必须补 ELECTRON_RUN_AS_NODE（2026-09-25 实测）
+  //
+  // 为什么：Windows 上受限模式的沙箱 runner argv[0] 是 `process.execPath`
+  // （`dsh-sandbox-local/lib/index.js:539`），桌面版里那是 Electron 的 exe；用 Electron
+  // 跑脚本没这个变量就按 App 形态启动 → 原生初始化失败（零输出 / 0xC0000142）。
+  // 官方 sandbox-local 只给 argv、不给 env，所以补在 spawn 方。
+  const mkSub = () => ({
+    spawns: [],
+    spawn(spec) {
+      this.spawns.push(spec)
+      return {
+        collected: { stdout: { readFrom: () => ({ text: 'ok', nextOffset: 2, lossy: false }) }, stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) } },
+        done: Promise.resolve({ exitCode: 0, signal: null }), terminate() {},
+      }
+    },
+  })
+  const exec = { callId: 'e1', signal: new AbortController().signal }
+  const s1 = mkSub()
+  await pure.createBashTool({ subprocess: s1 }, { bashPath: 'D:/Git/bin/bash.exe', electron: true })
+    .execute({ command: 'echo x', description: 'd' }, exec)
+  check('打包版（Electron 宿主）→ spawn env 带 ELECTRON_RUN_AS_NODE=1',
+    s1.spawns[0]?.env?.ELECTRON_RUN_AS_NODE === '1', JSON.stringify(s1.spawns[0]?.env))
+  const s2 = mkSub()
+  await pure.createBashTool({ subprocess: s2 }, { bashPath: 'D:/Git/bin/bash.exe', electron: false })
+    .execute({ command: 'echo x', description: 'd' }, exec)
+  check('非 Electron（node 宿主）→ 不塞这个变量（环境保持干净）',
+    s2.spawns[0]?.env?.ELECTRON_RUN_AS_NODE === undefined, JSON.stringify(s2.spawns[0]?.env))
+  check('补变量没把原有压制项挤掉（NO_COLOR/TERM/PAGER…）',
+    s2.spawns[0]?.env?.NO_COLOR === '1' && s2.spawns[0]?.env?.PAGER === 'cat'
+    && s1.spawns[0]?.env?.NO_COLOR === '1',
+    JSON.stringify(s2.spawns[0]?.env))
+}
 
 console.log('13. 升级路径（真的走审批）')
 {
@@ -661,6 +694,9 @@ console.log('16. 宿主半接线：按会话下发 + 立刻覆盖在跑会话')
     const capture = { restricts: [], registers: [], sections: [], waterfalls: [], lifted: 0 }
     return {
       capture,
+      // 真 agent 有 session（tool.ts 用 `exec.agent.session` 解析该会话的沙箱策略/工作目录）。
+      // 替身也得有：否则"门控按会话策略判定"这条根本测不出来（2026-09-25 真机 bug）。
+      session: { header: {} },
       ctx: {
         tools: {
           restrict: (filter) => { capture.restricts.push(filter); return () => { capture.lifted += 1 } },
@@ -797,6 +833,203 @@ console.log('16. 宿主半接线：按会话下发 + 立刻覆盖在跑会话')
     check('切回 PowerShell → 之前下发的限制被撤销（lift 被调用）',
       agents[0].capture.lifted === 1, String(agents[0].capture.lifted))
     check('撤销后状态回写 pwsh', writeOf(settings, 'terminalEffective') === 'pwsh', String(writeOf(settings, 'terminalEffective')))
+  }
+
+  // ── 接管前的自检探针（2026-09-25 新增）──────────────────────────────────────
+  // 背景：官方**桌面版**（Electron 打包）在**受限文件策略**下，命令要过沙箱 runner，
+  // 而 runner 用 `process.execPath` 起 —— 桌面版里那是 `DeepSeek Harness.exe` 而不是 node，
+  // 于是每条命令 `0xC0000142`（DLL 初始化失败）零输出。照旧接管 = restrict(pwsh) 已生效、
+  // 自带的 bash 又跑不动 = 该会话一个 shell 都没有。所以：**先探，不通过就不接管**。
+  {
+    // 探针本体：走的是**真工具的执行路径**（不是另写一套 spawn），退出码按十六进制给人看
+    const probeSub = (exitCode, stdoutText) => ({
+      spawn: () => ({
+        collected: {
+          stdout: { readFrom: () => ({ text: stdoutText, nextOffset: stdoutText.length, lossy: false }) },
+          stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) },
+        },
+        done: Promise.resolve({ exitCode, signal: null }),
+        terminate: () => {},
+      }),
+    })
+    const probeExec = { callId: 'probe', signal: new AbortController().signal }
+    const bad = await pure.probeBashExecution(
+      { subprocess: probeSub(0xC0000142, '') }, { bashPath: 'D:/Git/bin/bash.exe' }, probeExec,
+    )
+    check('探针：进程没起来（0xC0000142）→ 不通过，退出码写成十六进制',
+      bad.ok === false && bad.detail.includes('0xC0000142'), JSON.stringify(bad))
+    check('探针：空输出也照样点明（零输出）',
+      bad.ok === false && bad.detail.includes('零输出'), JSON.stringify(bad))
+    const good = await pure.probeBashExecution(
+      { subprocess: probeSub(0, pure.PROBE_MARKER) }, { bashPath: 'D:/Git/bin/bash.exe' }, probeExec,
+    )
+    check('探针：拿到标记且退出 0 → 通过', good.ok === true && good.detail === '', JSON.stringify(good))
+    const silent = await pure.probeBashExecution(
+      { subprocess: probeSub(0, '') }, { bashPath: 'D:/Git/bin/bash.exe' }, probeExec,
+    )
+    check('探针：退出 0 但没有预期输出 → 也算不通过（命令没真跑起来）',
+      silent.ok === false && silent.detail.includes('没真正跑起来'), JSON.stringify(silent))
+    check('formatProbeExit 把负数也写成同一套十六进制',
+      pure.formatProbeExit(-1073741502).includes('0xC0000142'), pure.formatProbeExit(-1073741502))
+  }
+  {
+    // 受限模式下自检不过 → 一个会话都不接管（fail-closed）
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    const probedPaths = []
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandbox: {},
+      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: 'D:/ws' }) },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async (_deps, options) => {
+        probedPaths.push(options.bashPath)
+        return { ok: false, detail: '自检命令退出码 0xC0000142（零输出）' }
+      },
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('受限模式下确实先跑了自检（用的是本条 bash 路径）',
+      probedPaths.length === 1 && probedPaths[0] === 'D:/Git/bin/bash.exe', JSON.stringify(probedPaths))
+    check('自检不过 → 不 restrict、不注册、不加提示词段',
+      agents[0].capture.restricts.length === 0 && agents[0].capture.registers.length === 0
+      && agents[0].capture.sections.length === 0,
+      JSON.stringify(agents[0].capture))
+    check('自检不过 → 状态行写明原因且保持 PowerShell',
+      String(writeOf(settings, 'terminalStatus')).includes('自检未通过')
+      && String(writeOf(settings, 'terminalStatus')).includes('0xC0000142')
+      && writeOf(settings, 'terminalEffective') === 'pwsh',
+      String(writeOf(settings, 'terminalStatus')))
+  }
+  {
+    // 受限模式下自检通过 → 照常接管
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandbox: {},
+      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: 'D:/ws' }) },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async () => ({ ok: true, detail: '' }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('自检通过 → 仍然接管（restrict + register）',
+      agents[0].capture.restricts.length === 1 && agents[0].capture.registers.length === 1,
+      JSON.stringify({ restricts: agents[0].capture.restricts.length, registers: agents[0].capture.registers.length }))
+    check('自检通过 → 状态行仍是"已生效"',
+      String(writeOf(settings, 'terminalStatus')).includes('已生效'), String(writeOf(settings, 'terminalStatus')))
+  }
+  {
+    // danger-full-access（跳过 confine）→ 不做自检：实测那条路径本来就正常，也不必多起进程
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    let probeCalls = 0
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandbox: {},
+      sandboxPolicy: { resolve: () => ({ mode: 'danger-full-access', workspaceRoot: 'D:/ws' }) },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async () => { probeCalls += 1; return { ok: false, detail: '不该被调用' } },
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('danger-full-access 下**不做**自检', probeCalls === 0, String(probeCalls))
+    check('danger-full-access 下照常接管', agents[0].capture.registers.length === 1,
+      JSON.stringify(agents[0].capture.registers.length))
+  }
+  {
+    // 没有沙箱服务（非受限组合）→ 也不自检：runner 都不参与，探它没有意义
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    let probeCalls = 0
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: 'D:/ws' }) },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async () => { probeCalls += 1; return { ok: true, detail: '' } },
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('没有 sandbox 服务 → 不做自检（confine 不会发生）', probeCalls === 0, String(probeCalls))
+  }
+  {
+    // 自检在**换模式**后要重探（受限 → danger-full-access 能自愈；反之要重新把关）
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    let mode = 'workspace-write'
+    let probeCalls = 0
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandbox: {},
+      sandboxPolicy: { resolve: () => ({ mode, workspaceRoot: 'D:/ws' }) },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async () => { probeCalls += 1; return { ok: probeCalls > 1, detail: '第一次没过' } },
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('受限模式第一轮：自检不过 → 没接管', agents[0].capture.registers.length === 0,
+      JSON.stringify(agents[0].capture.registers.length))
+    mode = 'workspace-write'
+    ctx.emit('settings/updated', 'composer-ux')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('同样的键不重复探（缓存生效）', probeCalls === 1, String(probeCalls))
+    mode = 'read-only'
+    ctx.emit('settings/updated', 'composer-ux')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('换了受限模式 → 重探一次', probeCalls === 2, String(probeCalls))
+    check('重探通过 → 这一轮接管了', agents[0].capture.registers.length === 1,
+      JSON.stringify(agents[0].capture.registers.length))
+  }
+  {
+    // 门控必须按**该会话自己**的策略判定（2026-09-25 真机踩到的坑，见 host.ts 的 confinedModeOf）：
+    // 不带 session 解析拿到的是**部署默认**（base bundle 的 `DSH_PERMISSION_MODE ?? 'workspace-write'`），
+    // 而工具执行时用的是该会话的策略 ⇒ 一个 danger-full-access 的会话会被误判成受限、
+    // 自检按预期失败、整栏被白白撤掉（真机上就这么发生过一次）。
+    const agents = [makeAgent()]
+    const ctx = makeCtx(agents)
+    const settings = settingsWith({ terminalEnabled: true, terminalMode: 'auto', terminalBashPath: '' })
+    let probeCalls = 0
+    const sawSession = []
+    pure.installTerminalPolicy(ctx, 'composer-ux', settings, () => ({
+      subprocess: {},
+      sandbox: {},
+      sandboxPolicy: {
+        resolve: (request) => {
+          const hasSession = request !== undefined && request !== null && 'session' in request
+          sawSession.push(hasSession)
+          return hasSession
+            ? { mode: 'danger-full-access', workspaceRoot: 'D:/ws' }
+            : { mode: 'workspace-write', workspaceRoot: 'D:/ws' }
+        },
+      },
+    }), {
+      platform: 'win32',
+      discover: () => found(['D:/Git/bin/bash.exe']),
+      exists: () => true,
+      probe: async () => { probeCalls += 1; return { ok: false, detail: '不该被调用' } },
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check('门控把 session 交给了 sandboxPolicy.resolve（不能只问部署默认）',
+      sawSession.includes(true), JSON.stringify(sawSession))
+    check('该会话是 danger-full-access ⇒ 不做自检', probeCalls === 0, String(probeCalls))
+    check('该会话照常接管（修之前这里会被误撤）', agents[0].capture.registers.length === 1,
+      JSON.stringify(agents[0].capture.registers.length))
   }
   {
     // 「默认终端」这一栏关着（拉到 off）→ 一条都不下，并把先前下发的撤销掉。

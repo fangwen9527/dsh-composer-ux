@@ -2,6 +2,111 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.2] — 2026-09-25（浮层磨砂修复 + 设置页「刷新」按钮 + 默认终端「接管前自检」）
+
+> 三块内容合成一版：①用户截图报的「快捷指令面板透明看不清」；②桌面版里「重启 DSH」不可能生效，补一个轻量替代；③
+> 「默认终端」在官方安装的桌面版里会把会话的 shell 打死，补一道**接管前自检**（并顺带定位到两条官方缺陷）。
+> ①与②只动**客户端半**（刷新页面即可生效）；③含**宿主半**（装完需**重启 DSH**）。
+
+### 修复
+
+- **浮层只画了「半透明」、漏了官方成对使用的「毛玻璃」**。DSH 的菜单面是**一对**令牌：
+  `--dsw-specific-menu`（半透明填充）+ `backdrop-filter: var(--dsw-menu-backdrop-filter)`
+  （实测 `blur(40px) saturate(150%)`）。官方每一个绘制前者的浮层都**两者齐用**，形如
+  `.panel:before{background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter)}`；
+  本插件只写了 `background` ⇒ 半透明在、磨砂不在 ⇒ 浮层成了**一块没磨砂的玻璃**，
+  背后正文原样透出来、与面板里的文字叠在一起。
+  - 判定方法（下次照抄）：在 `app.asar` 的平台 CSS 里搜令牌名，看官方组件是不是**成对**出现；
+    只有填充、没有 blur 的就是漏抄。
+  - 两处一起修：`menu`（自定义档右键菜单）与 `quickPanel`（快捷指令面板）。只修一处会出现
+    「一个浮层清楚、另一个还在透」。
+
+### 变更（同批对齐官方高层级表面）
+
+- 浮层描边改走 **elevation 发丝线**：`border: 0` + `box-shadow: var(--dsw-elevation-prominent)` +
+  `--dsw-elevation-stroke-color: var(--dsw-alias-border-l1)`。官方高层级表面一律 `border: 0`
+  （描边由 elevation 自带）；本插件原先**既有实线边框、又有 elevation 那 0.5px 描边**，
+  等于同一个边缘画了两条。显式钉 `l1` 是为了保持升级前的观感
+  （`--dsw-elevation-stroke-color` 的全局默认是 `border-l4`）。
+- 圆角改用官方令牌 `var(--dsw-radius-lg)`（= **16px**；原为写死的 10 / 12）。
+- **刻意不跟官方的一处**：`z-index` 保留 `9999`（官方浮层是 1100）。本插件浮层挂在 `shell.overlay`
+  这个独立层叠上下文里，要与别的插件抢层，降到 1100 只会被别人的浮层盖住（见 `src/client/panel.ts` 文件头）。
+
+### 新增
+
+- **设置页抬头右端增加「刷新」按钮**（在「重启 DSH」左边；`SettingsSection.tsx` 的 `RefreshButton`）。
+  起因：用户在**官方安装的桌面版**里按「重启 DSH」没反应。查证后这不是偶发故障、而是**形态不匹配**（见下），
+  于是需要一个轻量替代。它只做 `location.reload()`：不发请求、不碰宿主、**不打断正在跑的会话**
+  （会话在宿主侧活着，刷新只重建界面）。而插件的**客户端半**（设置页 / 右键菜单 / 键位拦截 /
+  快捷指令面板）本来就随页面 bundle 走 —— 重新加载页面就能生效，这正是「让改动生效」在桌面版里
+  唯一还走得通的路。
+  - 排布：轻的在前（刷新 → 重启 → GitHub）；重启处于「确认中 / 重启中」时刷新一并禁用 ——
+    否则一次刷新会把用户手上那条待确认的横幅冲掉。
+  - 护栏：`test/settings-render.mjs` 新增第 6 节 —— **真渲染**出页面，再比较两枚按钮的先后，
+    并按交接文档 §7.25 的教训不满足于"出现过"。该套件 24 → **28 项**。
+- **接管「默认终端」之前先自检**（`src/terminal/tool.ts` 的 `probeBashExecution` + `src/terminal/host.ts` 的门控
+  + `src/terminal/contracts.ts` 的 `probeFailed` 状态文案）。起因：官方安装的**桌面版**在**受限文件策略**下，
+  命令要过沙箱 runner，而 runner 是用 `process.execPath`（= `DeepSeek Harness.exe`，不是 node）起的，
+  实测每条命令 `0xC0000142`（DLL 初始化失败）**零输出**；照旧接管会得到
+  「`restrict(pwsh)` 已生效 + 自带的 bash 又跑不动」= 该会话**一个能用的 shell 都没有**（比不接管更糟）。
+  - 探针走的是**与真工具完全相同的执行路径**（借道 `createBashTool(...).execute(...)`：同一份 argv 构造、
+    同一个沙箱 `confine`、同一个 `subprocess.spawn`），且不带 `sandbox_permissions` —— 自检不该弹审批。
+  - 不通过就**不接管**（不 restrict、不注册、不加提示词段），保持 PowerShell，并把原因写进状态行
+    （「已启用，但自检未通过：… —— 为避免把会话的 shell 打死，暂不接管」）。
+  - `danger-full-access` **不做**探针：那条路会跳过 `confine()`，同一台桌面版上实测正常
+    （`uname -a` → `MINGW64_NT-10.0-26200 … Msys`）。结论按 `路径|模式` 缓存，换路径/换模式才重探。
+  - 护栏：`test/terminal-policy.mjs` 新增 7 组共 23 项（该套件 176 → **199 项**），
+    `test/mutation-guards.mjs` 新增 `AB`（拆掉门控）/`AC`（不看模式）/`AD`（门控退回部署默认）/
+    `AE`（不再补 `ELECTRON_RUN_AS_NODE`）——**四条都咬住**。
+  - **打包形态的 spawn 环境补 `ELECTRON_RUN_AS_NODE=1`**（`createBashTool` 的 `electron` 选项，默认看
+    `process.versions.electron`）：Windows 上受限模式的沙箱 runner argv[0] 是 `process.execPath`
+    （`dsh-sandbox-local/lib/index.js:539`），桌面版里那是 Electron 的 exe；用 Electron 跑脚本必须带这个变量，
+    否则 runner 根本起不来（实测零输出 / `0xC0000142`）。补上之后，受限模式下探针拿到的是 **bash 自己的报错**
+    （`couldn't create signal pipe, Win32 error 5`），状态行不再是含糊的"零输出"。
+    对 `bash.exe` 本身无副作用（它不认这个变量）。⇒ 它**不会**让 Git Bash 在受限模式下可用，只是把诊断说准。
+  - 🔎 **同轮定位到两条官方缺陷**（与本插件无关，已写成可直接提交的报告：
+    工作区 `给官方的缺陷报告-桌面版受限沙箱.md`）：① 打包版受限模式下沙箱 runner 用 `process.execPath`
+    启动却没人给 `ELECTRON_RUN_AS_NODE`（影响**任何**经沙箱 spawn 的命令）；② MSYS2（Git Bash）在
+    Windows ACL 沙箱下启动即崩（`couldn't create signal pipe, Win32 error 5`），而同一沙箱下
+    `cmd` / `pwsh` 实测都正常。
+  - ⚠️ **真机首验就抓到我实现里的一个 bug**：门控最初调 `sandboxPolicy.resolve({})`，拿到的是
+    **部署默认**（base bundle：`process.env.DSH_PERMISSION_MODE ?? 'workspace-write'`），而工具执行时用的是
+    **该会话自己**的策略（`{ session: exec.agent.session }`）⇒ 一个 `danger-full-access` 的会话被误判成受限、
+    自检按预期失败、整栏被白白撤掉（真机上确实发生了一次：工具表里 `bash` 消失）。已改成逐会话解析
+    （`confinedModeOf(deps, agent)`），并加"门控把 session 交给了 sandboxPolicy.resolve"这条断言 + 变异 `AD` 钉住。
+  - ✅ **真机验证（同一轮，用户配合）**：会话切到受限策略后，门控按预期调到探针、探针拿到
+    `0xC0000142`（零输出）——**§7.32 的根因被独立复现**；而这次是**探针替会话死了一次**：插件不接管、
+    状态行写「已启用，但自检未通过…」、模型侧保住 PowerShell（`terminalEffective: pwsh`）。
+    这正是这道护栏要的效果：不必先把自己的 shell 打死才知道那条路是死的。
+  - 完整静态兼容性核对见工作区 `兼容性测试-composer-ux-0.6.1-vs-desktop-0.1.7-rc.2.md`；
+    机制背景见交接文档 §7.32 与 §7.34。
+
+### 说明（⚠️ 发版前必须补做）
+
+- **「重启 DSH」在官方安装的桌面版里不可能生效**（2026-09-25 查证，属机制性限制、不是 bug）：
+  它重放的是「`node <bin.js>` 或裸 `dsh`」（`src/restart.ts` 的 `launchCommand`），而桌面版宿主是
+  **Electron 应用**（`DeepSeek Harness.exe`），两个条件都不成立；`~/.dsh/launcher/_boot.log` 里
+  反复出现「无法定位 dsh CLI（dsh 安装目录未找到）」正与此吻合，且重启助手写下的诊断日志
+  自 **2026-09-23** 起一条都没有。**本轮没有改它的行为**（用户只选了"加刷新"）。
+- **本机的活 profile 是 `profiles/desktop`，不是 `profiles/web`**（详见交接文档 §7.32）：
+  用户这次「默认终端」开关的写入落在 `profiles/desktop/cordis.patch.yml`。所以本机交付要覆盖
+  **两个**已安装副本的 `lib/client.js`（`profiles/desktop/…` 才是活的那份，`profiles/web/…` 一并覆盖以免踩错）。
+- **构建与测试本轮已真跑**（不再是"手工同步"）：`node build.mjs` → `npm test` = **774 passed / 0 failed**；
+  `node test/settings-render.mjs` = **28 passed / 0 failed**。仓库与两个 profile 的 `lib/client.js`
+  md5 一致 = `9017EBC3EBAA2F02427C8BF415461389`（`lib/index.js` 未变，仍是 `955C23B7…`）。
+  ⚠️ **上面这组数字与哈希是"加自检探针之前"那一轮的**。探针 + 环境变量两处改动（<sup>2026-09-25</sup>）之后重跑：
+  `npm test` = **797 passed / 0 failed**（41+17+294+133+**199**+87+26）、`test/settings-render.mjs` = 28；
+  `lib/client.js` md5 **仍是** `9017EBC3EBAA2F02427C8BF415461389`（客户端半一字未动），
+  `lib/index.js` md5 **已变为** `46EEFE792622BE82B9C34A8524BAB12D`（宿主半：探针 + 逐会话门控 + 打包版 env）
+  ⇒ 交付时两个 profile 要按新的 `lib/index.js` 覆盖（**只换 client.js 不够了**）。
+  - ⚠️ **覆盖产物有个 pnpm 硬链接的坑**（2026-09-25 实测踩到）：两个 profile 的
+    `node_modules/dsh-composer-ux/lib/index.js` 曾经**共用同一个 inode**（pnpm 硬链接，link count=4，
+    其中还包含 pnpm store 里的 blob）⇒ 直接 `cp -f` 会**穿透 inode 写入**，一次就改了全部链接、
+    连 store 都被污染（以后 `pnpm install` 该包会装到改过的内容）。
+    **正确做法**：先 `rm` 再 `cp`（断开硬链接，各持独立 inode），并在改动后核对
+    store blob 的 md5 仍是原始值（`955C23B76D69D90DA8484D5F17B19DA6`）；
+    store 文件名是**内容 sha512**（`files/<前2位>/<后128位>`），内容被改过就对不上名。
+
 ## [0.6.1] — 2026-09-24
 
 > 起因是一次真机故障：设置页的开关"点了没反应"，而界面上**一句提示都没有**。查到最后是两层独立原因，

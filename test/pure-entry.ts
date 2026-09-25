@@ -76,8 +76,10 @@ export {
 /** bash 工具本体：参数/输出 schema、描述、执行路径（argv/cwd/env/confine/后台/中止）。 */
 export {
   BASH_SECTION_TEXT, BASH_TOOL_NAME, DEFAULT_TIMEOUT_MS, ENV_OVERRIDES, MAX_TIMEOUT_MS,
+  PROBE_COMMAND, PROBE_MARKER, PROBE_TIMEOUT_MS,
   TOOL_ABORTED, TOOL_BASH_SECTION_ORDER, TOOL_PWSH_SECTION_ORDER, bashDescription, bashParameters,
-  bashOutputSchema, clampTimeout, createBashTool, escalationModesOf, resolveWorkdir,
+  bashOutputSchema, clampTimeout, createBashTool, escalationModesOf, formatProbeExit, probeBashExecution,
+  resolveWorkdir,
 } from '../src/terminal/tool.ts'
 /** 「默认终端」的契约：字段名、三档、候选净化、生效判定、状态行文案。 */
 export {

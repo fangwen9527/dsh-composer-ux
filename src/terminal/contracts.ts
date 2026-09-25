@@ -171,6 +171,14 @@ export interface StatusInput {
    * 用来把那句"候选不可用"换成准确说法：候选是有的、bash 也存在，只是没装上。
    */
   readonly deliveryFailed?: boolean
+  /**
+   * 接管**之前**的自检没通过（2026-09-25 新增）：原因。
+   *
+   * 与 `deliveryFailed` 是两件事：那条是"试了但没装上"，这条是"预检就没过、根本没试"——
+   * 用于桌面版受限策略下会出现的 `0xC0000142`（沙箱 runner 在打包形态起不来），
+   * 那时若照旧接管会把该会话的 shell 打死，所以宁可保持 PowerShell。
+   */
+  readonly probeFailed?: string
 }
 
 /**
@@ -188,6 +196,9 @@ export function terminalStatusText(input: StatusInput): string {
     }
     if (input.mode === 'pwsh') {
       return '保持 DSH 默认（PowerShell）——本插件不介入终端工具面'
+    }
+    if (input.probeFailed !== undefined && input.probeFailed !== '') {
+      return `已启用，但自检未通过：${input.probeFailed} —— 为避免把会话的 shell 打死，暂不接管（保持 PowerShell）`
     }
     if (input.effective === 'bash') {
       const path = input.effectivePath ?? ''

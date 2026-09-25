@@ -350,11 +350,18 @@ export function createBashTool(
     readonly timeoutMs?: number
     /** 超时上限（默认 600s）。 */
     readonly maxTimeoutMs?: number
+    /**
+     * 是否按「打包形态的 Electron 宿主」补 `ELECTRON_RUN_AS_NODE`。
+     *
+     * 默认看 `process.versions.electron`；可注入，好让 node 下跑的测试也能断言这一项。
+     */
+    readonly electron?: boolean
   },
 ): ToolDefinitionLike {
   const escalationModes = escalationModesOf(deps)
   const sep = options.sep ?? '\\'
   const isAbsolute = options.isAbsolute ?? ((path: string) => /^([a-zA-Z]:[\\/]|[\\/])/.test(path))
+  const electron = options.electron ?? (process.versions as { electron?: string }).electron !== undefined
   const minTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxTimeout = options.maxTimeoutMs ?? MAX_TIMEOUT_MS
 
@@ -370,7 +377,17 @@ export function createBashTool(
     graceMs: GRACE_MS,
     ...(signal === undefined ? {} : { signal }),
     // dshEnv 必须显式带上：subprocess 会先按凭据形状清洗父环境（含清掉所有 DSH_*）。
-    env: { ...ENV_OVERRIDES, ...dshEnv },
+    env: {
+      ...ENV_OVERRIDES,
+      ...dshEnv,
+      // ⚠️ 打包形态（Electron 桌面版）下必须补这一项。Windows 上受限模式的沙箱 runner
+      // 的 argv[0] 是 `process.execPath`（`dsh-sandbox-local/lib/index.js:539`），桌面版里
+      // 那就是 `DeepSeek Harness.exe`；而用 Electron 跑 JS 脚本**必须**带
+      // `ELECTRON_RUN_AS_NODE=1`，否则它按 App 形态启动、原生初始化就失败
+      // （2026-09-25 实测：零输出 / 0xC0000142）。官方 `sandbox-local` 只返回 argv、不带 env，
+      // 所以这一项只能由 **spawn 方**补齐。对 `bash.exe` 本身无副作用（它不认这个变量）。
+      ...(electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    },
   })
 
   /** 读一帧增量（官方 executor 的游标记账）。 */
@@ -578,5 +595,102 @@ export function createBashTool(
       const { body, ...exit } = parseExitStatus(raw)
       return { card: 'terminal', output: body, ...exit }
     },
+  }
+}
+
+// ── 自检探针（2026-09-25 新增）────────────────────────────────────────────────
+//
+// 为什么需要：官方安装的**桌面版**（Electron 打包）在**受限文件策略**下，命令会经过沙箱
+// runner，而 runner 是用 `process.execPath` 起的 —— 桌面版里那是 `DeepSeek Harness.exe`
+// 而不是 node，于是每条命令都以 `0xC0000142`（DLL 初始化失败）退出、零输出。
+// 插件的「默认终端」若照旧接管，结果就是：`restrict(pwsh)` 已生效 + 自带的 bash 又跑不动
+// = 该会话**一个能用的 shell 都没有**（比不接管更糟）。
+// 所以：接管前先用**同一条执行路径**探一次；不通过就不接管，至少还留着 PowerShell。
+// 注意 `danger-full-access` 会跳过 confine，实测那条路径本来就是好的 —— 调用方只在受限
+// 模式下才要求探针（见 terminal/host.ts）。
+
+/** 探针命令：只打印一个标记，不写文件、不依赖当前目录。 */
+export const PROBE_COMMAND = 'printf %s dsh-composer-ux-probe-ok'
+/** 探针通过时 stdout 必须包含的标记。 */
+export const PROBE_MARKER = 'dsh-composer-ux-probe-ok'
+/** 探针超时（毫秒）：够慢机器起一次 shell，又不至于把插件启动拖住。 */
+export const PROBE_TIMEOUT_MS = 8_000
+
+/** 探针结论。 */
+export interface ProbeOutcome {
+  readonly ok: boolean
+  /** 失败原因（ok 时为空串）。 */
+  readonly detail: string
+}
+
+/** 退出码的可读写法：Windows 上那些 `0xC0000xxx` 语义上是"进程没起来"，写成十六进制最好认。 */
+export function formatProbeExit(exitCode: number | null): string {
+  if (exitCode === null) return 'null（被信号结束）'
+  if (exitCode < 0 || exitCode >= 0x80000000) {
+    const unsigned = exitCode < 0 ? exitCode + 0x1_0000_0000 : exitCode
+    return `0x${unsigned.toString(16).toUpperCase()}（${unsigned}）`
+  }
+  return String(exitCode)
+}
+
+/**
+ * 用**与真实 bash 工具完全相同的路径**跑一条无副作用命令（同一份 argv 构造、同一个
+ * 沙箱 `confine`、同一个 `subprocess.spawn`）。
+ *
+ * 刻意借道 `createBashTool(...).execute(...)` 而不是另写一套 spawn：自检必须测到"真工具会走的
+ * 那条路"，否则它证明不了任何事（argv 拼错、confine 漏包、cwd/env 不对都会漏过去）。
+ * 也刻意**不带** `sandbox_permissions`：自检不该弹审批。
+ * @param deps 工具依赖（与真工具同一份）。
+ * @param options `bashPath` 等（与真工具同一份）。
+ * @param exec 借来的执行上下文（agent/signal/callId）。
+ * @returns 探针结论；任何异常都收敛成 `{ ok: false }`（fail-closed）。
+ */
+export async function probeBashExecution(
+  deps: BashToolDeps,
+  options: { readonly bashPath: string; readonly sep?: string; readonly isAbsolute?: (path: string) => boolean },
+  exec: ToolRunContextLike,
+): Promise<ProbeOutcome> {
+  // 受管环境变量收集失败不该否掉整个探针：那是另一条链路的问题，而这里要验的是"命令能不能跑"。
+  const probeDeps: BashToolDeps = deps.shellEnv === undefined
+    ? deps
+    : {
+        ...deps,
+        shellEnv: {
+          collect: (ctx): Record<string, string> => {
+            try {
+              return deps.shellEnv?.collect(ctx) ?? {}
+            } catch {
+              return {}
+            }
+          },
+        },
+      }
+  try {
+    const tool = createBashTool(probeDeps, { ...options, timeoutMs: PROBE_TIMEOUT_MS, maxTimeoutMs: PROBE_TIMEOUT_MS })
+    const result = await tool.execute(
+      { command: PROBE_COMMAND, description: 'composer-ux terminal self-check', timeoutMs: PROBE_TIMEOUT_MS },
+      exec,
+    ) as {
+      kind?: string
+      exitCode?: number | null
+      timedOut?: boolean
+      aborted?: boolean
+      stdout?: { text?: string }
+      sandbox?: { denied?: boolean }
+    }
+    if (result?.kind !== 'foreground') return { ok: false, detail: '自检没有走前台执行路径' }
+    if (result.timedOut === true) return { ok: false, detail: `自检超时（${PROBE_TIMEOUT_MS}ms）` }
+    const text = result.stdout?.text ?? ''
+    const exit = result.exitCode ?? 0
+    if (exit !== 0) {
+      return {
+        ok: false,
+        detail: `自检命令退出码 ${formatProbeExit(exit)}${text.trim() === '' ? '（零输出）' : ''}`,
+      }
+    }
+    if (!text.includes(PROBE_MARKER)) return { ok: false, detail: '自检没拿到预期输出（命令没真正跑起来）' }
+    return { ok: true, detail: '' }
+  } catch (error: unknown) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
   }
 }

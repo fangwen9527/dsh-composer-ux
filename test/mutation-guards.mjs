@@ -247,6 +247,39 @@ const cases = [
     test: 'test/host-settings-generations.mjs',
     expect: '自己那一行从 describe 读得到',
   },
+  // ── 接管前的自检探针（2026-09-25 新增）─────────────────────────────────────
+  {
+    name: 'AB 自检门控整段拆掉（探针不过也照旧接管 → 受限模式下会把会话的 shell 打死）',
+    file: 'src/terminal/host.ts',
+    from: "          const confinedMode = probeDeps === undefined ? '' : confinedModeOf(probeDeps, agent)",
+    to: "          const confinedMode = ''",
+    test: 'test/terminal-policy.mjs',
+    expect: '自检不过 → 不 restrict、不注册、不加提示词段',
+  },
+  {
+    name: 'AC 自检不看沙箱模式（danger-full-access 也强行探 → 本来正常的那条路白起一个进程）',
+    file: 'src/terminal/host.ts',
+    from: "      return mode === 'read-only' || mode === 'workspace-write' ? mode : ''",
+    to: '      return mode',
+    test: 'test/terminal-policy.mjs',
+    expect: 'danger-full-access 下**不做**自检',
+  },
+  {
+    name: 'AD 门控退回"部署默认"（不把 session 交给 resolve → danger-full-access 的会话被误判成受限）',
+    file: 'src/terminal/host.ts',
+    from: '      const mode = deps.sandboxPolicy.resolve(session === undefined ? {} : { session }).mode',
+    to: '      const mode = deps.sandboxPolicy.resolve({}).mode',
+    test: 'test/terminal-policy.mjs',
+    expect: '门控把 session 交给了 sandboxPolicy.resolve',
+  },
+  {
+    name: 'AE 打包形态下不再补 ELECTRON_RUN_AS_NODE（受限模式的 runner 在桌面版里起不来）',
+    file: 'src/terminal/tool.ts',
+    from: "      ...(electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),",
+    to: '',
+    test: 'test/terminal-policy.mjs',
+    expect: 'spawn env 带 ELECTRON_RUN_AS_NODE=1',
+  },
 ]
 
 let allBit = true

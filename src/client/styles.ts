@@ -122,19 +122,34 @@ export const hintInfo: CSSProperties = {
   margin: '6px 0 0',
 }
 
-/** 菜单（与图片一致的深色圆角菜单）；背景取自官方菜单令牌。 */
+/**
+ * 菜单（与图片一致的深色圆角菜单）；背景取自官方菜单令牌。
+ *
+ * ⚠️ **2026-09-25 修（0.1.7 兼容）**：DSH 把菜单面改成了「半透明 + 毛玻璃」——
+ * 官方每一个绘制 `--dsw-specific-menu` 的浮层都**成对**补一层
+ * `backdrop-filter: var(--dsw-menu-backdrop-filter)`（实测 `blur(40px) saturate(150%)`）。
+ * 我们以前只抄了「半透明」那一半、漏了磨砂，于是浮层成了**一块没磨砂的玻璃**：
+ * 背后正文直接透出来、字叠字看不清（用户 2026-09-25 截图报的就是这个）。
+ *
+ * 同批对齐官方的另两条：① 描边走 elevation 的发丝线（`border: 0` —— 否则实线边框
+ * 会和 box-shadow 里那 0.5px 描边叠成两条）；② 圆角改用官方令牌。
+ */
 export const menu: CSSProperties = {
   position: 'fixed',
+  // 官方浮层用 1100，这里**刻意保留 9999**：本插件的浮层挂在 `shell.overlay` 这个
+  // 独立层叠上下文里，要和别的插件抢层，降下去只会被盖住（见 panel.ts 文件头）。
   zIndex: 9999,
   minWidth: 200,
   background: 'var(--dsw-specific-menu)',
-  border: '0.5px solid var(--dsw-alias-border-l1)',
-  borderRadius: 10,
+  backdropFilter: 'var(--dsw-menu-backdrop-filter)',
+  border: 0,
+  borderRadius: 'var(--dsw-radius-lg)',
   boxShadow: 'var(--dsw-elevation-prominent)',
+  '--dsw-elevation-stroke-color': 'var(--dsw-alias-border-l1)',
   padding: 5,
   pointerEvents: 'auto',
   userSelect: 'none',
-}
+} as CSSProperties
 
 /** 菜单项。 */
 export const menuItem: CSSProperties = {
@@ -189,9 +204,16 @@ export const menuNote: CSSProperties = {
 
 // ── 快捷指令：展开面板 ─────────────────────────────────────────────────────
 
-/** 面板容器（fixed 定位，锚点在入口按钮上方）。 */
+/**
+ * 面板容器（fixed 定位，锚点在入口按钮上方）。
+ *
+ * 材质与描边与上面 `menu` 完全同一套（半透明填充 + 官方伴侣模糊 + elevation 发丝线），
+ * 两处必须一起改 —— 只改一处就会出现「一个浮层清楚、另一个还在透」。
+ * 病因与实测依据写在 `menu` 的注释里，不重复。
+ */
 export const quickPanel: CSSProperties = {
   position: 'fixed',
+  // 同 `menu`：刻意保留 9999，理由见那里。
   zIndex: 9999,
   width: 420,
   maxWidth: 'calc(100vw - 24px)',
@@ -199,12 +221,14 @@ export const quickPanel: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   background: 'var(--dsw-specific-menu)',
-  border: '0.5px solid var(--dsw-alias-border-l1)',
-  borderRadius: 12,
+  backdropFilter: 'var(--dsw-menu-backdrop-filter)',
+  border: 0,
+  borderRadius: 'var(--dsw-radius-lg)',
   boxShadow: 'var(--dsw-elevation-prominent)',
+  '--dsw-elevation-stroke-color': 'var(--dsw-alias-border-l1)',
   pointerEvents: 'auto',
   overflow: 'hidden',
-}
+} as CSSProperties
 
 /** 面板顶部区（标题 + 档位 + 优化按钮）。 */
 export const quickPanelHead: CSSProperties = {

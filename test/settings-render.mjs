@@ -223,5 +223,24 @@ console.log('\n5. 写入失败 / 未生效的说明条（0.6.1：点了没反应
   check('说明条走的是失败态样式', shown.includes('dsh-ux-restartBannerFailed'))
 }
 
+console.log('\n6. 抬头右端：新增的「刷新」按钮（官方桌面版里「重启」不可能生效）')
+{
+  // 注意：不能用 cardOf('输入体验') —— 那张卡的卡名是 `<h2 class="dsh-ux-cardName">`，
+  // 而 cardOf 是按 `<span class="dsh-ux-cardName">` 切片的（其余五张卡都是 span）。
+  // 整页找更稳，而且这两枚按钮全页各只有一枚。
+  const page = html.official
+  const refresh = /<button[^>]*>刷新<\/button>/.exec(page)?.[0] ?? ''
+  const restart = /<button[^>]*>重启 DSH<\/button>/.exec(page)?.[0] ?? ''
+  // 结构类断言只验"出现过"是最弱的一种（见交接文档 §7.25）：这里既查元素形状、
+  // 又查它真的可点，再比它与「重启 DSH」的先后 —— 光加一个按钮、或把它塞到
+  // 「重启」后面都应当被判失败。
+  check('页面里有「刷新」按钮（真的是 <button>）', refresh !== '')
+  check('刷新初始可点（不带 disabled）', refresh !== '' && !refresh.includes('disabled'))
+  check('刷新排在「重启 DSH」之前（轻的在前）',
+    refresh !== '' && restart !== '' && page.indexOf(refresh) < page.indexOf(restart))
+  check('刷新的 title 说清"不重启、不打断会话"',
+    refresh.includes('不重启 DSH') && refresh.includes('不打断'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

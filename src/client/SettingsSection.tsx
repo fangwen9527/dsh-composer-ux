@@ -922,6 +922,36 @@ function RestartButton({ restart }: { readonly restart: RestartController }) {
   )
 }
 
+/**
+ * 抬头右端那枚「刷新」按钮（在「重启 DSH」左边）。
+ *
+ * 为什么值得有一枚：插件的**客户端半**（设置页 / 右键菜单 / 键位拦截 / 快捷指令面板）
+ * 是随页面 bundle 走的，改完只要重新加载页面就生效，**根本不需要重启宿主**。
+ * 而「重启 DSH」在官方安装的桌面版里不可能生效 —— 宿主是 Electron 应用，
+ * 重放不出可用的启动命令（2026-09-25 实测：`_boot.log` 反复报「无法定位 dsh CLI」，
+ * 重启helper 的日志自 09-23 起一条没有）。于是"想让改动生效"这件事在桌面版里
+ * 就没了下手处，这枚按钮补的正是这个缺口。
+ *
+ * 它只做一件事：`location.reload()`。不发请求、不碰宿主、**不打断正在跑的会话**
+ * （会话在宿主侧活着，刷新只重建界面）。
+ *
+ * 复用 `.dsh-ux-restartButton` 的观感：那是"抬头小胶囊"这一套样式，类名被
+ * `test/client-registration.mjs` 钉着（改名会撞护栏），而且两枚并排必须长得一样。
+ */
+function RefreshButton({ busy }: { readonly busy: boolean }) {
+  return (
+    <button
+      type="button"
+      className="dsh-ux-restartButton"
+      disabled={busy}
+      title="刷新页面：让插件客户端半的新代码（设置页 / 右键菜单 / 键位 / 快捷指令面板）生效。不重启 DSH、不打断正在跑的会话。"
+      onClick={() => { window.location.reload() }}
+    >
+      刷新
+    </button>
+  )
+}
+
 /** 抬头正下方的确认条（市场那个「N 项变更需重启」横幅的位置）。 */
 function RestartBanner({ restart }: { readonly restart: RestartController }) {
   if (restart.stage === 'idle') return null
@@ -1025,6 +1055,13 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             确认条在抬头正下方（见下面的 RestartBanner），跟市场的「待重启」横幅同一个位置。
           */}
           <span className="dsh-ux-cardActions">
+            {/*
+              顺序：刷新 → 重启 → GitHub。轻的在前、重的在后（刷新只需重新加载页面，
+              重启会真的换掉宿主进程），与两枚按钮各自的风险一致。
+              重启在确认中 / 重启中时刷新一起禁用：那时用户手上有一件未决的事，
+              刷新会把它连同确认条一起冲掉。
+            */}
+            <RefreshButton busy={restart.stage === 'restarting' || restart.stage === 'asking'} />
             <RestartButton restart={restart} />
             {/*
               仓库入口：用真实的 <a>（新标签打开、不带 referrer），地址来自契约里的 REPO_URL ——

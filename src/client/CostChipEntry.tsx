@@ -440,7 +440,9 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
                     + '想换成最新价，去设置页「金额」点一次「同步第三方价目」。', '__builtin__')
                   : null}
                 {unpricedCount > 0
-                  ? note(`有 ${unpricedCount} 行**未定价**：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`
+                  // ⚠️ 这里只能用纯文本：`note()` 不是 markdown 渲染器，写 `**未定价**` 会让用户
+                  // 在浮层里看到字面的星号（2026-09-29 的真渲染测试抓到的）。
+                  ? note(`有 ${unpricedCount} 行「未定价」：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`
                     + '所以那部分按 0 计。去设置页「金额」刷新一次「同步第三方价目」，或给那行直接填个价。', '__unpriced__')
                   : null}
               </>

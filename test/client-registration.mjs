@@ -316,8 +316,11 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
     costSource.includes("route.unpriced ? '未定价' : formatMoney(route.cost)")
     && costSource.includes("viewUnpriced ? '未定价' : formatMoney(view.total)"))
   check('有未定价行时写明少算了哪部分、怎么补价',
-    costSource.includes('未定价**：那是非 DeepSeek 模型')
-    && costSource.includes('同步第三方价目'))
+    costSource.includes('「未定价」：那是非 DeepSeek 模型')
+    && costSource.includes('同步第三方价目')
+    // `note()` 是纯文本渲染：以前这里写的是 markdown 的 `**未定价**`，界面上会显示字面星号
+    // （2026-09-29 的真渲染测试抓到，见 test/cost-panel-render.mjs）。旧断言把那个 bug 焊死了。
+    && !costSource.includes('行**未定价**'))
   check('价格档来自宿主半给的 era，并说明"官方调价不改历史金额"',
     costSource.includes("era: typeof route.era === 'string' ? route.era : ''")
     && costSource.includes("route.deepseek && route.era !== ''")

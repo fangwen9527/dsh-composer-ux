@@ -678,6 +678,14 @@ const cases = [
     test: 'test/pricing.mjs',
     expect: 'deepseek-reasoner 按 flash 计价',
   },
+  {
+    name: 'CC 浮层说明里写回 markdown 的 `**加粗**`（用户会在界面上看到字面星号）',
+    file: 'src/client/CostChipEntry.tsx',
+    from: "                  ? note(`有 ${unpricedCount} 行「未定价」：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`",
+    to: "                  ? note(`有 ${unpricedCount} 行**未定价**：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`",
+    test: 'test/cost-panel-render.mjs',
+    expect: '没有 markdown 记号',
+  },
 ]
 
 let allBit = true

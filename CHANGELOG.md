@@ -9,8 +9,12 @@
 > C 余额、D 官方价同步、E 非 DeepSeek 定价**；随后他又选了 **F 价格历史档**（"旧账要按当时的价
 > 固定"，最大那一档）。顺手修掉三处**会算错钱**的既有错误。
 
-### 修正（先看这四条）
+### 修正（先看这五条）
 
+- **浮层里那行"未定价"说明以前写着 markdown 的 `**未定价**`**（第 7 轮的真渲染测试抓到）：`note()`
+  是纯文本渲染，用户会在明细浮层里**看到字面的星号**。已改成「未定价」。同一处还有一条**旧断言
+  把 bug 焊死**（`test/client-registration.mjs` 里断言的正是 `未定价**：那是非 DeepSeek 模型`），
+  一并改成断言修好后的文本 + 禁止 markdown 记号。
 - **`deepseek-reasoner` 一度被映到 Pro（第 5 轮核查时发现并修掉）**。官方更新日志（2026-04-24，中英
   两版都写了）：`deepseek-chat` 与 `deepseek-reasoner` **都指向 `deepseek-v4-flash`** —— 前者是
   非思考模式、后者是思考模式，与 `deepseek-v4-pro` 没有对应关系（这两个名字已于 2026-07-24 停用）。
@@ -67,6 +71,17 @@
 
 ### 内部
 
+- **`test/cost-panel-render.mjs`：把「金额浮层」也真渲染出来测**（19 条，已进 `npm test`）。
+  浮层是 0.10.0 改动最大、却只有源码字符串断言的一处，而它正是"诚实性"的落点：未定价要不要写
+  `¥0.00`、内置快照价有没有标明、价格历史档有没有说出来、分项加起来是不是恰好等于合计。
+  手法与 `settings-render` 相同（借 profile 的 react + `react-dom/server`），另加三处**内存里**的替换：
+  `createPortal` 换恒等函数 + 假 `document`/`window`（SSR 没有 DOM，而浮层在渲染期就读
+  `window.innerWidth` 算位置）、`open`/`hover`/`anchor` 的初值换成"已展开"（浮层条件是
+  `open && anchor !== null`，而 `anchor` 只在点击时才设上）、`useSessionCost` 的返回值换成夹具
+  （钩子本身由 `client-registration` 覆盖）。**锚点找不到就报错退出**，不静默放行。
+  第一版有 12 条红：两条是夹具/断言写错（未定价那条 route 我给了 0 token，被组件按
+  `tokenTotal > 0` 过滤掉了）、一条是我的断言太严（分项里的 `¥0.00` 是"没定价所以乘出来是 0"，
+  关键是**头号数字**不能是 `¥0.00`），其余全是那个 markdown 真缺陷。
 - **`scripts/dsh-shape-check.mjs`：升级 DSH 后的形状核对**。本插件依赖一批宿主内部形状，它们
   **名字或形状一变不会报错、只会静默降级**：`sessions` 服务（`ctx.inject([...])` 里缺了它整条用量
   路由根本不注册）、`sessions.list()`、`Session.id` / **`Session.seq`**（拿不到 `seq` 时 `liveSeq`

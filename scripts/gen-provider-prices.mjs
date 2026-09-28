@@ -36,7 +36,12 @@ if (input === undefined) {
   console.error('用法：node scripts/gen-provider-prices.mjs <models-dev-api.json> [YYYY-MM-DD]')
   process.exit(2)
 }
-const snapshotAt = process.argv[3] ?? new Date().toISOString().slice(0, 10)
+/**
+ * 缺省快照日期取**北京日期**（不是 UTC）：本插件全部时间语义都是北京时间的
+ * （峰谷时段、节假日表、官方调价时刻），快照日期跟着走才不会被"UTC 还是昨天"弄错一天。
+ */
+const beijingDate = () => new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10)
+const snapshotAt = process.argv[3] ?? beijingDate()
 
 const registry = JSON.parse(readFileSync(input, 'utf8'))
 const out = {}

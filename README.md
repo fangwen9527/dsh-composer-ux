@@ -384,9 +384,9 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-npm test                          # 17 个套件；当前 1605 passed, 0 failed（2026-09-29 实测）
+npm test                          # 17 个套件；当前 1614 passed, 0 failed（2026-09-29 实测）
 node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（79 条，须单独跑）
-node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示（69 条）
+node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示、以及"非默认设置"下的「金额」卡（78 条）
 node test/cost-panel-render.mjs   # 已进 npm test：把「金额浮层」真渲染成 HTML，断言分列 / 峰谷行 / 未定价 / 内置快照价 / 明文没混进 markdown 记号（19 条）
 node scripts/live-smoke.mjs       # 手动跑：**联网复核**（官方页 vs 写死的价目表逐格对比 / models.dev vs 内置快照逐条对比 / 余额端点白名单与状态码）；只读，不写任何文件
 node scripts/dsh-shape-check.mjs  # 手动跑：**对着 DSH 源码**核对我们依赖的宿主形状（服务名 / 方法 / 事件 / 版本），升级 DSH 后必跑；只读

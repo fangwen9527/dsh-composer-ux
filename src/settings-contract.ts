@@ -33,6 +33,15 @@ export const REPO_URL = 'https://github.com/fangwen9527/dsh-composer-ux'
 /** 重启接口路径（宿主半注册，客户端半调用）。 */
 export const RESTART_API_PATH = '/composer-ux/restart'
 
+/**
+ * 「按 route 分列的用量」接口路径（0.8.0）。
+ *
+ * 为什么必须走宿主半：客户端只有整会话累计的 `tokenUsage` 与"最后一次"的 `modelSelection`，
+ * 一个会话里换过 route 之后就无法归因；`session.events` 只有宿主能读。
+ * 折叠规则与出处见 `src/usage-fold.ts` 文件头。
+ */
+export const USAGE_API_PATH = '/composer-ux/usage'
+
 /** 全局总开关字段名。 */
 export const ENABLED_FIELD = 'enabled'
 
@@ -60,6 +69,22 @@ export const QUICK_ENABLED_FIELD = 'quickEnabled'
 export const PANEL_ENABLED_FIELD = 'panelEnabled'
 /** 「默认终端」栏开关。 */
 export const TERMINAL_ENABLED_FIELD = 'terminalEnabled'
+
+// ── 「统计行」（0.7.0 新增，第 7 栏）─────────────────────────────────────────
+//
+// 与上面五栏**规则不同**，这一点必须显式写下来，否则后来的人会照抄 sectionEnabledOf：
+// 那五栏默认关、靠"用户碰过没"迁移，是因为它们**已经发布过**——一律默认关会把老用户正在
+// 用的键位/请求头/终端当场关掉。而「统计行」是新能力，没有任何"碰过"的痕迹可依，
+// 且用户 2026-09-28 明确要求"装完就生效"，所以它是**普通布尔字段、默认开**（同
+// `headerEnabled` 的写法，只是默认值相反）。因此它不进 SECTION_SIGNALS。
+//
+// 这一栏**只有这一个键**：曾经还有 `statsPrecision` / `statsWiden` 两个子开关（三位小数 /
+// 加宽统计行），但「加宽」做完真机核对后被用户拍板撤掉（前提不成立，理由见
+// `src/client/stats-line.ts` 文件头），只剩一个功能就不该再设同义的子开关 ——
+// 与「OpenCode 请求头」那一栏同一处理。
+
+/** 「统计行」栏开关：是否把输入框下方那行的缓存命中率改成三位小数。 */
+export const STATS_ENABLED_FIELD = 'statsEnabled'
 
 /** 键位字段名。 */
 export const SEND_KEY_FIELD = 'sendKey'
@@ -620,6 +645,7 @@ export type SettingsField =
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
   | typeof TERMINAL_MODE_FIELD
   | typeof TERMINAL_BASH_PATH_FIELD
+  | typeof STATS_ENABLED_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -707,6 +733,13 @@ export interface ComposerUxSettings {
   terminalStatus: string
   /** 宿主半写的当前生效 shell：'bash' / 'pwsh'（只读展示）。 */
   terminalEffective: string
+  /**
+   * 「统计行」栏开关（0.7.0）：默认**开**。
+   *
+   * 与上面五栏的迁移规则不同：那五栏默认关是因为它们已发布过、默认关会打断正在用的人；
+   * 这一栏是新能力，用户要求装完即生效，所以按普通布尔字段处理（同 `headerEnabled`）。
+   */
+  statsEnabled: boolean
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -748,20 +781,23 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   terminalCandidates: [],
   terminalStatus: '',
   terminalEffective: '',
+  // 「统计行」（0.7.0）：默认开 —— 用户 2026-09-28 要的是"装完立刻看得到效果"，
+  // 所以这一栏不参与下面那套"碰过才开"的迁移（见 STATS_ENABLED_FIELD 上方的说明）。
+  statsEnabled: true,
 }
 
 /**
- * 六栏里哪几栏生效：**总开关 +（OpenCode 那栏用自己的 `headerEnabled`）+ 该栏开关**。
+ * 七栏里哪几栏生效：**总开关 +（OpenCode / 统计行那两栏用自己的字段）+ 该栏开关**。
  *
  * 宿主半与客户端半都走这一个函数，免得有人只看了栏开关、忘了总闸（或者反过来）。
- */
-export function activeSections(settings: ComposerUxSettings): {
+ */export function activeSections(settings: ComposerUxSettings): {
   readonly keys: boolean
   readonly menu: boolean
   readonly quick: boolean
   readonly panel: boolean
   readonly header: boolean
   readonly terminal: boolean
+  readonly stats: boolean
 } {
   const on = settings.enabled
   return {
@@ -771,6 +807,7 @@ export function activeSections(settings: ComposerUxSettings): {
     panel: on && settings.panelEnabled,
     header: on && settings.headerEnabled,
     terminal: on && settings.terminalEnabled,
+    stats: on && settings.statsEnabled,
   }
 }
 
@@ -983,5 +1020,8 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     terminalCandidates: sanitizeTerminalCandidates(source[TERMINAL_CANDIDATES_FIELD]),
     terminalStatus: asText(TERMINAL_STATUS_FIELD, 400),
     terminalEffective: asText(TERMINAL_EFFECTIVE_FIELD, 16),
+    // 「统计行」（0.7.0）：普通布尔字段、默认开 —— **不走** sectionEnabledOf（那套是给
+    // 已发布的五栏做"碰过才开"迁移用的；新栏没有痕迹可依，且用户要求默认生效）。
+    statsEnabled: asBool(STATS_ENABLED_FIELD),
   }
 }

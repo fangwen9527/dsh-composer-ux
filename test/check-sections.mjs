@@ -69,6 +69,8 @@ const source = {
   ...(textOf('terminalMode') === undefined ? {} : { terminalMode: textOf('terminalMode') }),
   ...(textOf('terminalBashPath') === undefined ? {} : { terminalBashPath: textOf('terminalBashPath') }),
   ...(boolOf('headerEnabled') === undefined ? {} : { headerEnabled: boolOf('headerEnabled') }),
+  // 0.7.0「统计行」：普通布尔字段（默认开），也要读实值，否则工具会显示成"你没关过"。
+  ...(boolOf('statsEnabled') === undefined ? {} : { statsEnabled: boolOf('statsEnabled') }),
   ...(boolOf('enabled') === undefined ? {} : { enabled: boolOf('enabled') }),
 }
 
@@ -143,5 +145,9 @@ for (const [label, key, field, hasFileSignal] of rows) {
 const headerExplicit = valueOf('headerEnabled')
 console.log(`${pad('OpenCode', 12)}${pad(sections.header ? '开' : '关', 10)}`
   + `${headerExplicit === undefined ? 'headerEnabled 缺省（默认关）' : 'headerEnabled 写死的值'}`)
+// 0.7.0「统计行」是**新栏**，默认开、且不走"碰过才开"那套迁移（见 settings-contract.ts）。
+const statsExplicit = valueOf('statsEnabled')
+console.log(`${pad('统计行', 12)}${pad(sections.stats ? '开' : '关', 10)}`
+  + `${statsExplicit === undefined ? 'statsEnabled 缺省（默认开；新栏不参与"碰过才开"迁移）' : 'statsEnabled 写死的值'}`)
 console.log(`\n「快捷指令」的文件判据：${bookNote}`)
 console.log('（本工具只读；迁移真正发生在重启 DSH 之后）')

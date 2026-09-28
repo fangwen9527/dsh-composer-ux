@@ -10,6 +10,7 @@ import {
   MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
+  STATS_ENABLED_FIELD,
   activeSections, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
@@ -29,6 +30,8 @@ import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
 import { SettingsSection } from './client/SettingsSection.tsx'
+import { StatsLineEntry } from './client/StatsLineEntry.tsx'
+import { CostChipEntry } from './client/CostChipEntry.tsx'
 import { QuickCommandsButton, type QuickPanelAnchor } from './client/QuickCommandsButton.tsx'
 import { QuickCommandsPanel } from './client/QuickCommandsPanel.tsx'
 import {
@@ -297,6 +300,10 @@ export function apply(ctx: any): void {
         // 若不清，恢复默认之后六栏还会保持之前打开的状态，与"默认关"的语义不符。
         KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, QUICK_ENABLED_FIELD,
         PANEL_ENABLED_FIELD, TERMINAL_ENABLED_FIELD,
+        // 「统计行」（0.7.0）清掉 = 回到 schema 默认 = 开。这一栏的默认本身就是"开"，
+        // 所以"恢复默认"看到的仍是开着的——与上面五栏（清掉即关）方向相反，但各自都对：
+        // 清掉的定义是"回到从没碰过的样子"，而这一栏从没碰过的样子就是开。
+        STATS_ENABLED_FIELD,
         // 0.5.0 里那个「可选重启命令」字段已经删掉，但老文档里可能还留着值：
         // 顺手清掉，免得它永远躺在设置文件里没人认识。
         'restartCommand',
@@ -463,6 +470,45 @@ export function apply(ctx: any): void {
       },
     }),
   }, QuickCommandsPanel))
+
+  /*
+     「统计行」隐形条目（0.7.0）：挂在输入框下方那行统计所在的槽上（与官方 `stats` 同槽、
+     不同 id、order 99 排在它之后）。它自己不画任何东西，只负责把兄弟节点里那一段
+     「缓存命中 xx%」改成三位小数、并把那一行放宽。
+
+     为什么 id 必须是自己的：官方条目就叫 `stats`，槽位契约里写得很清楚——**复用别人的 id
+     会顶替掉那一格**（`slot-catalog.ts` 的 `registerOptions.id`）。顶替等于把官方统计胶囊
+     整个换掉，那正是我们不要的（见 StatsLineEntry.tsx 上方那段）。
+     不给这一栏写 `inject: ['conversation.composer.dock']`：本插件只硬依赖 slots，
+     槽位还没声明时由 `slots.inject(name, cb)` 等着（与「快捷指令」按钮同一套做法）。
+   */
+  slots.inject('conversation.composer.dock', () => slots.register({
+    name: 'conversation.composer.dock',
+    id: 'composer-ux-stats-line',
+    order: 99,
+    label: '统计行',
+    inject: () => ({ hooks: { live } }),
+  }, StatsLineEntry))
+
+  /*
+     「金额」胶囊（0.8.0）：同一个 dock 槽、order 100 排在「统计行」之后（官方 `stats` 是 0）。
+
+     它自己画一颗极简金额胶囊，点开是 portal 浮层里的本会话费用明细。金额必须自己算：
+     官方客户端投影只有 token 桶（`tokenUsage`），全库没有一处把"钱"送到浏览器
+     —— 详见 `src/pricing.ts` 文件头与 `test/pricing.mjs` 的对拍。
+
+     与「统计行」同规矩：id 必须是自己的一格（复用官方 `stats` 的 id 会顶替掉那一格），
+     并且不给这一栏写 `inject: ['conversation.composer.dock']`，槽位没声明时由
+     `slots.inject(name, cb)` 等着。框架会给它注入标准套件（`useProjection`），
+     我们自己的 `inject` 只补 `live`。
+   */
+  slots.inject('conversation.composer.dock', () => slots.register({
+    name: 'conversation.composer.dock',
+    id: 'composer-ux-cost',
+    order: 100,
+    label: '金额',
+    inject: () => ({ hooks: { live } }),
+  }, CostChipEntry))
 
   // 设置页折叠卡片样式（常驻；只管设置页外观，与总开关无关）。
   ctx.effect(() => installSettingsCardStyle(), 'composer-ux: settings card style')

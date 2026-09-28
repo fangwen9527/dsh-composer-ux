@@ -201,20 +201,95 @@ moduleExports.apply(ctx)
 const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
-check('注册了 5 个槽位条目', registrations.length === 5, JSON.stringify(registrations.map(r => r.id)))
+check('注册了 7 个槽位条目', registrations.length === 7, JSON.stringify(registrations.map(r => r.id)))
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
 check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
 check('面板缩放手柄', byId('composer-ux-panel-resize')?.name === 'shell.overlay')
 check('快捷指令按钮', byId('composer-ux-quick')?.name === 'conversation.input.right')
 check('快捷指令面板', byId('composer-ux-quick-panel')?.name === 'shell.overlay')
+check('统计行隐形条目', byId('composer-ux-stats-line')?.name === 'conversation.composer.dock')
+check('金额胶囊条目', byId('composer-ux-cost')?.name === 'conversation.composer.dock')
 check('每个条目都带组件', registrations.every(entry => typeof entry.component === 'function'))
 
 console.log('2. 按钮与「展开」同排（order 89 < 官方的 90）')
 check('按钮 order = 89', byId('composer-ux-quick')?.order === 89, String(byId('composer-ux-quick')?.order))
 check('按钮带标签（便于导航投影）', byId('composer-ux-quick')?.label === '快捷指令')
 
+console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')
+{
+  const stats = byId('composer-ux-stats-line')
+  // 官方那颗统计胶囊的 id 就叫 `stats`。槽位契约写明"复用别人的 id 会顶替掉那一格"，
+  // 顶替 = 把官方统计胶囊整块换掉 —— 那正是本插件不要的，所以 id 必须是自己的。
+  check('用自己的 id，不占官方 stats 那一格',
+    stats?.id === 'composer-ux-stats-line' && stats?.id !== 'stats')
+  check('order 99 排在官方 stats（order 0）之后',
+    stats?.order === 99 && stats.order > 0, String(stats?.order))
+  check('拿到设置快照钩子（三项开关都在设置里）',
+    typeof stats?.inject().hooks.live?.getSnapshot === 'function')
+}
+
+console.log('2.2 金额条目：自己的 id、排在统计行之后')
+{
+  const cost = byId('composer-ux-cost')
+  // 与统计行同一条槽位契约：复用官方 `stats` 的 id 会顶替那一格，所以金额也必须是自己的 id。
+  check('用自己的 id，不占官方 stats 那一格',
+    cost?.id === 'composer-ux-cost' && cost?.id !== 'stats')
+  check('order 100 排在「统计行」（99）与官方 stats（0）之后',
+    cost?.order === 100 && cost.order > (byId('composer-ux-stats-line')?.order ?? -1),
+    String(cost?.order))
+  check('标签便于导航投影', cost?.label === '金额')
+  check('拿到设置快照钩子', typeof cost?.inject().hooks.live?.getSnapshot === 'function')
+  // 金额必须与统计行读**同一份**官方投影，否则两个数字不同源（一个来自 tokenUsage，另一个
+  // 自己抓一遍 DOM 或日志）。这条钉住"只在官方投影上算钱"。剥掉注释再查，免得注释里的说明
+  // 把这条判据蒙过去（第 10 节那条 `codeOf` 是块内局部的，这里就地剥一次）。
+  const costSource = readFileSync('src/client/CostChipEntry.tsx', 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  check('金额只读官方投影 tokenUsage / modelSelection',
+    costSource.includes("project('tokenUsage')") && costSource.includes("project('modelSelection')"))
+  // 判据原本是 `/miss:\s*\d/`，2026-09-28 加了"分列三个分项求和"之后被误伤：
+  // 那里的 `{ miss: 0, hit: 0, out: 0 }` 是**累加器初值**，不是单价。所以收紧成"带小数点的
+  // 单价字面量"（`miss: 1.02` 那种），并额外禁掉官方价目表里的具体数字。
+  check('金额不在客户端硬编码价目表（价目表只有 src/pricing.ts 一份）',
+    !/miss:\s*\d+\.\d/.test(costSource)
+    && !/\b(?:1\.02|0\.02|4\.09|2\.05|8\.18)\b/.test(costSource)
+    && costSource.includes("from '../pricing.ts'"))
+  // 2026-09-28 真机踩过：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens`，
+  // 只认一个就会把未缓存输入读成 0（命中率 100% + 金额少算）。这条钉住"两个名字都认"。
+  check('未缓存输入两个键名都认（pricing 层统一处理）',
+    readFileSync('src/pricing.ts', 'utf8').includes('uncachedInputTokens'))
+  check('金额面板不吃等宽字体（与旁边官方胶囊同为 UI 字体：StatsPills 是 font: inherit）',
+    !costSource.includes('--ds-font-family-code'))
+  // 2026-09-28 第二次真机反馈："插件输入框下方的字比旁边官方胶囊大"。原因是官方那颗胶囊的
+  // **字号在 `.root` 上**（`calc(var(--dsh-content-font-size-secondary, 13px) - 1px)`），
+  // `.pill` 里的 `font: inherit` 只是抵消 button 的 UA 字体；本条目是同槽位的另一条记录，
+  // 不在那颗 `.root` 里，只写 `font: inherit` 就会继承输入框那一层（默认 14px）。
+  // 所以必须显式写上官方 `.root` 的字号与行高，且不能再用 `font:` 简写（简写会把它重置回继承）。
+  check('胶囊字号照抄官方 .root（不是继承输入框那一层）',
+    costSource.includes('calc(var(--dsh-content-font-size-secondary, 13px) - 1px)'))
+  check('胶囊行高照抄官方 .root',
+    costSource.includes('calc(20px + var(--dsh-content-font-delta-secondary, 0px))'))
+  check('不再用 font: 简写（简写会把字号重置回继承）',
+    !costSource.includes("font: 'inherit'"))
+  // 「按 route 分列」只能由宿主半给（session.events 客户端读不到），所以客户端必须
+  // **按 sessionId 去问那条路由**；并且分列到手后总额要用分列之和，否则会出现
+  // "各行加了不等于总数"这种一眼假的面板。
+  check('点开时按 sessionId 向宿主半取分列',
+    costSource.includes('USAGE_API_PATH') && costSource.includes('sessionId'))
+  check('总额以分列之和为准（routeTotal）', costSource.includes('routeTotal'))
+  check('分列与投影对不上时退回投影口径并说明', costSource.includes('agreesWithProjection'))
+  // 2026-09-28 命中率显示 100%（旁边官方胶囊 98.206%）的**真因**：`billedInputTokens()` 只认
+  // `uncachedInputTokens`，调用处却传了 `inputTokens` → 分母丢掉整块未缓存输入 → 恒 100%。
+  // 这两条同时钉住"调用处键名对"与"和输入框下面那一行同一套函数"。
+  check('计费输入的分母用官方键名 uncachedInputTokens（踩过一次的坑）',
+    costSource.includes('uncachedInputTokens: view.miss'))
+  check('命中率与输入框下面那一行同一套函数（cacheHitText）',
+    costSource.includes('cacheHitText(') && costSource.includes("from './stats-line.ts'"))
+}
+
 console.log('3. 只注册到真实存在的槽位名')
-const knownSlots = new Set(['settings.section', 'shell.overlay', 'conversation.input.right'])
+const knownSlots = new Set([
+  'settings.section', 'shell.overlay', 'conversation.input.right', 'conversation.composer.dock',
+])
 check(
   '槽位名都在白名单里',
   injectedSlotNames.every(name => knownSlots.has(name)),
@@ -367,15 +442,15 @@ console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号
     readFileSync('src/client.tsx', 'utf8').includes("'restartCommand'"))
 }
 
-console.log('9. 「每一栏一个开关」：六张卡各一个 + 卡内开关搬到标题行 + 默认关')
+console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关搬到标题行 + 默认关')
 {
   const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
   const style = readFileSync('src/client/settings-style.ts', 'utf8')
   const bundle = readFileSync('lib/client.js', 'utf8')
 
   const cardToggles = (section.match(/checked: sections\.\w+/g) ?? []).length
-  check('六张折叠卡各有自己的卡级开关（读 activeSections 的结果）', cardToggles === 6, String(cardToggles))
-  check('六栏的判据只有一处（activeSections(settings)），不在每个组件里各写一遍',
+  check('七张折叠卡各有自己的卡级开关（读 activeSections 的结果）', cardToggles === 7, String(cardToggles))
+  check('七栏的判据只有一处（activeSections(settings)），不在每个组件里各写一遍',
     section.includes('const sections = activeSections(settings)'))
   check('未启用时概览上加前缀，一眼看得出这一栏没生效', section.includes('未启用 · '))
 
@@ -424,12 +499,57 @@ console.log('9. 「每一栏一个开关」：六张卡各一个 + 卡内开关�
   check('设置面板：尺寸把手按栏开关停用',
     readFileSync('src/client/PanelResizeHandles.tsx', 'utf8').includes('activeSections(value).panel'))
 
-  // 「恢复默认」清掉五栏开关 = 回到"从没碰过" = 六栏全关（与"默认关"的语义一致）。
+  // 「恢复默认」清掉栏开关 = 回到"从没碰过"的样子。五栏那是"关"，而 0.7.0 的统计行
+  // 清掉之后是"开"（它的默认就是开）—— 方向相反但各自都对，所以两组都要清。
   const client = readFileSync('src/client.tsx', 'utf8')
   for (const field of ['KEYS_ENABLED_FIELD', 'MENU_ENABLED_FIELD', 'QUICK_ENABLED_FIELD',
-    'PANEL_ENABLED_FIELD', 'TERMINAL_ENABLED_FIELD']) {
+    'PANEL_ENABLED_FIELD', 'TERMINAL_ENABLED_FIELD', 'STATS_ENABLED_FIELD']) {
     check(`「恢复默认」清掉 ${field}`, new RegExp(`${field},`).test(client))
   }
+}
+
+console.log('10. 「统计行」的实现约定：窄域、只改文本、可还原')
+{
+  const entry = readFileSync('src/client/StatsLineEntry.tsx', 'utf8')
+  const dom = readFileSync('src/client/stats-dom.ts', 'utf8')
+  const pure = readFileSync('src/client/stats-line.ts', 'utf8')
+  /**
+   * 去掉注释后再查关键词。
+   *
+   * 第一次跑这条护栏是**红的**，原因不在代码而在注释：`StatsLineEntry.tsx` 的说明里写了
+   * "不设限就可能一路走到 `document.body`"，于是 `includes('document.body')` 命中的是
+   * 那句解释。护栏要盯的是代码。
+   */
+  const codeOf = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const entryCode = codeOf(entry)
+  const domCode = codeOf(dom)
+  check('定位只用官方属性 data-composer-stats（不用会随升级变的 CSS Modules 类名）',
+    pure.includes("STATS_ROOT_SELECTOR = '[data-composer-stats]'"))
+  // 扫全页是社区插件 dsh-cache-precision 的做法（`document.body` + TreeWalker），
+  // 本插件刻意不跟：那等于给整个页面挂一个 MutationObserver。
+  check('只在自己的 composer dock 里找统计行，不扫全页',
+    !entryCode.includes('document.body') && !entryCode.includes('document.querySelector')
+    && !domCode.includes('document.body') && !domCode.includes('document.querySelector'))
+  check('往上找祖先有层数上限（不设限会一路走到 body，又变成全页监听）',
+    domCode.includes('MAX_HOST_DEPTH') && /depth < MAX_HOST_DEPTH/.test(domCode))
+  check('同时改写 aria-label（只改可见文字的话读屏听到的还是整数）',
+    domCode.includes('rewriteCacheHitLabel(label, display)')
+    && domCode.includes("setAttribute('aria-label'"))
+  check('观察器只盯 aria-label，不盯 style（盯 style 等于自己喂自己）',
+    entryCode.includes("attributeFilter: ['aria-label']") && !/attributeFilter: \[[^\]]*'style'/.test(entryCode))
+  // 0.7.0 早期版本还写过行内 max-width（"加宽统计行"），真机核对后按用户拍板撤掉。
+  // 这四条是"撤干净"的护栏：那一半一旦悄悄长回来就会红。
+  check('这一半只改文本，不写任何行内样式（不碰统计行元素的 style）',
+    !/\.style\s*\./.test(domCode) && !/\.style\s*\./.test(entryCode))
+  check('加宽相关常量已从契约里删干净',
+    !pure.includes('WIDEN_MAX_WIDTH') && !pure.includes('WIDEN_EXTRA_PX'))
+  check('只剩一个开关，没有同义的子开关',
+    !readFileSync('src/client/SettingsSection.tsx', 'utf8').includes('STATS_PRECISION_FIELD')
+    && !codeOf(readFileSync('src/settings-contract.ts', 'utf8')).includes('statsPrecision'))
+  check('关掉时写回官方口径（0 位小数），不是"什么都不写"',
+    entryCode.includes('active ? HIT_DIGITS : 0'))
+  check('锚点常驻挂载：关掉之后仍要能定位到统计行把官方原样写回去',
+    entryCode.includes('data-composer-ux-stats-anchor') && !entryCode.includes('if (!active) return null'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

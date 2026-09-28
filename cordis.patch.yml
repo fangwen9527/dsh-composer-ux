@@ -7,6 +7,98 @@
 # 安装：
 #   dsh plugin --profile <你的 profile> add github:fangwen9527/dsh-composer-ux
 # 本地源码开发请改用 cordis.dev.patch.yml（file:/// 绝对路径，见 README「加载」一节）。
+#
+# ── 官方持久终端三件套：服务 + 后端 + 模型工具 ───────────────────────────────
+#
+# 目标：让模型拿到官方那 6 个持久终端工具（terminal_open / terminal_read /
+# terminal_send / terminal_signal / terminal_close / terminal_list），与插件已有的
+# 「默认终端」栏互补 —— 那一栏决定**模型用哪个 shell**，这一档决定**模型有没有
+# 跨调用存活的会话**（REPL、dev server、需要交互输入的程序）。
+#
+# **三行缺一不可，而且必须在同一层**（2026-09-28 真机踩到，经过见下）：
+#   ① composer-ux-terminal      `@deepseek-ai/dsh-terminal`      提供 ctx.terminals
+#   ② composer-ux-terminal-bash `@deepseek-ai/dsh-terminal-bash` 注册 type=shell 的 PTY 后端
+#   ③ composer-ux-tool-terminal `@deepseek-ai/dsh-tool-terminal` 注册那 6 个模型工具
+#
+# 为什么不能只挂 ③：
+#   ③ 的源码里写着 `const inject = ["terminals", "tools", "systemPrompt"]`
+#   （`@deepseek-ai/dsh-tool-terminal/lib/index.js`）—— **它必须等到 `terminals` 服务**。
+#   而 ①（dsh-terminal）在官方组合里只出现在 `sdk-minimal` 与 web-app 的 **minimal 预设**
+#   里（`packages/bundle/web-app/presets/minimal.patch.yml` 的 `persistent-shell` 组），
+#   standard 预设**没有**、profile 层也没有 ⇒ 在 desktop profile 这层 `ctx.terminals`
+#   根本不存在。
+#   后果不是报错，而是「静默 pending」：cordis 把 ③ 挂着等依赖，**一个工具都不注册**，
+#   网页照常起来（宿主半的 pending 不在 web 启动审计里），只有模型工具表里空着。
+#   —— 这就是 0.6.2 白屏那件事的**同一形状**（usage-meter 也是 pending），只是那次
+#   发生在客户端半、被启动审计抓住。**「包能解析到 + 守卫放行」≠「它激活了」。**
+#
+# 为什么官方放在预设里、我们放在 profile 层：
+#   官方 minimal 预设用 `cordis:group` + `isolate: { terminals: true }` 给**每个 agent
+#   一份** terminals 服务（预设是 per-agent 的）。我们挂在 profile 层，是一份共享服务；
+#   会话归属由 API 自己保证（`spawn(owner, …)` 按 owner 隔离、工具里 `requireAgent(exec.agent)`），
+#   功能等价。挂这一层的另一个理由：**profile 层注册的模型工具能被 agent 看见** ——
+#   同层的 `@changfenhuang/dsh-genui` 就是这么把 `render_ui` 送进工具表的。
+#
+# 关于依赖与守卫（三行各有各的规矩）：
+#   · ③ `@deepseek-ai/dsh-tool-terminal` **没有随 0.1.7-rc.2 桌面版发布**（app.asar 的
+#     284 个 @deepseek-ai 包里有 dsh-terminal、dsh-terminal-bash、
+#     dsh-api-terminal-controller、dsh-client-ui-sidebar-terminal，唯独没有它；
+#     dsh-web-app 的依赖里也没声明 ⇒ 从没被安装过），所以它写成插件自己的依赖
+#     （package.json 的 dependencies，区间 >=0.1.7-rc.1 <0.1.8），并带自检守卫。
+#   · ① ② 是**安装目录里就有**的官方包（像 dsh-mobile 按包名引用
+#     `@deepseek-ai/dsh-host-directory-picker-browse` 那样即可解析），
+#     所以 **① ② 不能加下面那种自检守卫** —— 守卫用 profile 目录的 createRequire，
+#     解析不到安装目录里的包，加了会把服务永远禁掉、又退回静默 pending。
+#
+# ③ 的自检式守卫（**不能删、也不能加 group: true**）：
+#   DSH 的兼容性预检只处理「peer 版本冲突」——那种情况它会把行禁掉并往 stderr 报一句
+#   （packages/boot/app-boot/src/compatibility-preflight.ts:63-66）；但「包装不上 /
+#   解析不到」它不管，会直接落到 Loader 导入失败 ⇒ 整棵树挂 ⇒ 白屏。所以 ③ 自己
+#   `createRequire().resolve()` 一次：解析不到就 `disabled: true`，而加载器**根本不会
+#   初始化 disabled 行**（packages/boot/app-boot/src/config-schema/document.ts:113），
+#   于是「缺包」退化成「这个功能不存在」而不是「网页起不来」。
+#   两个坑：表达式必须 try/catch 包住（`disabled` 表达式抛错算「条目失败」而不是「被禁用」，
+#   packages/boot/app-boot/src/index.ts:914）；这一行不能带 `group: true`（会迫使加载器
+#   初始化 disabled 行，自检当场失效）。
+#
+# **守卫的「基准目录」不能依赖 DSH 内部上下文**（2026-09-28 第二次踩到，实测）：
+#   第一版取 `ctx.get('profileContext')?.dir` 当基准，结果开机时它拿不到 ⇒ 表达式返回
+#   「装不上」⇒ **工具行被自己的守卫禁掉了**（`plugin_manager list_plugins` 实测：
+#   `include:composer-ux-tool-terminal` 是 `enabled:false, fiberPhase:null`，
+#   而同层的前两行都是 `active`）。失败方向是安全的（没白屏），但功能静默消失。
+#   现在基准改成**只靠通用 Node API 推**：`DSH_HOME`（有就用）否则 `os.homedir() + '/.dsh'`
+#   —— 这正是 DSH 自己算 home 的方式（`发布工具/precheck.mjs` 同款写法）；
+#   然后在 `profiles/node_modules`、以及 `profiles/*` 每个子目录的 `node_modules` 里找，
+#   再把 `profileContext` 与 `DSH_PROFILE_DIR` 作为**额外**候选（有更好，没有也不影响）。
+#   判据是"任一候选能解析到 ⇒ 不禁用"。测试里有一条「基准发现」用例专门盯着这个坑：
+#   即便 `ctx.get` 抛错，只要包在 profile 的 node_modules 里，守卫也必须返回 false。
+#
+# 求值器（`@deepseek-ai/cordis-plugin-loader` 的 interpolate，从 app.asar 里读出）：
+#   new Function('ctx', 'expr', 'with (ctx) { return eval(expr) }')
+# 即非严格模式求值、`ctx` 与 `process` 都在作用域内、**同步**（写 await 会拿到 Promise
+# ⇒ `disabled` 恒真 / 配置恒为 Promise）。测试用同一个包装真跑这些表达式。
 - insert:
     - id: composer-ux
       name: dsh-composer-ux
+
+    # ① 服务本体：提供 ctx.terminals（③ 的必需依赖）。
+    - id: composer-ux-terminal
+      name: '@deepseek-ai/dsh-terminal'
+
+    # ② PTY 后端：注册 backendType=shell。官方后端默认 `shellPath: '/bin/bash'`
+    #    （dsh-terminal-bash/src/config.ts:54），Windows 上解析不到 ⇒ 这里同步探测出
+    #    绝对路径；探不到就让 shellPath 留空并回落官方 pwsh 方言（resolvePwshPath），
+    #    与插件「找不到 bash 就保持 PowerShell」的策略一致。
+    #    timeoutMs 对齐官方 minimal 预设的 persistent-shell（300000 = 5 分钟）。
+    - id: composer-ux-terminal-bash
+      name: '@deepseek-ai/dsh-terminal-bash'
+      config:
+        backendType: shell
+        timeoutMs: 300000
+        shellDialect: !!js "(() => { if (process.platform !== 'win32') return 'bash'; try { const fs = process.getBuiltinModule('node:fs'); const p = process.getBuiltinModule('node:path'); const e = process.env; const wsl = (x) => { const a = p.basename(p.dirname(x)).toLowerCase(); const b = p.basename(p.dirname(p.dirname(x))).toLowerCase(); return a === 'windowsapps' || (a === 'system32' && b === 'windows') }; const dirs = String(e.PATH || '').split(p.delimiter).filter((d) => d.length > 0); const fixed = [(e.LOCALAPPDATA || '') + '/Programs/Git', 'C:/Program Files/Git', 'C:/Program Files (x86)/Git', 'D:/Git', 'C:/msys64', 'D:/msys64']; const cands = []; for (const d of dirs) { cands.push(p.join(d, 'bash.exe'), p.join(d, '..', 'bin', 'bash.exe'), p.join(d, '..', '..', 'bin', 'bash.exe')) } for (const r of fixed) { cands.push(r + '/bin/bash.exe', r + '/usr/bin/bash.exe') } return cands.some((x) => !wsl(x) && fs.existsSync(x)) ? 'bash' : 'pwsh' } catch { return 'pwsh' } })()"
+        shellPath: !!js "(() => { if (process.platform !== 'win32') return ''; try { const fs = process.getBuiltinModule('node:fs'); const p = process.getBuiltinModule('node:path'); const e = process.env; const wsl = (x) => { const a = p.basename(p.dirname(x)).toLowerCase(); const b = p.basename(p.dirname(p.dirname(x))).toLowerCase(); return a === 'windowsapps' || (a === 'system32' && b === 'windows') }; const dirs = String(e.PATH || '').split(p.delimiter).filter((d) => d.length > 0); const fixed = [(e.LOCALAPPDATA || '') + '/Programs/Git', 'C:/Program Files/Git', 'C:/Program Files (x86)/Git', 'D:/Git', 'C:/msys64', 'D:/msys64']; const cands = []; for (const d of dirs) { cands.push(p.join(d, 'bash.exe'), p.join(d, '..', 'bin', 'bash.exe'), p.join(d, '..', '..', 'bin', 'bash.exe')) } for (const r of fixed) { cands.push(r + '/bin/bash.exe', r + '/usr/bin/bash.exe') } return cands.find((x) => !wsl(x) && fs.existsSync(x)) ?? '' } catch { return '' } })()"
+
+    # ③ 模型工具：6 个 terminal_*。带自检守卫（见上面的长注释）。
+    - id: composer-ux-tool-terminal
+      name: '@deepseek-ai/dsh-tool-terminal'
+      disabled: !!js "(() => { try { const m = process.getBuiltinModule('node:module'); const p = process.getBuiltinModule('node:path'); const fs = process.getBuiltinModule('node:fs'); const os = process.getBuiltinModule('node:os'); const home = (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0) ? process.env.DSH_HOME : p.join(os.homedir(), '.dsh'); const profiles = p.join(home, 'profiles'); const roots = [p.join(profiles, 'node_modules')]; let explicit; try { explicit = ctx.get('profileContext')?.dir } catch { explicit = undefined } if (typeof explicit === 'string' && explicit.length > 0) roots.push(p.join(explicit, 'node_modules')); if (typeof process.env.DSH_PROFILE_DIR === 'string' && process.env.DSH_PROFILE_DIR.length > 0) roots.push(p.join(process.env.DSH_PROFILE_DIR, 'node_modules')); let names = []; try { names = fs.readdirSync(profiles, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch { names = [] } for (const n of names) roots.push(p.join(profiles, n, 'node_modules')); return !roots.some((r) => { try { m.createRequire(p.join(r, 'package.json')).resolve('@deepseek-ai/dsh-tool-terminal'); return true } catch { return false } }); } catch { return true } })()"

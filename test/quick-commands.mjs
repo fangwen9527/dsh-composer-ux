@@ -226,12 +226,26 @@ console.log('1. 快捷指令的净化（防脏数据）')
     JSON.stringify(live))
 
   // activeSections：总闸 + 栏开关，两处都要看
-  check('总开关关掉 → 六栏全不生效（哪怕栏开关是开的）',
+  check('总开关关掉 → 七栏全不生效（哪怕栏开关是开的）',
     Object.values(pure.activeSections({ ...pure.DEFAULT_SETTINGS, enabled: false, keysEnabled: true, headerEnabled: true }))
       .every(value => value === false))
   check('总开关开着 + 栏开 → 生效', pure.activeSections({ ...pure.DEFAULT_SETTINGS, keysEnabled: true }).keys === true)
   check('activeSections 用本栏自己的 headerEnabled，没有第二个请求头开关',
     pure.activeSections({ ...pure.DEFAULT_SETTINGS, headerEnabled: true }).header === true)
+
+  // 0.7.0「统计行」：**新栏**，规则与上面五栏**相反** —— 默认开，且不走"碰过才开"那套迁移。
+  // 这条区别必须钉住：后来的人照抄 sectionEnabledOf 就会把它默认成关，
+  // 于是"装完即生效"这个用户明确要的行为会静默消失（界面上只是数字还是整数，很难注意到）。
+  check('统计行是新栏、默认开（与五栏默认关方向相反）',
+    blank.statsEnabled === true && pure.DEFAULT_SETTINGS.statsEnabled === true)
+  check('统计行不参与"碰过才开"的迁移：空文档也是开',
+    pure.sanitizeSettings({}).statsEnabled === true
+    && pure.sanitizeSettings({ sendKey: 'Ctrl+Enter' }).statsEnabled === true)
+  check('显式关掉统计行听用户的',
+    pure.sanitizeSettings({ statsEnabled: false }).statsEnabled === false)
+  check('activeSections 里统计行走自己的 statsEnabled',
+    pure.activeSections(pure.DEFAULT_SETTINGS).stats === true
+    && pure.activeSections({ ...pure.DEFAULT_SETTINGS, statsEnabled: false }).stats === false)
 }
 
 // ══════════════ 2. 发送时的末尾拼接语义 ════════════════════════════════════

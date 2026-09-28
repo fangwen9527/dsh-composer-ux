@@ -1,7 +1,7 @@
 {
   "name": "dsh-composer-ux",
-  "version": "0.6.2",
-  "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头 + Windows 默认终端切换（把模型的 PowerShell 工具换成 Git Bash）（含设置页）+ 设置页抬头一键重启 DSH（助手进程 + 等端口 + 隐藏控制台）",
+  "version": "0.9.0",
+  "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化 + OpenCode 会话请求头 + Windows 默认终端切换（把模型的 PowerShell 工具换成 Git Bash）+ 官方持久终端六件套（terminal_open/read/send/signal/close/list，常驻挂载 + 缺包自检退化，见 cordis.patch.yml）+ 统计行缓存命中三位小数 + 输入框下方极简金额胶囊（点开看本会话费用明细，按 DeepSeek 官方刊例价估算）（含设置页）+ 设置页抬头一键重启 DSH（助手进程 + 等端口 + 隐藏控制台）",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -51,7 +51,10 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/client-registration.mjs && node test/settings-service-adopt.mjs"
+    "test": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/terminal-mount.mjs && node test/stats-line.mjs && node test/stats-dom.mjs && node test/pricing.mjs && node test/usage-fold.mjs && node test/client-registration.mjs && node test/settings-service-adopt.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

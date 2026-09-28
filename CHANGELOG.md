@@ -2,6 +2,302 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.0] — 2026-09-28（新增：官方持久终端六件套 `terminal_*` 常驻挂载）
+
+> 起因：用户了解到「DSH 客户端内置了 bash 之类的终端」，要求核实并把官方那套接进插件。
+> 核实结论是**方向对、但要分四层**：模型侧 shell 工具、交互式 PTY 工具包、GUI 右侧栏终端、
+> 以及 `bash.exe` 本体是否内置 —— 前三层官方都有（GUI 那一层此刻就在界面里活着：运行时 Slot
+> 里 `sidebar.right.pane.tab` 的占位者包含 `@deepseek-ai/dsh-client-ui-sidebar-terminal`，
+> `active: true`），但**第四层不是**：应用目录里没有任何 `bash.exe`，Windows 上靠 `PATH` 解析
+> （本机解析到 Git for Windows）。详见 README「官方持久终端」。
+
+### 新增
+
+- **常驻挂载官方 6 个持久终端工具**（`terminal_open` / `terminal_read` / `terminal_send` /
+  `terminal_signal` / `terminal_close` / `terminal_list`）：`cordis.patch.yml` 在插件行之后
+  插入**三行**（见下），并把 `@deepseek-ai/dsh-tool-terminal` 写进 `package.json` 的
+  `dependencies`（区间 `>=0.1.7-rc.1 <0.1.8`）。不需要设置项，也不需要手动开关。
+  - **三件套缺一不可，而且必须在同一层**：① `@deepseek-ai/dsh-terminal`（提供
+    `ctx.terminals`）② `@deepseek-ai/dsh-terminal-bash`（注册 `type=shell` 的 PTY 后端）
+    ③ `@deepseek-ai/dsh-tool-terminal`（那 6 个模型工具）。
+  - **为什么不照抄社区 patch 只挂 ③**：这个包官方标为**可选**，没有任何 bundle 默认挂它；
+    更关键的是 **0.1.7-rc.2 的桌面版没随包发布它** —— `app.asar` 里有 `dsh-terminal`、
+    `dsh-terminal-bash`、`dsh-api-terminal-controller`、`dsh-client-ui-sidebar-terminal`，
+    唯独没有 `dsh-tool-terminal`（直接写那一行会在启动时解析失败 ⇒ 整棵树挂 ⇒ **白屏**，
+    与 0.6.2 那次同形状）。所以 ③ 写成插件自己的依赖。
+  - **① ② 是安装目录里就有的官方包**（按包名引用即可解析，像 dsh-mobile 挂
+    `dsh-host-directory-picker-browse` 那样），**而且不能给它们加自检守卫** —— 守卫走
+    profile 目录的 `createRequire`，解析不到安装目录里的包，加了会把服务永远禁掉。
+  - **③ 的自检式守卫**（`disabled: !!js`）：自己 `createRequire().resolve()` 一次包名，
+    解析不到就把自己禁掉。DSH 的兼容性预检只处理 peer 版本冲突，**「包解析不到」它不管**
+    （`compatibility-preflight.ts:63-66`），所以这道自检是「缺包 ⇒ 功能不存在」而不是
+    「缺包 ⇒ 白屏」的唯一保障；而 disabled 行加载器根本不初始化
+    （`config-schema/document.ts:113`）。表达式必须 `try/catch` 包住（`disabled` 表达式抛错
+    算「条目失败」而不是「被禁用」，`app-boot/src/index.ts:914`），这一行也不能带
+    `group: true`（会迫使加载器初始化 disabled 行）。
+  - **② 的 shellPath 得自己探**：官方后端默认 `shellPath: '/bin/bash'`（`dsh-terminal-bash`
+    的 `config.ts:54`，Windows 上解析不到），所以用同步 `!!js` 从 PATH 上那份 git 反推
+    `…/Git/bin/bash.exe`，外加 Program Files / LOCALAPPDATA / msys64 等落点；探不到就留空
+    并回落官方 pwsh 方言（`resolvePwshPath`）。`timeoutMs` 对齐官方 minimal 预设的 300000。
+  - **客户端零改动**：官方客户端已注册这 6 个工具的 `tool.call.toolview` 渲染位。
+  - **与「默认终端」互补**：那一栏决定模型用哪个 shell，这一档决定模型有没有持久会话；
+    档位选 `PowerShell` 时这 6 个工具照常在。
+
+### 真机验证发现并修掉的问题（0.9.0 未发布，直接修在本版）
+
+- **「挂上了」≠「生效了」：只挂 ③ 会让它静默 pending**。首版只插了 ③ 一行，重启后模型
+  工具表里**什么都没有**。查明：③ 的源码写着
+  `const inject = ["terminals", "tools", "systemPrompt"]`，而提供 `terminals` 的 ① 在官方
+  组合里只出现在 `sdk-minimal` 与 web-app 的 `minimal` 预设里（standard 预设与 profile 层
+  都没有）⇒ cordis 把 ③ 挂在 pending 等依赖，**不报错、不白屏、一个工具都不注册**。
+  这与 0.6.2 白屏是**同一形状**（usage-meter 也是 pending），只是那次发生在客户端半、被 web
+  启动审计抓住；宿主半的 pending 没人审计，所以是静默的。修法：补齐 ① ②，三行同层。
+- **「装了」≠「生效了」（第二坑）：守卫的基准目录依赖了 DSH 内部上下文**。补齐三行后再重启，
+  工具表**还是没有**。这次用 `plugin_manager list_plugins`（每条给 `enabled` + `fiberPhase`）
+  一眼看到：`composer-ux` / `composer-ux-terminal` / `composer-ux-terminal-bash` 都是
+  `active`，唯独 `composer-ux-tool-terminal` 是 **`enabled:false, fiberPhase:null`**
+  —— **是被 ③ 自己那道自检守卫禁掉的**。原因：守卫拿 `ctx.get('profileContext')?.dir` 当基准，
+  而它在 `!!js` 的求值上下文里拿不到 ⇒ 表达式按「装不上」处理 ⇒ 行被禁用。
+  失败方向是安全的（没白屏），但功能静默消失。
+  修法：基准改成**只靠通用 Node API 推** —— `DSH_HOME`（有就用）否则
+  `os.homedir() + '/.dsh'`（这正是 DSH 自己算 home 的方式），再在 `profiles/node_modules`
+  与 `profiles/*/node_modules` 里找；`profileContext` / `DSH_PROFILE_DIR` 降级为**额外**候选，
+  而且各自包一层 try/catch —— 它抛错也不能把整个守卫带崩。测试里加了「基准发现」一组用例
+  与一条「真环境一致性」用例（守卫的答案必须和测试自己按同样候选查出来的真相一致）。
+- **诊断手法（值得复用）**：`Config.listConfigs` 只报声明与 schema，**不报激活状态**；
+  `Service.listService` 能看到 `terminals` 的**能力目录**，但那不代表它在你那一层可用
+  （它扫全树，扫到的是 minimal 预设里那份声明）。真正判据有两把：
+  ① 去包里读 `inject`，再对照官方哪个 bundle / preset 挂了这个服务；
+  ② **`plugin_manager list_plugins` 的 `fiberPhase`** —— 这是唯一能直接看出「行到底活没活」
+  的探针（`active` vs `null`），本轮两个坑都是靠它定位的。
+- **第三个坑（真正的根因）：运行时版本不是桌面壳版本，而 DSH 已升级到 `0.2.0-rc.1`**。
+  Electron 壳自称 `0.1.7-rc.2`，但应用里所有官方包都是 **`0.2.0-rc.1`**
+  （`getDshRuntimeVersion()` 读的是 `@deepseek-ai/dsh-app-boot` 的版本）。而
+  `plugin-compatibility.ts` 的判据正是「包的 `@deepseek-ai/dsh-*` peer 区间 vs 运行时版本」，
+  不满足就**直接给这一行打 `disabled`**（patch 里看不见，`list_plugins` 里是
+  `enabled:false / fiberPhase:null`）。按 0.1.7-rc.2 装的工具包因此在 0.2.0-rc.1 上被整行判掉
+  —— 这才是「三行挂上了、工具一个都不出现」的真因。修法：装同版本的
+  `@deepseek-ai/dsh-tool-terminal@0.2.0-rc.1`，依赖窗口写成
+  `>=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0`（两个窗口各带 pre 比较器，否则 pre 版本匹配不上）。
+- **探测必须排除 WSL**：第一版按 PATH 顺序命中了 `C:\Windows\System32\bash.exe`（WSL 启动器），
+  真机 PTY 起成了 WSL bash（`pwd` → `/mnt/d/1zcode/dsh插件`、内核 WSL2）。插件自己那条 bash 工具
+  本就硬排除 WSL，YAML 里漏了；现在用 `path.basename/dirname` 判掉 `…\Windows\System32\bash.exe`
+  与 `…\Microsoft\WindowsApps\bash.exe`。
+- **更正开发过程中的一个误判**：`process.getBuiltinModule` 在 `!!js` 里**是**可用的 ——
+  先前那次失败是预检判的，不是表达式抛的（探测表达式确实用它读到了文件系统）。
+- **端到端已实测通过**（真 PTY；且 profile patch 的改动会被 `dsh-hmr` 即时重放，**不用重启**）：
+  `terminal_open` → `terminal_send` → `terminal_read` → `terminal_close` 全通；
+  `uname -a` = `MINGW64_NT-10.0-26200 … Msys`、`$0` = `/usr/bin/bash`、
+  `pwd` = `/d/1zcode/dsh插件`、`grep`/`head` 都在 `/usr/bin`。
+- **部署通道的教训**：手工复制进 `profile/node_modules/<pkg>` 的文件会被 DSH 在版本升级时
+  「重新物化 git 依赖」整包冲掉（本轮 `lib/*` 被还原成钉住的 0.6.2 commit，实测）。
+  行级改动放 profile 的 `cordis.patch.yml`（用户层，会保留）；要改 `lib/` 只能让包本身带上。
+
+### 测试
+
+- 新增 `test/terminal-mount.mjs`（41 项）：结构断言（三行齐全且在同一个 insert 里、服务与
+  后端**没有**守卫、全文只有 ③ 一处 `disabled`、守卫包名与行名一致、两行都不带
+  `group: true`、后端给了 `backendType`/`timeoutMs`、守卫基准不许依赖 DSH 内部上下文）
+  + **用加载器同一个求值器**（`new Function('ctx','expr','with (ctx) { return eval(expr) }')`，
+  出自 `@deepseek-ai/cordis-plugin-loader` 的 `interpolate`）真跑三条表达式：探测在
+  「有 bash / 无 bash / 非 Windows / fs 抛错」四种环境下给出预期值且两条自洽；
+  守卫在「包在当前 profile / 包只在共享层 / `ctx.get` 抛错 / `DSH_PROFILE_DIR` 兜底 /
+  `DSH_HOME` 顶上 / 哪都没有 / `readdirSync` 抛错 / 权限错 / node 内建拿不到」九种环境下
+  「该禁就禁、该放就放、永远不抛」；另有一条**真环境一致性**用例：守卫的答案必须与
+  测试自己按同样候选查出来的真相一致。
+- `test/mutation-guards.mjs` 新增 `AQ`–`BF` 十七条：拆掉外层 `try/catch`、守卫极性写反、
+  挂载行包名漂移、加 `group: true`、依赖改通配、依赖钉死单版本、多挂一行服务、
+  **删掉服务行**、**方言回落改成 bash**、**shellPath 写死 `/bin/bash`**、
+  **给服务行也加守卫**、注释掉守卫、**`ctx.get` 少了自保**、**守卫基准退回空数组**、
+  **探测不再排除 WSL**、**依赖窗口丢掉 0.2.0**。
+
+## [0.8.0] — 2026-09-28（新增「金额」：输入框下方显示本会话费用）
+
+> 起因是用户装了社区插件 [`dsh-plugin-usage-meter`](https://github.com/fancr-code/dsh-plugin-usage-meter)，
+> 但它在本机 **DSH 0.1.7 上打不开网页**（客户端半 `inject` 了 0.1.6 时代的设置服务 `settingsScope`，
+> 0.1.7 已换成 `configForms`，没人提供它 ⇒ 该客户端条目永远 pending ⇒ 网页启动审计抛错 ⇒ 白屏）。
+> 用户的要求是"把这个插件的功能搬到我的插件里"，所以本插件按需求移植的是**它的金额能力**，
+> 而不是把它装回来。
+
+### 新增
+
+- **输入框下方的极简金额胶囊**（`src/client/CostChipEntry.tsx`）：不点时只占一个词的位置（`¥0.42`），
+  点开是贴在它上方的浮层（React portal，因为输入卡片会裁掉溢出内容；官方几颗胶囊也都是浮层）。
+  浮层里有本会话三分项（未缓存输入 / 缓存命中 / 输出）的 token 数与花费、合计、缓存命中率、
+  生效单价、模型名与峰谷档，以及"估算、未含中转加价"的说明。
+- **计价与格式**（`src/pricing.ts`）：DeepSeek 官方刊例价（三个模型 × 高峰/空闲 × 人民币/美元）、
+  模型别名（`deepseek-chat`/`deepseek-reasoner`/`deepseek-v4-flash-vision-exp`）、峰谷判定
+  （UTC 周一至周五 01–04、06–10）、费用拆分与金额/Token 格式化。
+- **数据全部来自官方，不新增任何采集**：token 桶读官方 `tokenUsage` 投影（与官方那行统计同源），
+  模型读官方 `modelSelection` 投影（`request/header` 事件），所以两个数字不会各算一套。
+- **按 route 分列**（用户追加要求：要把 OpenCode / Zen 那条 route 的用量也算进来、并且看清各花多少）：
+  折叠态那一个数字仍是客户端按官方投影算的估值；**点开时向宿主半的只读路由
+  `/composer-ux/usage?sessionId=…` 取一次逐请求归因**（`src/usage-fold.ts` 折叠，`session.events`
+  客户端读不到），分列到手后**面板总额改成分列之和** —— 所以"各行加起来等于总额"永远成立；
+  日志与投影对不上（会话刚写入）时退回投影口径并如实说明，不把两套数字并排摆着让人猜。
+  两条容易写错的规则都钉在 `test/usage-fold.mjs` 里：**同一 `(turn, step)` 的上报是替换不是累加**
+  （直接累加会重复计费），**usage 归属它之前最近一条 `request/header`**（归错就把 Zen 的花费记到官方头上）；
+  另有官方 `llm/retry-started` 的重开替换槽语义。
+  - **事件形状按本版官方 `SessionEventMap` 的真实声明，不按记忆**：2026-09-28 真机踩过一次坑 ——
+    最初照抄的社区实现折的是 `assistant/chunk` 事件，而**本版 DSH 根本没有这个事件类型**（usage 藏在
+    `assistant/attempt` 的 `stream` 里，或 `assistant/message` 的 `data.usage` 上），于是分列一行都出不来，
+    面板只显示"还没有可归因的用量"。改用官方 `sessionQuery.readSession(sessionId)`（带 data 的完整日志）
+    取事件、按官方 `lastAssistantStreamChunk(stream,'usage')` 取 usage 之后才通。这条教训与更正后的出处口径
+    （折叠对齐官方 `token-meter` 的 `usage-projection`，社区实现只贡献了"按 provider/model 分列"这个目标）
+    都写在 `src/usage-fold.ts` 文件头。
+  - **同一次真机核对还揪出面板一个算错的数**：折叠态"缓存命中率"原本用 `命中 ÷（未缓存 + 命中）`，
+    漏掉缓存写入，于是屏幕上与官方那行统计对不上（官方 98.013%、面板 100%）。已改成与官方同分母的
+    **计费输入**（未缓存 + 缓存读 + 缓存写）。
+  - **改完这一条，命中率**仍然**显示 100% —— 因为键名在调用处又写错了一次**（2026-09-28 第二次真机核对）：
+    修好的那个 `billedInputTokens()` 只认 `uncachedInputTokens`，而调用处传的是 `{ inputTokens: … }`，
+    于是分母只剩"缓存读 + 缓存写"，命中率恒等于 100%（旁边官方胶囊是 98.206%）。教训是"两个键名都认"
+    必须落在**每一处传值**上，而不只是某个函数内部；现在调用处传 `uncachedInputTokens`，
+    并由 `test/client-registration.mjs` 钉住"调用处的键名"与"和输入框下面那一行同一套函数"。
+- **胶囊字号照抄官方 `.root`（修"比旁边的字大"）**：官方那颗统计胶囊的字号与行高**不在 `.pill` 上**
+  （`.pill` 里只有 `font: inherit`，那是为了抵消 button 的 UA 字体），而在它爸爸 `.root` 上
+  （`calc(var(--dsh-content-font-size-secondary, 13px) - 1px)` / `calc(20px + …delta-secondary…)`）。
+  本条目是同一个 dock 槽位里的**另一条**记录，不在这颗 `.root` 里，只写 `font: inherit` 就继承了
+  输入框那一层（`--dsh-content-font-size`，默认 14px）—— 真机上看就是"插件输入框下方的字比官方的大"。
+  现在把 `.root` 那两条显式写在按钮上（并拆掉 `font:` 简写，否则简写会把字号重置回继承），
+  与旁边那颗胶囊同字号同字重，且随用户的字号设置一起变；亮度保持官方 `.pill` 的
+  "静止 `label-tertiary`、hover/展开 `label-secondary`"。
+- **点开后补上三分项行**：分列模式下除各 route 与合计，再列出「未缓存输入 / 缓存命中 / 输出」的
+  token 与花费。三行的钱**按各 route 自己的单价分别累加**（不是拿合计的桶乘一个单价），
+  所以"三行相加 = 合计"在两条 route 单价不同时也**精确成立**（2026-09-28 实测
+  ¥5.17 + ¥5.58 + ¥3.78 = ¥14.53，与合计逐位一致）。
+- **计价不看 provider**：一律按**模型名**查 DeepSeek 官方价目表 —— 所以走 `go`（OpenCode Zen）
+  的用量一样进这个金额、一样按官方价估算。代价是 Zen 自己可能有加价/订阅，屏幕上的数字
+  **不等于**你付给 Zen 的钱（浮层里写明"未含中转加价，实际扣费以各家账单为准"）。
+
+### 出处（MIT）
+
+价目表、模型别名、峰谷规则、`costOf`/`formatMoney`/`formatTokens` 的**分档规则**来自
+`dsh-plugin-usage-meter@1.9.1`（MIT，Copyright (c) 2026 fancr-code）。`test/pricing.mjs` 把那份实现的
+几个函数**原样抄进来当基准**，逐样本对拍：刊例价表逐项、峰谷判定（一周 593 个时刻）、
+定价解析（模型 × 币种 × 时段 × 覆盖价，共 216 组）、费用（30 组）、金额（40 组）、Token 格式（16 组）。
+
+### 与出处有意不同的两处（都钉在测试里）
+
+- **金额至少保留两位小数**：出处用 `replace(/0+$/,'')` 收尾，于是"第二位小数恰好是 0"的值会少一位
+  （`¥0.1`）、六位全为零的值更会只剩一个小数点（`¥0.`）。我们按官方金额惯例至少两位（`¥0.10` / `¥0.00`）。
+- **覆盖价的币种语义写死在注释里**：出处是"有覆盖价时先整体重建人民币档、美元再从人民币折算"，
+  写成"在美元列上套覆盖价再折算"会差一个汇率（≈15 倍）而屏幕上只是个数字。这条差点写错，所以
+  `test/pricing.mjs` 第 4 节专门断言它。
+
+### 这一版**还没做**的部分（用户已确认要做，随后接入）
+
+- **账户余额**：官方 `remote.account.getBalance()` 就有（充值余额 + 赠金余额，用你已登录的账号，
+  **不需要任何 Key**），比出处那套"自己拿 API Key 发 `/user/balance`"更省事。
+- **今日 / 本月累计**：需要宿主半聚合本地会话日志（出处是扫日志，且有"平台 dashboard 按日费用"
+  那条非官方接口 —— 你走 `go` 中转时官网账单本来也不含 Zen 的用量，所以本地聚合才是对的口径）。
+- **设置栏**（第 8 张卡）：开关 / 币种（¥/$）/ 单价覆盖 / 折叠态是否带余额。当前这一版是固定人民币、
+  只用内置刊价快照、常驻显示。
+
+## [0.7.0] — 2026-09-28（新增「统计行」：缓存命中三位小数）
+
+> 起因是用户看到了社区插件 [dsh-cache-precision](https://github.com/Cheng-cheng9669/dsh-cache-precision)，
+> 要求"把这个功能加到我的插件里"。那个仓库做两件事：把输入框下方统计行里的「缓存命中 12%」改写成三位小数，
+> 并把那一行放宽（免得变长的数字被 `...` 截断）。本插件**只移植了第一件**，第二件做完真机核对后被用户拍板撤掉
+> （前提不成立，见下"撤掉的那一半"）。**只动客户端半，刷新页面即可生效**（宿主半只是多了一个设置字段）。
+
+### 新增
+
+- **三位小数**（`src/client/stats-line.ts` + `src/client/stats-dom.ts` + `src/client/StatsLineEntry.tsx`）：
+  `缓存命中 12%` → `缓存命中 12.346%`。数字口径与官方**同一份**
+  （`缓存读 ÷（未缓存输入 + 缓存读 + 缓存写）`），所以屏幕上两个百分比永远对得上。
+- **设置页第 7 栏「统计行」**（`src/client/SettingsSection.tsx` 末尾那张 `FoldCard`）：**只有一个开关**
+  （就是标题行上那一个），**默认开** —— 用户要的是"装完立刻看得到效果"。
+  - 它是**第一栏不参与"碰过才开"迁移**的：上面五栏默认关，是因为它们已经发布过、一律默认关会在升级那一刻
+    把用户正在用的键位 / 请求头 / 终端当场关掉；这一栏是新能力，没有痕迹可依，所以按普通布尔字段处理
+    （与 `headerEnabled` 同写法，只是默认值相反）。这一条区别在两处显式钉住：
+    `src/settings-contract.ts` 的注释与 `test/quick-commands.mjs` 的 4 条断言（含变异 `AH`）。
+  - **为什么只有一个开关**：早期版本有「三位小数」/「加宽统计行」两个子开关，加宽撤掉后只剩一个功能，
+    再留一个同义的子开关就是"两个开关做同一件事"。按本插件对「OpenCode 请求头」那一栏的既有处理
+    （那里的注释：「原来的『附加请求头』本来就是『这一栏要不要生效』，直接搬到了标题行」）收成一个。
+    护栏：`test/stats-line.mjs` 断言 `DEFAULT_SETTINGS` 里没有任何第二个 `stats*` 键，
+    `test/client-registration.mjs` 与 `test/settings-render.mjs` 各有一条"别又长回来"的断言。
+
+### 与参考实现有意不同的四处（每处都对应一条护栏）
+
+- **① 不撒谎**：参考实现是 `toFixed(3)`，于是命中率只要 ≥ 99.9995% 就会被四舍五入成 `100.000%`，
+  而它**并没有满**。官方那段 `formatCacheHitPercent()` 专门绕开了这件事（源码注释原话
+  "without rounding a partial hit to 100%"），所以本插件是"用它的位数 + 官方的诚实性"：
+  常态三位，一旦会凑成 `100.000%` 就**继续加位**，宁可显示 `99.9999%`。阶梯实测：
+  `99.995% → 99.995`、`99.999% → 99.999`、`99.9995% → 99.9995`（三位会成 100.000）、`99.9999% → 99.9999`。
+  - 判据以**官方源码为基准**逐例交叉验证：`test/stats-line.mjs` 第 5 节把
+    `packages/client/ui-chat/src/client/chat/token-format.ts`（rc.1）那 4 个函数**原样抄进来当基准**，
+    对 400 个分母全量 + 大分母边界 + 3000 组伪随机**逐例比对 `digits = 0` 档**，全部一致。
+    这一档同时就是"关掉开关时写回去的东西"，所以"关掉"不是"什么都不写"，而是把官方原版写回。
+- **② 定位走官方属性，不走类名**：参考实现往上找 `className` 里含 `_root` 的祖先。DSH 的 CSS Modules
+  类名带哈希（升级就会变），所以本插件改用官方稳定属性 `[data-composer-stats]`
+  （`StatsPills.tsx` 的根元素，紧凑与详细两档都有）。
+- **③ 不扫全页**：参考实现挂在 `document.body` 上跑 TreeWalker + MutationObserver，等于给整个页面
+  挂监听（每个流式 token 都会喂它）。本插件先渲染一个 `display:none` 的锚点落在**同一个** composer dock 里，
+  由它往上找"同时装着我和统计行"的最近祖先（**上限 6 层**），Observer 只盯这一小块；找不到就什么都不做
+  —— 宁可功能不生效，也不留一个全页监听。多 composer 的页面上也只动自己这一个。
+- **④ 同步 `aria-label`**：官方那颗胶囊的无障碍名字是 `` `${total} · ${cacheHitText}` ``。参考实现只改可见
+  文本节点，于是**读屏用户听到的还是整数**，与屏幕上的三位小数对不上。本插件两处一起改。
+
+### 撤掉的那一半：为什么没有移植「加宽统计行」
+
+参考实现还给那一行写行内 `max-width`（放宽 260px，上限 `100vw - 48px`）。**真机核对后由用户拍板撤掉**
+（2026-09-28），因为它的前提在 DSH 0.1.7 上不成立 —— 整条证据链都能在源码里读出来：
+
+- 约束统计行的是**外层容器**，而 `--dsh-chat-content-width`（= `clamp(680px, 列宽*0.64, 920px)`）只作用在
+  **消息列与输入卡片**上：`ui-conversation` 的 `.card` 与 `.composerHero` 才有 `max-width`；
+  真正包着统计行的 `.dock` / `.composerStack` **没有任何宽度上限**（只有 `max-width: 100%`）。
+- `.composerHero` 是**唯一**带聊天列宽度的那个容器，而它只在**空白会话**（hero）生效；统计行却只在
+  **活动会话**里渲染（`InputBar` 里那个 dock 槽要求 `variant === 'composer' && sessionId !== undefined`）。
+  两者**永不同时出现** ⇒ 统计行存在时，那一行的可用宽度是**整个会话列**，本来就比聊天列宽得多。
+- 于是参考实现那个上限（聊天列 + 260px）反而**比可用宽度小**：平时它不生效（内容远没那么长），
+  内容极长时还会让那一行比官方**更早**截断。也就是说它无事可做、最坏还更差。
+- 撤掉的实现留在测试里当护栏：`test/stats-dom.mjs` 第 3 节断言"只改文本、不写任何行内样式"，
+  且断言契约里不再导出加宽常量；变异 `AL`/`AM` 把那一半重新加回来时必须变红（实测都咬住）。
+
+### 变更
+
+- **作用范围只到输入框下面那一行**（用户拍板）：两处统计弹窗（点开统计行的弹窗、每轮用量弹窗）里的百分比
+  保持官方原样。它们用的是 `<dt>缓存命中</dt><dd>49.4%</dd>` 结构、拼起来是 `缓存命中49.4%`（中间没有空白），
+  与"整段必须就是 `缓存命中 xx%`"这条判据天然不冲突 —— 这条判据有 5 条"不许碰"的断言盯着。
+  - 注意弹窗自己用的是官方**1 位小数**档，所以只改那一行确实会带来"下面 12.346%、弹窗 12.3%"的口径差；
+    这是用户明确选择的范围，不是漏改。
+- `activeSections()` 增加 `stats` 一项；「恢复默认」清掉 `statsEnabled`（清掉后回落到默认 = 开，
+  与上面五栏"清掉即关"方向相反，但"清掉 = 回到从没碰过的样子"这条定义两边都成立）。
+
+### 护栏与验证（本轮全部真跑）
+
+- 新增 `test/stats-line.mjs`（**52 项**，已进 `npm test`）：小数语义定值 + 四个桶的口径 + 空输入 +
+  「不撒谎」属性扫描（1500+ 组"没满"的比例里没有一组显示成 100、位数一律 ≥ 3）+ 与官方源码逐例一致 +
+  文本节点与 `aria-label` 两个字符串变换（含 5 条"不许碰"、1 条"连续两次调用结果一致"，防公共正则留
+  `lastIndex` 状态）+ 开关合成与定位常量。
+- 新增 `test/stats-dom.mjs`（**17 项**，已进 `npm test`）：用**按官方源码复刻的假 DOM** 钉住 DOM 那半 ——
+  定位（平铺 / 槽位套了一层包裹元素 / 第 7 层才是 body 时放弃）、改写（可见文本 + `aria-label`，
+  弹窗的 `<dt>`/`<dd>` 与同排另一个 composer 一个都不碰、紧凑档与英文界面同样认、值相同时不写）、
+  以及"不碰那一行的样式"。为此把 DOM 助手从 `StatsLineEntry.tsx` 拆成独立的 `src/client/stats-dom.ts`
+  （不 import React、顶层不碰 `document`），React 那层只剩"什么时候扫、扫完怎么收尾"。
+- `npm test` **797 → 885 passed / 0 failed**（41+17+**298**+133+199+**52**+**17**+**102**+26）；
+  `test/settings-render.mjs` **28 → 43 passed / 0 failed**（新增"七张卡都在"+ 统计行卡 5 项 × 3 档）。
+- `test/mutation-guards.mjs` 新增 8 条，**全部咬住**：`AF`（退化成 `toFixed(3)`）/`AG`（判据放宽成"任何 xx%"）/
+  `AH`（栏开关默认改成关）/`AI`（定位改成扫全页）/`AJ`（不同步 `aria-label`）/
+  `AK`（定位去掉层数上限 ⇒ 不同子树时一路走到 body）/`AL`（撤掉的加宽又写回行内样式）/`AM`（加宽常量重新引入）。
+- 顺手修好一条**长期失配**的旧锚点：变异 `X` 的 `also` 还写着 `adoptSettings(ctx.configForms, 'get')`，
+  而代码早已被 `peekService` 包起来 —— 于是 `mutation-guards.mjs` 每跑必报"有变异没被咬住"，
+  分不清是"这条护栏松了"还是"别的哪条真漏了"。锚点已对着当前源码校正，现在整套 **38 条变异全绿**。
+- ✅ **真机验证（用户重启后当场做的，不是推断）**：
+  - 宿主进程 **16:47:07** 启动 > 产物 15:48 覆盖 ⇒ 跑的是新产物；
+  - 活宿主 schema 里 `statsEnabled` 已存在（`default: true` + `volatile`）⇒ 开关真能写；
+  - 活槽位 `conversation.composer.dock` 的 occupants = 官方 `stats`（order 0）+ 本插件
+    `composer-ux-stats-line`（order 99），**两个都 active、官方那一格没被顶替**（靠 `Slots` 探针读的）；
+  - 屏幕上那一行显示 `缓存命中 97.964%` → 稍后 `97.773%`（三位小数、随用量在变）；
+  - `dsh-cache-precision` **没有安装** ⇒ 不存在两个插件抢同一段文本。
+- 产物与哈希：`lib/index.js` = `08ae98dae8774737cd241a31eded8b5b`、
+  `lib/client.js` = `53aba71728a1196ffd8f090b2e2f22af`（上一版发布版分别是 `46EEFE79…` / `9017EBC3…`）。
+  两个 profile（`desktop` 与 `web`）都已用 `rm` + `cp` 覆盖（`profiles/<p>/node_modules/dsh-composer-ux/lib/`
+  里的文件与 pnpm store 是同一 inode，`cp -f` 会**写穿** inode 污染 store —— 2026-09-25 真出过），
+  覆盖后确认 store 里那两个 0.6.2 的旧 blob 仍是 `9017EBC3…` / `46EEFE79…`、链接数已归 1。
+- ⚠️ 真机确认后**仍待用户点头才发布**（用户选的是"确认了我再发 0.7.0"），
+  所以此刻 `npm publish` / GitHub Release / git tag **尚未执行**。
+
 ## [0.6.2] — 2026-09-25（浮层磨砂修复 + 设置页「刷新」按钮 + 默认终端「接管前自检」）
 
 > 三块内容合成一版：①用户截图报的「快捷指令面板透明看不清」；②桌面版里「重启 DSH」不可能生效，补一个轻量替代；③

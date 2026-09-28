@@ -7,7 +7,9 @@
 > separate model call before you send, automatic **`x-opencode-session` request-header injection** so
 > OpenCode (Go) routes work inside DSH, and — on Windows — a **default-terminal switch** that replaces the
 > model's PowerShell tool with **Git Bash** (git-anchored discovery, WSL excluded, per-session tool-surface
-> trim, official-identical sandbox/approval/timeout semantics), plus a **one-click "restart DSH"** button
+> trim, official-identical sandbox/approval/timeout semantics), a **composer stats-line upgrade** that renders the
+> built-in cache-hit percentage with **three decimals** (keeping upstream's "never round a partial hit up to 100%"
+> rule), plus a **one-click "restart DSH"** button
 > in the settings-card header (market-proven self-restart: detached node helper, port-release wait,
 > hidden-console relaunch, same-origin fence, boot-id reload).
 > Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
@@ -19,21 +21,24 @@ DeepSeek Harness Web 输入体验增强插件：
 
 > 上图即 0.5.0 的设置页（六栏都开着）。注意标题行**只有卡级开关与从属控件** —— 右键菜单那 7 个条目开关已按实测反馈搬进卡内的「自定义」档（见第 0 条）。
 
-0. **两层开关：总开关 + 每栏开关**。设置页顶部「启用输入增强」是**总开关（默认开）**，它是一道总闸；六张折叠卡的标题行右端各有一个**卡级开关（默认关）**，决定「这一栏要不要生效」。两处都满足才生效（`enabled && 该栏开关`）。
+0. **两层开关：总开关 + 每栏开关**。设置页顶部「启用输入增强」是**总开关（默认开）**，它是一道总闸；七张折叠卡的标题行右端各有一个**卡级开关**，决定「这一栏要不要生效」。两处都满足才生效（`enabled && 该栏开关`）。前六栏默认**关**；第 7 栏「统计行」默认**开**（它是唯一例外，理由见下条）。
    - **兼容性**：同一个产物同时支持 **DSH 0.1.6 与 0.1.7**。两代的设置服务形状不同（`settingsScope.bind` → `configForms.get`、宿主 `settings.register` 被删除、事件名换代），代码按**能力探测**分支，不维护两份产物。
    - ⚠️ **升级 DSH 到 0.1.7 之前先备份 `~/.dsh/settings.yaml`**：0.1.7 的官方升级会把它改名成 `settings.yaml.imported` 并逐节导入 profile patch（一次性、不可逆），而本插件这一段在旧版上**导不进去**（那时还没有 Config 字段表），旧值只会留在那个 `.imported` 文件里。
    - **老用户不会被升级弄坏**：卡级开关的默认值不是硬编码的 `false`，而是按「设置文档里有没有『你在用』的痕迹」迁移 —— 碰过的栏保持开着、没碰过的才是关；全新安装（空白文档）才是六栏全关。「快捷指令」那一栏多一条文件判据（0.3.0 起条目存在 `quick-prompts.json`，设置文档里看不出来）。
-   - **升级前可以先看一眼**：`node test/check-sections.mjs` 拿你真实的 `settings.yaml` 跑一遍迁移，打印六栏会变成什么（**只读**，不写任何文件）。
+   - **例外：0.7.0 的「统计行」是唯一默认开的栏**（它不参与上面那套"碰过才开"的迁移）。那五栏都**已经发布过**，一律默认关会在升级那一刻把用户正在用的东西当场关掉；而「统计行」是新能力，没有痕迹可依，用户要的是"装完立刻看得到效果"。`node test/check-sections.mjs` 把它单独列一行说明。
+   - **升级前可以先看一眼**：`node test/check-sections.mjs` 拿你真实的 `settings.yaml` 跑一遍迁移，打印七栏会变成什么（**只读**，不写任何文件）。
    - **关掉一栏 = 这一块完全不介入**，且栏内的值全部保留（打开即原样恢复）：键位关 → 输入框按 DSH 原生键位；右键菜单关 → 本插件不介入；快捷指令关 → 输入框那枚按钮消失；设置面板关 → 不拖大小；OpenCode 请求头关 → 停止注入并撤销已写入的头；默认终端关 → 保持 PowerShell。
    - 「OpenCode 请求头」那一栏**没有额外的开关**：原来的「附加请求头」本来就是「这一栏要不要生效」，直接搬到了标题行。
 1. **设置 → 输入体验**（设置页新增条目）
-   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下六个栏目为**可折叠卡片** —— 标题行左侧是「标题 + 一句动态概览 + 展开箭头」，右侧是**这一栏的开关与从属控件**（设置面板的缩放开关、默认终端的三档都在这里），长说明与其余控件在展开后的内容区；**默认全部折叠、不记忆展开状态**，可同时展开多个。标题行**只放卡级开关与从属控件**：右键菜单那 7 个条目开关按用户后来的反馈**搬回了卡内**（它们只对「自定义」档有意义，见下一条）。
+   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下七个栏目为**可折叠卡片** —— 标题行左侧是「标题 + 一句动态概览 + 展开箭头」，右侧是**这一栏的开关与从属控件**（设置面板的缩放开关、默认终端的三档都在这里），长说明与其余控件在展开后的内容区；**默认全部折叠、不记忆展开状态**，可同时展开多个。标题行**只放卡级开关与从属控件**：右键菜单那 7 个条目开关按用户后来的反馈**搬回了卡内**（它们只对「自定义」档有意义，见下一条）。
    - **键位**：分别配置「发送键」「换行键」——常用预设（Enter / Ctrl+Enter / Alt+Enter / Shift+Enter）+ 点击「自定义…」后直接按任意组合键录制（Esc 取消，Backspace 清除），支持清空为「无」；发送与换行不能设为相同按键；可一键恢复默认。
    - **右键菜单**：三档「菜单来源」（官方不介入 / 浏览器菜单 / 自定义菜单，见下「右键菜单」一节）；卡内**只显示当前选中那一档的说明**（点官方看官方的、点浏览器看浏览器的、点自定义看自定义的；自定义档还带 Chrome / Edge 与 Firefox 的剪贴板授权说明）；那 7 个条目（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）**只在「自定义」档显示**、逐个开关（旁边一个「全部开启」）。这三件事有**真渲染测试**盯着（`node test/settings-render.mjs`：把设置页渲染成 HTML，断言三档正文互斥、那 7 行只在自定义档、标题行没有第二个入口）。
    - **快捷指令**：分类增删改 / 条目增删改与上下移 / 跨分类移动 / 每条一个插入模式（关 · 每次 · 仅首次）/ 优化强度三档（详见下节）。
    - **设置面板**：边缘调整大小一个开关（标题行）；尺寸预设与拖拽说明在展开区。**导航列滚动由 DSH 官方的设置页自带**（0.1.7 起 `.navList` 就有 `overflow-y: auto`），所以 0.6.0 把「导航滚动」那个开关整项删掉了 —— 留着就是重复实现。
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
    - **默认终端**：Windows 上把模型用的终端工具从 PowerShell 换成 Git Bash（三档在标题行；详见下节）。
+   - **统计行**：输入框下方那行「缓存命中 xx%」按三位小数显示（0.7.0 新增，**唯一默认开的栏**，只有一个开关；详见下节）。
+   - **金额**：输入框下方一颗极简金额胶囊（本会话费用估算，按 DeepSeek 官方刊例价；点开看三分项明细）。**这一版常驻显示、还没有开关**（0.8.0 新增；详见下节）。
    - **重启 DSH**：卡片抬头右端（GitHub 链接左边）那枚按钮，两步确认后原地重启（详见「维护：重启 DSH」）。
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
@@ -191,6 +196,71 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 - **一个诚实的副作用**：会话内工具面会随档位变化，而**会话历史里可能还留着旧工具名**。如果模型按旧名字调用，会拿到 unknown tool 之类的错 —— 让它换成 `bash` 重试即可（卡片上也写了这句）。
 - **非 Windows**：直接不接管（官方 bash 工具本来就在），卡片显示一行说明。
 
+## 官方持久终端（`terminal_*` 六件套）
+
+模型侧除了上面那个**一次性**的 `bash` 工具，官方还有一套**会话跨调用存活**的持久终端工具：`terminal_open` / `terminal_read` / `terminal_send` / `terminal_signal` / `terminal_close` / `terminal_list`（REPL、dev server、需要交互输入的程序靠它们）。这一档本插件**常驻挂载**，不需要任何设置项。
+
+- **为什么需要"我们来挂"**：这 6 个工具的包 `@deepseek-ai/dsh-tool-terminal` 官方标为**可选**（`packages/terminal/tool-terminal/README.zh.md`：「需要选择启用」），没有任何 bundle 默认挂它；而且 **0.1.7-rc.2 的桌面版根本没随包发布它** —— `app.asar` 的 284 个 `@deepseek-ai` 包里有 `dsh-terminal`、`dsh-terminal-bash`、`dsh-api-terminal-controller`、`dsh-client-ui-sidebar-terminal`，唯独没有 `dsh-tool-terminal`（全盘无路径痕迹）。所以本插件把它写成自己的依赖（`package.json` 的 `dependencies`，区间 `>=0.1.7-rc.1 <0.1.8`），再由 `cordis.patch.yml` 里一行挂上。
+- **要挂的是三件套，不是一个包**：`cordis.patch.yml` 里插三行 —— ① `@deepseek-ai/dsh-terminal`（提供 `ctx.terminals` 服务）② `@deepseek-ai/dsh-terminal-bash`（注册 `type=shell` 的 PTY 后端）③ `@deepseek-ai/dsh-tool-terminal`（那 6 个模型工具）。**缺一行都不行，而且必须在同一层。**
+- **为什么不能只挂 ③（真机踩到的坑）**：③ 的源码里写着 `const inject = ["terminals", "tools", "systemPrompt"]`，而 ① 在官方组合里只出现在 `sdk-minimal` 与 web-app 的 **minimal 预设**里（`packages/bundle/web-app/presets/minimal.patch.yml` 的 `persistent-shell` 组），standard 预设和 profile 层都没有 —— 于是 ③ 在 desktop profile 这层**静默 pending**：不报错、不白屏、一个工具都不注册，只有模型工具表里空着。（这跟 0.6.2 白屏是同一形状，只是那次发生在客户端半、被启动审计抓住。）**「包能解析到 + 守卫放行」≠「它激活了」**——这条教训写在 `cordis.patch.yml` 顶部。
+- **为什么官方放预设、我们放 profile 层**：官方 minimal 预设用 `cordis:group` + `isolate: { terminals: true }` 给**每个 agent 一份**服务；我们放 profile 层是一份共享服务，会话归属由 API 自己保证（`spawn(owner, …)` 按 owner 隔离、工具里 `requireAgent(exec.agent)`），功能等价。而且 **profile 层注册的模型工具能被 agent 看见** —— 同层的 `@changfenhuang/dsh-genui` 就是这么把 `render_ui` 送进工具表的。
+- **③ 没随应用发布，所以要自己声明依赖**：`@deepseek-ai/dsh-tool-terminal` 在随包发布的那份 `app.asar` 里**不存在**（`dsh-terminal`、`dsh-terminal-bash`、`dsh-api-terminal-controller`、`dsh-client-ui-sidebar-terminal` 都在，唯独没有它；`dsh-web-app` 的依赖里也没声明 ⇒ 从没被安装过），所以写成插件自己的依赖（`package.json` 的 `dependencies`，区间 `>=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0` —— **两个窗口各带 pre 比较器**，否则 `0.2.0-rc.1` 这种 pre 版本用普通区间匹配不上）。① ② 则是**安装目录里就有**的官方包，按包名引用即可解析。
+- **装的版本要跟「运行时版本」对齐，不是跟桌面壳版本对齐**：DSH 的兼容性预检（`plugin-compatibility.ts`）拿「包的 `@deepseek-ai/dsh-*` peer 区间 vs 运行时版本」比，不满足就**直接给这一行打 `disabled`**（patch 里看不出来，`plugin_manager list_plugins` 里是 `enabled:false / fiberPhase:null`）。而**桌面壳自称的版本不是运行时版本** —— 读 `app.asar` 里 `@deepseek-ai/dsh-app-boot` 的 `version` 才是（本机实测：壳写 `0.1.7-rc.2`，官方包全是 `0.2.0-rc.1`）。本机因此一度整行被静默判掉，换装 `dsh-tool-terminal@0.2.0-rc.1` 后立刻生效。
+- **PTY 的 bash 必须排除 WSL**：`C:\Windows\System32\bash.exe` 与 `…\Microsoft\WindowsApps\bash.exe` 是 WSL 启动器，会把 `D:\x` 解释成 `/mnt/d/x`，与模型手里的 Windows 路径/工作目录全不兼容（上面「默认终端」栏也是硬排除它的）。探测里用 `path.basename/dirname` 判掉这两种；真机实测：排除前 PTY 起成 WSL bash（`pwd` = `/mnt/d/1zcode/dsh插件`），排除后是 Git Bash（`uname -a` = `MINGW64_NT-… Msys`、`pwd` = `/d/1zcode/dsh插件`、`grep`/`head` 都在 `/usr/bin`）。
+- **守卫只能加在 ③ 上**：DSH 的兼容性预检只处理 **peer 版本冲突**，「包装不上 / 解析不到」它不管 ⇒ 会落到 Loader 导入失败 ⇒ 整棵树挂 ⇒ 白屏。所以 ③ 带 `!!js` 自检：解析不到就 `disabled: true`，而**加载器根本不会初始化 disabled 行**，于是「缺包」退化成「这个功能不存在」。① ② **不能**加同一个守卫 —— 守卫用 profile 目录的 `createRequire`，解析不到共享层里的包，加了会把服务永远禁掉。守卫的**基准**取 `DSH_HOME`（有就用）否则 `os.homedir() + '/.dsh'`，再扫 `profiles/node_modules` 与 `profiles/*/node_modules`；`ctx.get('profileContext')` / `DSH_PROFILE_DIR` 只当额外候选且各自 try/catch —— 不依赖 DSH 内部上下文更稳（**更正一句**：先前我把该行不出现归因于"基准取不到"，后来证明真因是上面那条版本不匹配；基准改成这样属于防御性加固，不是那个 bug 的修复）。另两个坑：表达式必须用 `try/catch` 包住（`disabled` 抛错算「条目失败」，一样白屏）；③ 不能带 `group: true`（会迫使加载器初始化 disabled 行）。
+- **shellPath 得自己探**：官方后端默认 `shellPath: '/bin/bash'`（`dsh-terminal-bash/src/config.ts:54`，Windows 上解析不到），所以 ② 用同步 `!!js` 探测（PATH 上那份 git 反推 `…/Git/bin/bash.exe`，加 Program Files / LOCALAPPDATA / msys64 等落点）；探不到就让 `shellPath` 留空并回落官方 pwsh 方言（`resolvePwshPath`）——与插件「找不到 bash 就保持 PowerShell」的策略一致。`timeoutMs` 对齐官方 minimal 预设的 300000。
+- **升级 DSH 时要改那个区间**：`dsh-tool-terminal` 的 peer 精确锁 `0.1.7-rc.2`（7 个官方包）。DSH 换大版本后，要么把依赖区间放宽到新窗口，要么让它被预检禁掉 —— 后者只是这 6 个工具静默消失，不会白屏。`test/terminal-mount.mjs` 有一条断言盯着这个窗口。
+- **与「默认终端」栏互补、互不依赖**：那一栏决定**模型用哪个 shell**（Git Bash / PowerShell），这一档决定**模型有没有持久会话**。档位选 `PowerShell`（插件完全不介入终端）时，这 6 个工具照常在。
+- **客户端不用我们写一行**：官方客户端已经注册了这 6 个工具的 `tool.call.toolview` 渲染位（运行时 Slot 里可见），工具一亮就有官方样式的卡片。
+
+## 统计行（缓存命中三位小数）
+
+输入框下方那行用量统计里的「缓存命中 12%」，官方给的是**整数**；这一栏把它改成**三位小数**（`缓存命中 12.346%`）。
+
+- **设置页位置**：设置 → 输入体验 → 「统计行」（0.7.0 新增的第 7 栏，**唯一默认开的栏**）。**只有一个开关**（标题行上那一个）—— 这一栏只有一件事可开可关，所以不另设子开关（与「OpenCode 请求头」那一栏同一处理）。
+- **为什么会有这一栏**：社区插件 [dsh-cache-precision](https://github.com/Cheng-cheng9669/dsh-cache-precision) 提供了这条路子，用户看到后要求把同样的能力并进本插件。**能力移植、实现没有照抄** —— 下面每条都与它不同，且各有测试盯着。
+- **数字口径与官方完全一致**：`缓存读 ÷（未缓存输入 + 缓存读 + 缓存写）`（三个桶互不重叠，与官方 `billedInputTokens()` 同一份）。所以屏幕上那两个百分比不会互相打架。
+- **不撒谎（最重要的一条）**：官方的整数档有一条很少人注意的规则 —— 当整数四舍五入会把「没满」显示成 `100%` 时，它会**自动多给几位**（例如 `99.95%`），源码注释原话是 "without rounding a partial hit to 100%"。本插件把默认档抬到三位后**保留**了这条规则：三位小数一旦会凑成 `100.000%` 就继续加位。阶梯如下：
+
+  | 真实命中率 | 官方（整数档） | 本插件（三位档） | 直接 `toFixed(3)`（不采纳） |
+  | --- | --- | --- | --- |
+  | 12.3456% | `12%` | `12.346%` | `12.346%` |
+  | 99.995% | `100%` | `99.995%` | `99.995%` |
+  | 99.999% | `100%` | `99.999%` | `99.999%` |
+  | 99.9995% | `99.9995%` | `99.9995%` | **`100.000%`**（把没满说成满） |
+  | 真的满命中 | `100%` | `100.000%` | `100.000%` |
+
+  - 判据不是"我觉得"，而是拿**官方源码当基准逐例对**：`test/stats-line.mjs` 把 DSH 的
+    `packages/client/ui-chat/src/client/chat/token-format.ts`（rc.1）那 4 个函数原样抄进来，
+    对 400 个分母全量 + 大分母边界 + 3000 组伪随机比对 `digits = 0` 档，**逐例一致**。
+- **只改输入框下面这一行**（用户明确选择的范围）：点开统计行的弹窗、每轮用量弹窗里的百分比保持官方原样
+  —— 那两个弹窗里数字是独立的 `<dd>12.3%</dd>`，与"整段必须就是 `缓存命中 xx%`"这条判据天然不冲突
+  （有 5 条"不许碰"的断言盯着）。顺带一句：弹窗自己用的是官方 1 位小数档，所以会有"下面 12.346%、弹窗 12.3%"的口径差，这是选择而不是漏改。
+- **同步无障碍名字**：官方那颗胶囊的 `aria-label` 是 `` `${总数} · 缓存命中 12%` ``。只改可见文字的话，
+  **读屏用户听到的还是整数**，所以两处一起改（社区插件没管这一处）。
+- **定位与作用面**：靠官方稳定属性 `[data-composer-stats]`（`StatsPills` 的根元素），**不靠 CSS Modules 类名**（那串带哈希，升级就会变）。
+  - 本插件自己渲染一个 `display:none` 的锚点落在**同一个** composer dock 里，由它往上找"同时装着我和统计行"的最近祖先（上限 6 层），`MutationObserver` 只盯这一小块。页面上有多个 composer 时也只动自己那一个。
+  - **刻意不跟社区插件的一处**：它在 `document.body` 上跑 TreeWalker + 观察器，等于给整个页面挂监听（每个流式 token 都会喂它）。本插件宁可功能不生效，也不留一个全页监听。
+- **只改文本，不碰那一行的样式**。参考实现还给那一行写行内 `max-width` 想放宽 260px，**没有移植** —— 它的前提在 DSH 0.1.7 上不成立：`--dsh-chat-content-width` 只作用在消息列与输入卡片上（`.card` / `.composerHero`），而真正包着统计行的 `.dock` / `.composerStack` 没有宽度上限；`.composerHero` 又只在空白会话生效，统计行却只在活动会话里渲染，两者永不同时出现。所以那一行本来就能比聊天列宽得多，而参考实现那个上限反而比可用宽度小 —— 平时不生效、内容极长时还会**比官方更早截断**。完整证据链与撤掉的理由见 `src/client/stats-line.ts` 文件头与 CHANGELOG 的 `[0.7.0]` 节。
+- **关掉会怎样**：把官方那一版**原样写回去**（三位小数退回官方整数档），不留半截状态。
+- **护栏**：`node test/stats-line.mjs`（52 项）盯小数语义、两个字符串变换与"不许碰"的范围；`node test/stats-dom.mjs`（17 项）用**按官方源码复刻的假 DOM** 盯定位与改写范围（这两件坏事都是静默的），并断言"不写任何行内样式"；两条都已进 `npm test`。
+  `test/mutation-guards.mjs` 的 `AF`–`AM` 八条变异盯"退化成 `toFixed(3)` / 判据放宽 / 默认改成关 / 扫全页 / 不同步 `aria-label` / 去掉层数上限 / 撤掉的加宽长回来 / 加宽常量重新引入"这八种退化。
+
+## 金额（输入框下方显示本会话费用）
+
+- **设置页位置**：**这一版还没有开关**（常驻显示）。币种（¥/$）、单价覆盖、折叠态是否带余额、账户余额与今日/月累计，随后的版本接入设置栏（第 8 张卡）。
+- **长什么样**：不点击时是输入框下方一颗极简胶囊（`¥0.42`，与官方那行统计**同排、排在其后**，order 100）；点开后是贴在它上方的浮层 —— 各 route 的 token 与花费、合计、三分项（未缓存输入 / 缓存命中 / 输出）各自的 token 数与花费、缓存命中率、生效单价、模型名与峰谷档，并注明"按官方刊例价估算、未含中转加价"。
+- **字号与亮度照抄官方那颗胶囊，不自己定**：文字大小/行高取官方 `StatsPills.module.css` 里 **`.root`** 的两条（`calc(var(--dsh-content-font-size-secondary, 13px) - 1px)` 与 `calc(20px + var(--dsh-content-font-delta-secondary, 0px))`），亮度取 `.pill` 的"静止 `label-tertiary`、hover/展开 `label-secondary`"。**坑**：那两条在 `.root` 上，不在 `.pill` 上 —— `.pill` 里的 `font: inherit` 只是为了抵消 button 的 UA 字体；本条目是同一槽位里的另一条记录，不在那颗 `.root` 里，只写 `font: inherit` 会继承输入框那一层（默认 14px），真机上看就是"插件输入框下方的字比官方的大"（2026-09-28 用户反馈）。所以这里显式写 `.root` 的两条，并**不用 `font:` 简写**（简写会把字号重置回继承）。
+- **为什么是浮层而不是就地展开**：输入卡片会裁掉溢出内容，官方那几颗胶囊（ContextMeter、时间胶囊）也都是浮层；这里用 React portal 挂到 `document.body`，位置由胶囊的视口矩形算出，点别处或按 Esc 关闭。
+- **钱是怎么算的**：`未缓存输入 × miss价 + 缓存命中 × hit价 + 输出 × out价`（每 1M tokens；DeepSeek 不对缓存写入单独计价，所以 `cacheWriteTokens` 只进"计费输入"的显示、不进费用）。峰谷档按官方规则（北京时间工作日 09:00–12:00、14:00–18:00 为高峰，价格 ×2）。
+- **为什么金额必须自己算**：DSH 送到浏览器的 `tokenUsage` 投影**只有 token 桶**，全库没有一处把"钱"送到客户端；`llm-pi-ai` 里那个 `cost` 只活在 provider 内部，而且用户自定义的路由（profile 里手写的 provider）拿到的是 `NO_COST`（全 0）。所以费用只能由本插件按刊例价算。
+- **数据全部来自官方、不新增采集**：token 桶读 `tokenUsage` 投影（与官方统计行**同一份**），模型读 `modelSelection` 投影（来自 `request/header` 事件）。会话中途换过模型时按**最后一次请求**的模型计价（近似，浮层里写明）。
+- **按 route 分列**（折叠态那一个数字仍由客户端按官方投影算；点开才去问宿主半）：面板里列出每条 route（provider + model）的 token 与花费，**总额以分列之和为准**，所以"各行加起来等于总额"永远成立；三分项的钱**按各 route 自己的单价分别累加**，所以"三项相加 = 合计"也精确成立（两条 route 单价不同时也成立）。逐请求归因只能宿主半做，走只读路由 `GET /composer-ux/usage?sessionId=…`（`src/host.ts` 注册）：**事件取自官方 `sessionQuery.readSession(sessionId)`**（带 data 的完整日志，活会话与归档会话都能读），折叠规则在 [src/usage-fold.ts](src/usage-fold.ts)。**事件形状按本版官方 `SessionEventMap` 的真实声明**（`assistant/attempt` 的 `stream` 里取最后一条 usage 块，或 `assistant/message` 的 `data.usage`；**本版没有 `assistant/chunk` 事件**），口径对齐官方 `token-meter` 的 `usage-projection`（同一步替换、`llm/retry-started` 重开替换槽）。`test/usage-fold.mjs`（39 项）逐条钉住差分、归属、重试与脏数据；分列出不来时面板会显示"读了 N 条事件、M 条 usage、来源哪条路"，一眼就能定位。
+- **命中率与旁边那行必然是同一个数**：面板只在"分列与投影**四个桶全等**"（`agreesWithProjection` 是精确比较）时才把分列当权威，此时分列算出的命中率与官方胶囊逐位相同；否则退回投影口径。**两个坑**：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens` —— 第一版在 `billedInputTokens()` 里认对了名字，却在**调用处**传了 `inputTokens`，于是分母丢掉整块未缓存输入、命中率恒 100%（旁边官方胶囊 98.206%）。现在调用处也走官方键名，`test/client-registration.mjs` 同时钉住"调用处键名"与"与输入框下面那一行同一套函数"。
+- **计价只看模型名，不看 provider**：所以用 OpenCode（Zen）的接口跑 DeepSeek 模型，用量照样按 **DeepSeek 官方价**进这个金额。代价如浮层所写：Zen 可能有自己的加价/订阅，这个数字不等于你付给 Zen 的钱。
+- **出处与对拍**：价目表、模型别名、峰谷规则与格式分档来自 [`dsh-plugin-usage-meter`](https://github.com/fancr-code/dsh-plugin-usage-meter) 1.9.1（**MIT**，Copyright (c) 2026 fancr-code）。`node test/pricing.mjs`（81 项）把那份实现的几个函数**原样抄进来当基准**逐样本对拍：刊例价表逐项、峰谷判定（一周 593 个时刻）、定价解析（模型 × 币种 × 时段 × 覆盖价 216 组）、费用（30 组）、金额（40 组）、Token 格式（16 组）。
+- **与出处有意不同的两处**（都钉在测试里）：① 金额**至少保留两位小数**（出处会把 `0.1` 显示成 `¥0.1`、把 `0` 显示成 `¥0.`）；② **覆盖价的币种语义**——出处是"有覆盖价时先整体重建人民币档、美元再从人民币折算"，写成"在美元列上套覆盖价再折算"会差一个汇率（≈15 倍）而屏幕上只是个数字，所以专门有一条断言守着。
+
 ## 维护：重启 DSH
 
 装了新插件、改了宿主半代码（比如本插件的「默认终端」、键位 schema）之后，DSH 需要重启才会加载新代码。设置页「输入体验」卡片**抬头右端**（GitHub 链接左边）有一枚「重启 DSH」。
@@ -228,6 +298,8 @@ dsh-composer-ux/
 │   ├── host.ts                    # Host 半：注册 settings namespace + 请求头镜像 + 「默认终端」+ 「重启 DSH」路由
 │   ├── settings-contract.ts       # 字段/默认值/菜单元数据 + 栏开关的迁移判据（零依赖共享）
 │   ├── restart.ts                 # 「重启 DSH」：助手进程/等端口/隐藏控制台/信任关卡/优雅退出（零 import）
+│   ├── pricing.ts                 # 金额：刊例价 / 峰谷判定 / 覆盖价语义 / 费用与金额、Token 格式（零 import，两半共用）
+│   ├── usage-fold.ts              # 金额：会话事件按 (provider, model) 归因折叠（零 import，宿主半用）
 │   ├── client.tsx                 # Browser 半：设置页 + 菜单浮层 + 拦截器
 │   ├── terminal/                  # 「默认终端」（Windows：pwsh → Git Bash），全部零官方运行时依赖
 │   │   ├── discover.ts            # 探测：git 锚定反推 bash、硬排除 WSL、多候选排序（纯函数）
@@ -239,9 +311,13 @@ dsh-composer-ux/
 │   └── client/
 │       ├── chords.ts              # 键位编码/录制校验
 │       ├── interceptors.ts        # keydown/contextmenu 捕获拦截 + 回放
-│       ├── SettingsSection.tsx    # 设置页「输入体验」（顶部常显 + 折叠栏目 + 默认终端卡片）
+│       ├── SettingsSection.tsx    # 设置页「输入体验」（顶部常显 + 折叠栏目 + 默认终端 / 统计行卡片）
 │       ├── settings-style.ts      # 折叠卡片样式表（dsh-ux-* 类名注入）
 │       ├── ContextMenuHost.tsx    # shell.overlay 右键菜单
+│       ├── stats-line.ts          # 统计行：小数语义（不撒谎）+ 两个字符串变换（纯逻辑）
+│       ├── stats-dom.ts           # 统计行：定位与改写（DOM 助手，不 import React）
+│       ├── StatsLineEntry.tsx     # 统计行：composer dock 上的隐形条目 + 观察器（React 胶水）
+│       ├── CostChipEntry.tsx      # 金额：composer dock 上的金额胶囊 + portal 浮层明细（React 胶水）
 │       └── styles.ts              # --dsw-* 令牌内联样式
 ├── docs/settings-panel-0.5.0.png  # README 顶部那张设置页截图（用 tag 固定的 raw 链接引用，不进 npm 包）
 ├── test/
@@ -250,9 +326,14 @@ dsh-composer-ux/
 │   ├── quick-commands.mjs              # 快捷指令 / 优化接口 / 路由注册 / 重启机制
 │   ├── quick-store.mjs                 # 快捷指令文件存储与写回路径
 │   ├── terminal-policy.mjs             # 默认终端：探测 / 渲染 / 升级审批 / bash 工具 / 宿主半接线
-│   ├── client-registration.mjs         # 客户端注册协议、右键行为、抬头按钮、六栏开关与标题行布局
+│   ├── terminal-mount.mjs              # 官方持久终端三件套：挂载行结构 + 用加载器同一个求值器真跑 !!js 探测与守卫
+│   ├── stats-line.mjs                  # 统计行：小数语义（与官方源码逐例对）/ 文本与 aria-label 变换 / 开关
+│   ├── stats-dom.mjs                   # 统计行：假 DOM 钉住定位、改写范围与"不碰样式"
+│   ├── pricing.mjs                     # 金额：与出处实现（MIT）原文逐样本对拍 + 有意差异
+│   ├── usage-fold.mjs                  # 金额：按 route 归因的折叠规则（差分 / 归属 / 脏数据）
+│   ├── client-registration.mjs         # 客户端注册协议、右键行为、抬头按钮、七栏开关与标题行布局
 │   ├── settings-service-adopt.mjs      # 客户端两代设置服务认领（settingsScope / configForms / 都没有）
-│   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红（26 条）
+│   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红（57 条）
 │   ├── settings-render.mjs             # 真渲染测试（手动跑）：借 profile 的 react 把设置页渲染成 HTML
 │   ├── check-sections.mjs              # 升级前自查（只读）：拿真实 settings.yaml 跑一遍栏开关迁移
 │   └── opencode-header-wire-probe.mjs  # 线级探针：本地端点，用来看 DSH 出网请求带了什么头
@@ -263,10 +344,10 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-npm test                          # 七个套件；当前 669 passed, 0 failed
-node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人
-node test/settings-render.mjs     # 手动跑：把设置页真渲染成 HTML，断言版式与互斥显示（20 项）
-node test/check-sections.mjs      # 只读：升级前看六栏会变成什么
+npm test                          # 12 个套件；当前 1063 passed, 0 failed（2026-09-28 实测）
+node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（57 项，须单独跑）
+node test/settings-render.mjs     # 手动跑：把设置页真渲染成 HTML，断言版式与互斥显示（43 项）
+node test/check-sections.mjs      # 只读：升级前看七栏会变成什么
 node test/host-header-mirror.mjs  # 只跑宿主半的请求头测试（写入/撤销/改名/幂等/不误删）
 node test/host-settings-generations.mjs  # 只跑宿主半的「两代设置服务」兼容（0.1.6 / 0.1.7 形状）
 node test/terminal-policy.mjs     # 只跑「默认终端」（探测 / 渲染 / 审批 / 工具 / 接线）

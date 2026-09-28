@@ -19,7 +19,8 @@ import {
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
-  TERMINAL_ENABLED_FIELD, activeSections,
+  TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
+  activeSections,
   insertModeOf, newQuickPromptId, newSessionId, optimizerPromptFieldOf,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
@@ -37,6 +38,7 @@ import { AddPromptRow } from './AddPromptRow.tsx'
 import { OptimizerPromptEditor } from './OptimizerPromptEditor.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { PillChoice } from './PillChoice.tsx'
+import { HIT_DIGITS } from './stats-line.ts'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -1037,6 +1039,8 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
       : settings.terminalMode === 'pwsh'
         ? '当前：保持 PowerShell'
         : (settings.terminalEffective === 'bash' ? '当前：Git Bash' : '当前：PowerShell（未接管）')
+  // 统计行卡片的概览。这一栏只有一个开关（是否三位小数），所以概览就是它的状态。
+  const statsSummary = `${HIT_DIGITS} 位小数`
 
   return (
     <div style={{ padding: '4px 2px' }}>
@@ -1441,6 +1445,35 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           git，再由同一个安装反推 bash。（档位在标题行上：自动 / Git Bash / PowerShell。）
         </p>
         <DefaultTerminalBody settings={settings} setField={actions.setField} hideMode />
+      </FoldCard>
+
+      {/*
+        「统计行」（0.7.0）。做法与来由见 src/client/stats-line.ts 与 StatsLineEntry.tsx：
+        社区插件 dsh-cache-precision 提供了这条路子（原仓库只改这里、没管 aria-label，
+        也没做开关）。这一栏**只有一个开关**，就是标题行上那一个 —— 它同时是"要不要三位小数"，
+        与「OpenCode 请求头」那一栏同一处理（不为同一个语义造第二个同义的键）。
+        原仓库的第二半（加宽统计行）经真机核对后撤掉，理由写在 stats-line.ts 文件头。
+      */}
+      <FoldCard
+        name="统计行"
+        summary={statsSummary}
+        toggle={{
+          checked: sections.stats,
+          onChange: next => { actions.setField(STATS_ENABLED_FIELD, next) },
+        }}
+      >
+        <p style={bodyLead}>
+          输入框下方那行用量统计里的「缓存命中 xx%」。官方平时给整数（「缓存命中 12%」），
+          只在「整数四舍五入会把没满说成满」时才自动多给几位（「99.95%」）。
+          打开后常态给 {HIT_DIGITS} 位小数（「缓存命中 12.346%」），并<strong>沿用官方那条
+          不撒谎的规则</strong>：一旦 {HIT_DIGITS} 位小数会凑成「100.000%」就继续加位，
+          宁可显示「99.9999%」，也不把「差一点」说成「满」。
+        </p>
+        <p style={hintInfo}>
+          口径与官方一致：缓存读 ÷（未缓存输入 + 缓存读 + 缓存写）。只改输入框下面这一行，
+          连它的无障碍名字一起改（读屏听到的也是三位小数）；点开统计行的弹窗、每轮用量弹窗里的
+          百分比保持官方原样。关掉上方的开关，本插件会把官方那一版原样写回去。
+        </p>
       </FoldCard>
       </>)}
     </div>

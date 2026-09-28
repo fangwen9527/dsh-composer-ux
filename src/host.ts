@@ -33,8 +33,11 @@ import {
   PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
+  STATS_ENABLED_FIELD,
+  USAGE_API_PATH,
   type QuickPromptBook,
 } from './settings-contract.ts'
+import { foldSessionUsage } from './usage-fold.ts'
 import {
   TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
   TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -414,6 +417,10 @@ function ownSchema(): z {
     })).default([]),
     [TERMINAL_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalStatus),
     [TERMINAL_EFFECTIVE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalEffective),
+    // 「统计行」（0.7.0）。这一项**故意用 `.default(true)`**（与上面五栏的 `.required(false)`
+    // 相反）：它没有"碰过才开"的迁移需求，默认就是开，且必须能被设置页写入
+    // （写不进去 = 开关点了没反应，本插件为此专门有一条回读校验）。
+    [STATS_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.statsEnabled),
   })
 }
 
@@ -882,6 +889,105 @@ export function apply(ctx: Context, config?: unknown): void {
       path: QUICK_PROMPTS_API_PATH,
       handler: handle as never,
     }), 'composer-ux: quick prompt store route')
+  })
+
+  // ── 按 route 分列的用量（0.8.0）────────────────────────────────────────────
+  //
+  // 「金额」面板要把本会话的费用按 route 拆开（用户 2026-09-28 选的就是这一档），而这件事
+  // **只能在宿主半做**：客户端拿到的 `tokenUsage` 只有整会话累计的四个桶、`modelSelection`
+  // 只有"最后一次"，会话里换过 route 之后就归不了因；`session.events` 只有宿主能读。
+  // 折叠规则（尤其是"同一 turn/step 的上报是累计值，要相减"）与出处见 `src/usage-fold.ts`。
+  //
+  // 这条路由**只读**：读会话事件、回 JSON，不写任何文件、不碰设置。方法与另外几条一样，
+  // 只接受 GET（POST 也放行只是为了一致，实际上没有写入路径）。
+  ctx.inject(['webServer', 'sessions'], (usageCtx) => {
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+
+    /** 当前活着的会话（读不到就是空数组：宿主没装 sessions 也不该让路由炸掉）。 */
+    const liveSessions = (): readonly unknown[] => {
+      try {
+        const sessions = usageCtx.get('sessions') as { list?: () => readonly unknown[] } | undefined
+        const list = sessions?.list?.()
+        return Array.isArray(list) ? list : []
+      } catch {
+        return []
+      }
+    }
+
+    const handle = (
+      req: { method?: string; url?: string },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): void => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+      const url = typeof req.url === 'string' ? req.url : ''
+      const queryAt = url.indexOf('?')
+      const params = new URLSearchParams(queryAt < 0 ? '' : url.slice(queryAt + 1))
+      const sessionId = params.get('sessionId') ?? ''
+      if (sessionId.length === 0) {
+        sendJson(res, 400, { ok: false, error: '缺 sessionId' })
+        return
+      }
+      void (async (): Promise<void> => {
+        // 事件来源优先级：
+        //   1. 官方 `sessionQuery.readSession(sessionId)` —— 带 data 的完整日志，活会话与归档会话
+        //      都能读。**2026-09-28 真机踩坑**：最早只在活会话对象上找 `events`，结果一条都折不出来
+        //      （面板只能显示"还没有可归因的用量"），实际上这一版没有 `assistant/chunk` 事件，
+        //      usage 藏在 `assistant/attempt` 的 stream 里（见 src/usage-fold.ts 文件头）。
+        //   2. 活会话对象上的 `events`（早先那份社区实现的路子，留着当退路）。
+        // 两条都拿不到就如实回报，让界面退回"只有总额"，绝不编一个空的分列糊上去。
+        let events: readonly unknown[] = []
+        let source = 'none'
+        try {
+          const query = usageCtx.get('sessionQuery') as
+            { readSession?: (id: string) => Promise<{ events?: readonly unknown[] } | undefined> } | undefined
+          if (typeof query?.readSession === 'function') {
+            const snapshot = await query.readSession(sessionId)
+            if (Array.isArray(snapshot?.events)) {
+              events = snapshot.events
+              source = 'sessionQuery'
+            }
+          }
+        } catch {
+          /* 退到下面那条路 */
+        }
+        if (events.length === 0) {
+          const live = liveSessions()
+            .find(row => (row as { id?: unknown } | null)?.id === sessionId) as { events?: readonly unknown[] } | undefined
+          if (Array.isArray(live?.events)) {
+            events = live.events
+            source = 'live'
+          }
+        }
+        const fold = foldSessionUsage(events)
+        sendJson(res, 200, {
+          ok: true,
+          sessionId,
+          source,
+          // 诊断字段：分列出不来时，界面靠 events/samples 区分"没事件"和"事件形状不对"。
+          events: fold.events,
+          samples: fold.samples,
+          total: fold.total,
+          routes: fold.routes,
+        })
+      })()
+    }
+
+    usageCtx.effect(() => usageCtx.webServer.register({
+      kind: 'exact',
+      path: USAGE_API_PATH,
+      handler: handle as never,
+    }), 'composer-ux: usage route')
   })
 
   // ── 默认终端（Windows：把终端的 pwsh 换成 Git Bash）────────────────────────

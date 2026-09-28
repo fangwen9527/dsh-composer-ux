@@ -154,11 +154,31 @@ function check(name, ok, detail = '') {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${detail === '' ? '' : ` — ${detail}`}`)
 }
 
-console.log('1. 设置页能真的渲染出来（六张卡都在）')
+console.log('1. 设置页能真的渲染出来（七张卡都在）')
 for (const [mode, source] of Object.entries(html)) {
-  const names = ['键位', '右键菜单', '快捷指令', '设置面板', 'OpenCode 请求头', '默认终端']
+  const names = ['键位', '右键菜单', '快捷指令', '设置面板', 'OpenCode 请求头', '默认终端', '统计行']
   const missing = names.filter(name => cardOf(source, name) === '')
-  check(`${mode}：六张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
+  check(`${mode}：七张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
+}
+
+console.log('\n1.1 统计行卡：说清"不撒谎"与作用范围，且只有一个开关')
+for (const [mode, source] of Object.entries(html)) {
+  const card = cardOf(source, '统计行')
+  const body = bodyOf(card)
+  const text = textOf(body)
+  const head = textOf(headerOf(card))
+  check(`${mode}：说清"会凑成 100 就继续加位"这条不撒谎规则`,
+    text.includes('不撒谎') && text.includes('99.9999%'))
+  check(`${mode}：说清口径与官方一致（三个桶）`,
+    text.includes('缓存读 ÷（未缓存输入 + 缓存读 + 缓存写）'), text)
+  check(`${mode}：说清只改输入框下面那一行（弹窗不动 + 同步无障碍名字）`,
+    text.includes('每轮用量弹窗') && text.includes('保持官方原样') && text.includes('无障碍名字'))
+  // 0.7.0 早期版本这里还有两个子开关（三位小数 / 加宽统计行）。撤掉加宽之后只剩一个功能，
+  // 就不该再有同义的子开关：**开关只能出现在标题行**，卡内只剩说明文字。
+  check(`${mode}：卡内没有第二个开关（开关只在标题行）、也没有撤掉的"加宽"字样`,
+    !body.includes('role="switch"') && !text.includes('加宽') && !text.includes('260px'), text)
+  check(`${mode}：概览行给出位数`,
+    head.includes('3 位小数'), head)
 }
 
 console.log('\n2. 右键菜单卡的标题行：只剩卡级开关，没有第二个入口')
@@ -183,7 +203,8 @@ console.log('\n3. 三档说明互斥：点哪档只显示哪档的正文')
   check('浏览器：只有浏览器那段',
     text.browser.includes('粘贴免授权、零配置')
     && !text.browser.includes('本插件完全不介入')
-    && !text.browser.includes('chrome://settings/content/clipboard'))
+    && !text.browser.includes('chrome://settings/content/clipboard'),
+    text.browser)
   check('自定义：自定义那段 + Chrome/Edge 与 Firefox 的授权说明 + chrome:// 提示',
     text.custom.includes('chrome://settings/content/clipboard')
     && text.custom.includes('Firefox：不允许网页静默读剪贴板')

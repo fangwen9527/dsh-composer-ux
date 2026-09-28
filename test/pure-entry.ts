@@ -101,7 +101,27 @@ export {
   scheduleRestart, servingPort, trustedRestartRequest,
 } from '../src/restart.ts'
 /** 「每一栏一个开关」的判据与总闸合成（两半共用，必须逐条钉住）。 */
-export { sectionEnabledOf, activeSections, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD, TERMINAL_ENABLED_FIELD } from '../src/settings-contract.ts'
+export { sectionEnabledOf, activeSections, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD, TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD } from '../src/settings-contract.ts'
+/**
+ * 「统计行」（0.7.0）的纯逻辑：小数语义 + 两个字符串变换 + 定位常量。
+ *
+ * 小数语义是这块能力里唯一会"静默算错"的地方（尤其"三位小数会不会把没满说成满"），
+ * 必须能在 node 里拿官方那段源码当基准逐例对；两个字符串变换决定了"改哪一处、
+ * 哪一处不许碰"，也要逐条钉住。DOM 那半见下一组出口。
+ */
+export {
+  HIT_DIGITS, STATS_ROOT_SELECTOR,
+  billedInputTokens, cacheHitDisplay, cacheHitText, rewriteCacheHitLabel, rewriteCacheHitText,
+  statsLineEnabled,
+} from '../src/client/stats-line.ts'
+/**
+ * 「统计行」的 DOM 助手（0.7.0）：定位那一行、改写那一段。
+ *
+ * 这个模块**不 import React**，顶层也不碰 `document`，所以测试可以喂它一棵"按官方源码
+ * 复刻的"假 DOM（`test/stats-dom.mjs`）——定位落空是**静默**的（什么都不发生，用户只看到
+ * "数字还是整数"），必须能在 node 里钉住。
+ */
+export { MAX_HOST_DEPTH, hostOf, rewriteCacheHit } from '../src/client/stats-dom.ts'
 /** 设置契约里那几个跨端常量（重启接口路径等）。 */
 export { REPO_URL, RESTART_API_PATH } from '../src/settings-contract.ts'
 /**
@@ -115,3 +135,32 @@ export {
   SETTINGS_LOCK_FILENAME, isProcessAlive, profileDirOfPatchPath, recoverStaleSettingsLock,
   staleLockDecision,
 } from '../src/settings-lock.ts'
+/**
+ * 「金额」（0.8.0）的纯逻辑：刊例价、峰谷判定、覆盖价语义、费用拆分与金额/Token 格式。
+ *
+ * 这块能力里最容易"静默算错"的是两处，所以每一处都要能在 node 里单独钉住：
+ *  1. **覆盖价下的币种折算** —— 出处实现是"先整体重建人民币档、美元再从人民币折算"；
+ *     写成"在美元列上套覆盖再折算"会差一个汇率（≈15 倍），而屏幕上只是个数字，看不出来。
+ *  2. **峰谷档位判定** —— 差一小时就是 2 倍价格。
+ * 因此 `test/pricing.mjs` 把出处实现（MIT，`dsh-plugin-usage-meter@1.9.1` 的
+ * `lib/client.js`）的那几个函数原样抄进去当基准，逐样本对拍。
+ */
+export {
+  CNY_PER_USD, DEFAULT_PRICING_MODEL, MODEL_ALIASES, PEAK_UTC_RANGES, PRICE_TABLE,
+  PRICE_VERIFIED_AT,
+  costBucketsOf, costOf, costPartsOf, formatMoney, formatTokens, isKnownModel, isPeakAt,
+  normalizeModel, parsePriceOverrides, resolvePrice,
+} from '../src/pricing.ts'
+/**
+ * 「金额」的**按 route 归因**（0.8.0）：会话事件折叠、桶运算、与官方投影的一致性判据。
+ *
+ * 这块逻辑落在宿主半（`session.events` 客户端读不到），但规则本身是纯函数，必须能在 node 里
+ * 单独钉住 —— 尤其两条：**同一 `(turn, step)` 的上报是累计值、要相减**（不减就重复计费），
+ * 以及 **usage 归属它之前最近一条 `request/header`**（归错就把 Zen 的花费记到官方头上）。
+ */
+export {
+  UNKNOWN_ROUTE, addBuckets, agreesWithProjection, bucketTotal, foldSessionUsage,
+  subBuckets, zeroBuckets,
+} from '../src/usage-fold.ts'
+/** 「按 route 分列」接口路径（宿主半注册、客户端半调用）。 */
+export { USAGE_API_PATH } from '../src/settings-contract.ts'

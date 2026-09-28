@@ -54,13 +54,41 @@ if (pages !== undefined) {
       `live ${Object.keys(era.table).join(',')} vs builtin ${Object.keys(builtin).join(',')}`)
     const six = side => [side.peak.cny.miss, side.peak.cny.hit, side.peak.cny.out,
       side.offPeak.cny.miss, side.offPeak.cny.hit, side.offPeak.cny.out].map(Number)
+    const sixUsd = side => [side.peak.usd.miss, side.peak.usd.hit, side.peak.usd.out,
+      side.offPeak.usd.miss, side.offPeak.usd.hit, side.offPeak.usd.out].map(Number)
     for (const model of Object.keys(builtin)) {
       const live = era.table[model]
       if (live === undefined) { line(`${model} 在实时页里存在`, false); continue }
-      const same = JSON.stringify(six(live)) === JSON.stringify(six(builtin[model]))
-      line(`${model} 人民币六格（峰 miss/hit/out · 谷 miss/hit/out）与实时页一致`, same,
-        same ? `live = ${six(live).join(' / ')}` : `live ${six(live)} vs written ${six(builtin[model])}`)
+      const sameCny = JSON.stringify(six(live)) === JSON.stringify(six(builtin[model]))
+      line(`${model} 人民币六格（峰 miss/hit/out · 谷 miss/hit/out）与中文页一致`, sameCny,
+        sameCny ? `live = ${six(live).join(' / ')}` : `live ${six(live)} vs written ${six(builtin[model])}`)
+      // 美元列来自**英文页**：中文页与英文页是两页，只对一页等于只验一半。
+      const sameUsd = JSON.stringify(sixUsd(live)) === JSON.stringify(sixUsd(builtin[model]))
+      line(`${model} 美元六格与英文页一致`, sameUsd,
+        sameUsd ? `live = ${sixUsd(live).join(' / ')}` : `live ${sixUsd(live)} vs written ${sixUsd(builtin[model])}`)
+      // 官方规则：高峰单价 = 谷价 × 2（三个桶都要成立）。写死的表也必须守这条。
+      const doubled = [[live.peak.cny.miss, live.offPeak.cny.miss], [live.peak.cny.hit, live.offPeak.cny.hit],
+        [live.peak.cny.out, live.offPeak.cny.out], [live.peak.usd.miss, live.offPeak.usd.miss],
+        [live.peak.usd.hit, live.offPeak.usd.hit], [live.peak.usd.out, live.offPeak.usd.out]]
+      line(`${model} 高峰价 = 谷价 × 2（币种两列共六个桶）`, doubled.every(([peak, off]) => Math.abs(peak - off * 2) < 1e-9),
+        doubled.map(([peak, off]) => `${peak}/${off}`).join(' '))
     }
+    // 0.10.0 修的那一处：**两列都是官方原值**，谁也不由谁按固定汇率折算
+    // （0.9.1 就是拿美元 ×6.82 凑人民币，于是 flash 显示 2.05 而不是官方 2）。
+    // 这里逐格检查"人民币 ÷ 汇率 ≠ 美元"：只要有一格恰好等于折算值，就说明有人又把它算回去了。
+    const rate = pricing.CNY_PER_USD
+    const crossed = []
+    for (const [model, sides] of Object.entries(builtin)) {
+      for (const [tier, side] of Object.entries(sides)) {
+        for (const bucket of ['miss', 'hit', 'out']) {
+          const cny = Number(side.cny[bucket])
+          const usd = Number(side.usd[bucket])
+          if (cny > 0 && Math.abs(cny / rate - usd) < 1e-6) crossed.push(`${model}.${tier}.${bucket}：${cny}/${rate} ≈ ${usd}`)
+        }
+      }
+    }
+    line('写死的两列不是互相折算的（没有一格满足"人民币 ÷ 汇率 = 美元"）', crossed.length === 0,
+      crossed.length === 0 ? `口径：官方页两列各自给原值（汇率常量 ${rate} 只用于第三方价目的展示折算）` : crossed.join('；'))
   }
 }
 

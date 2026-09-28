@@ -545,6 +545,27 @@ function invalidateProviderPrices(): void {
 }
 
 /**
+ * 「金额规则变了」的失效回调注册表（模块级，理由同上：写的人与读的人在不同 inject 作用域）。
+ *
+ * 注册方是用量路由（它持有 `moneyRules` 与折叠缓存），触发方是同步路由与自动同步。
+ * **为什么不能只靠设置变更事件**：0.1.7 的 `settings/document-updated` 只在 `describe()` 里
+ * 比对 raw 变化后发出，而我们自己 `mutate` 写设置时并不调 `describe()` —— 设置页没开着时
+ * （自动同步就是这种情形）事件不会发，金额会停在旧价格档上而界面上看不出来。
+ */
+const moneyInvalidators = new Set<() => void>()
+
+/** 通知所有失效回调（单个回调抛错不影响别人，也绝不冒泡给出网路径）。 */
+function invalidateMoney(): void {
+  for (const invalidate of moneyInvalidators) {
+    try {
+      invalidate()
+    } catch (error: unknown) {
+      console.warn('[composer-ux] 金额规则失效回调出错', error)
+    }
+  }
+}
+
+/**
  * 官方信任关卡：`webServer` 可以绑 `0.0.0.0`（`webserver/src/index.ts` 的 bind host），
  * 所以**每条自己开的路由**都要先问 `connection.requestRejection(request)` ——
  * 它同时管 Host/Origin 围栏（防 DNS rebinding、跨站）与浏览器登录令牌。
@@ -1115,21 +1136,35 @@ export function apply(ctx: Context, config?: unknown): void {
     }) as never)
 
     /**
-     * 金额设置一变：重读规则 + **把折叠缓存整份作废**。
+     * 金额规则一变就要跑的那套失效（重读规则 + 作废第三方价目缓存 + 作废折叠缓存）。
      *
-     * 为什么必须作废而不是"下次自然会重折"：折叠的水位是按 `seq` 去重的，改规则不会让旧事件
-     * 重折一遍 —— 金额会一直停在旧规则上，而且界面上完全看不出来（2026-09-29 设计时明确
-     * 记下这条）。同步按钮写完价目后也会走这里（它写的是同一个命名空间）。
+     * ⚠️ **不能只靠设置变更事件**（2026-09-29 复查时发现）：0.1.7 的
+     * `settings/document-updated` 只在 `describe()` 里比对 raw 变化后发出
+     * （`packages/settings/settings/src/index.ts`），而**我们自己**用 `mutate` 写设置时并不调
+     * `describe()` —— 设置页开着时它会被界面的刷新顺带触发，但**设置页没开着**（典型场景：
+     * 后台的「自动同步官方价」跑完）那条事件根本不会发。而折叠缓存是按 `seq` 去重的，
+     * 改规则不会让旧事件重折 —— 金额会静静地停在旧价格档上，界面上完全看不出来。
+     *
+     * 所以：**写完设置的人自己通知失效**（见模块级 `invalidateMoney`），事件只是补充。
      */
-    const onMoneySettingsUpdated = (ns: unknown): void => {
-      if (ns !== NAMESPACE) return
+    const onMoneySettingsUpdated = (): void => {
       readMoneySettings()
       invalidateProviderPrices()
       usageCache.clear()
     }
     for (const event of ['settings/updated', 'settings/document-updated']) {
-      usageCtx.on?.(event as never, onMoneySettingsUpdated as never)
+      usageCtx.on?.(event as never, ((ns: unknown): void => {
+        if (ns !== NAMESPACE) return
+        onMoneySettingsUpdated()
+      }) as never)
     }
+    // 登记给同步路由用（模块级注册表，因为它俩不在同一个 inject 闭包里）。
+    usageCtx.effect(() => {
+      moneyInvalidators.add(onMoneySettingsUpdated)
+      return () => {
+        moneyInvalidators.delete(onMoneySettingsUpdated)
+      }
+    }, 'composer-ux: 金额规则失效登记')
 
     /** 当前生效的用户覆盖价（读不到就当没填：一次设置读失败不该把金额算成全 0）。 */
     const readOverrides = (): PriceOverrideTable | undefined => {
@@ -1337,12 +1372,14 @@ export function apply(ctx: Context, config?: unknown): void {
       const currentTable = eraAt(fetchedAt, existing).table
       if (samePriceTable(currentTable, era.table)) {
         const saved = await writeSynced({ ...synced, fetchedAt })
+        if (saved) invalidateMoney()
         return { ok: true, changed: false, fetchedAt, saved, message: '官方价与当前生效的档位一致，没有新增价格档' }
       }
       // 新档只保留最近 20 个：设置文档不该无限长，而"比 20 次调价还早"的档
       // 早就在编译进去的三档里了。
       const eras = [...existing, era].slice(-20)
       const saved = await writeSynced({ ...synced, fetchedAt, eras })
+      if (saved) invalidateMoney()
       if (!saved) {
         return { ok: false, message: '设置服务不可写', error: '设置服务不可写，新价格档没有保存（本地价目未改动）' }
       }
@@ -1385,6 +1422,7 @@ export function apply(ctx: Context, config?: unknown): void {
       }
       invalidateProviderPrices()
       const saved = await writeSynced({ ...readSynced(), modelsDevAt: fetchedAt, modelsDevCount: models })
+      invalidateMoney()
       return {
         ok: true,
         providers: Object.keys(providers).length,

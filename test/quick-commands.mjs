@@ -1558,5 +1558,32 @@ console.log('12. 孤儿写入锁：判据与回收')
   rmSync(dir, { recursive: true, force: true })
 }
 
+console.log('13. 金额规则失效：写完设置的人自己通知，不靠设置变更事件（0.10.0 复查发现的真问题）')
+{
+  // 为什么这里是**源码级**护栏而不是行为断言：触发它的是「同步价目」那条宿主路由，
+  // 而那条路会真的出网抓官方页（`fetchOfficialPages` 没有注入点，测试不该打网络）。
+  // 行为面由 `test/pricing.mjs` / `test/price-sync.mjs` 覆盖，这里只钉住"接线"：
+  // 一旦谁把 `invalidateMoney()` 从同步路径里删掉，这条就红。
+  const host = readFileSync('src/host.ts', 'utf8')
+  check('模块级失效注册表 + 通知函数都在（跨 inject 作用域只能这么传）',
+    host.includes('const moneyInvalidators = new Set<() => void>()')
+    && host.includes('function invalidateMoney(): void {')
+    && host.includes('for (const invalidate of moneyInvalidators)'))
+  check('通知函数逐个 try：一个回调抛错不影响别人，也不冒泡到出网路径',
+    /function invalidateMoney\(\): void \{[\s\S]{0,300}catch \(error: unknown\)/.test(host))
+  const calls = host.match(/if \(saved\) invalidateMoney\(\)/g) ?? []
+  check('官方价同步的两条收尾（有变化 / 无变化）写完设置都通知失效', calls.length === 2, String(calls.length))
+  check('第三方价目同步写盘后也通知失效',
+    /invalidateProviderPrices\(\)[\s\S]{0,220}invalidateMoney\(\)/.test(host))
+  check('用量路由把失效回调登记进注册表，并在回收时摘掉（reload 不残留）',
+    host.includes('moneyInvalidators.add(onMoneySettingsUpdated)')
+    && host.includes('moneyInvalidators.delete(onMoneySettingsUpdated)')
+    && /moneyInvalidators\.add\(onMoneySettingsUpdated\)[\s\S]{0,200}moneyInvalidators\.delete\(onMoneySettingsUpdated\)/.test(host))
+  check('失效回调做三件事：重读规则 / 作废第三方价目缓存 / 作废折叠缓存',
+    /const onMoneySettingsUpdated = \(\): void => \{[\s\S]{0,200}readMoneySettings\(\)[\s\S]{0,120}invalidateProviderPrices\(\)[\s\S]{0,120}usageCache\.clear\(\)/.test(host))
+  check('文档里写清了"不能只靠事件"的理由（0.1.7 的事件只在 describe 里发）',
+    host.includes('settings/document-updated') && host.includes('describe()'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

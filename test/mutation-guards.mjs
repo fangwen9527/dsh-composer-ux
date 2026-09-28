@@ -654,6 +654,14 @@ const cases = [
     test: 'test/price-sync.mjs',
     expect: '开关没开（undefined / false / 字符串 / 1）一律不跑',
   },
+  {
+    name: 'BZ 官方价同步完不通知金额规则失效（后台自动同步后金额停在旧价格档，界面上看不出来）',
+    file: 'src/host.ts',
+    from: "        const saved = await writeSynced({ ...synced, fetchedAt })\n        if (saved) invalidateMoney()\n        return { ok: true, changed: false, fetchedAt, saved, message: '官方价与当前生效的档位一致，没有新增价格档' }",
+    to: "        const saved = await writeSynced({ ...synced, fetchedAt })\n        return { ok: true, changed: false, fetchedAt, saved, message: '官方价与当前生效的档位一致，没有新增价格档' }",
+    test: 'test/quick-commands.mjs',
+    expect: '官方价同步的两条收尾（有变化 / 无变化）写完设置都通知失效',
+  },
 ]
 
 let allBit = true

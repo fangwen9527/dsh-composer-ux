@@ -61,6 +61,16 @@
 
 ### 内部
 
+- **写完设置的人自己通知失效，不靠设置变更事件**（复查时发现的静默错处）：0.1.7 的
+  `settings/document-updated` 只在 `describe()` 里比对 raw 变化后发出
+  （`packages/settings/settings/src/index.ts`），而我们自己用 `mutate` 写设置时**并不调
+  `describe()`** —— 设置页开着时会被界面刷新顺带触发，但**设置页没开着**（典型场景：后台的
+  「自动同步官方价」跑完）那条事件根本不会发；而折叠缓存按 `seq` 去重，改规则不会让旧事件重折，
+  于是金额会**静静地停在旧价格档**上、界面上完全看不出来。现在：模块级
+  `moneyInvalidators` 注册表 + `invalidateMoney()`，用量路由登记回调（回收时摘掉），
+  `syncOfficial()` 的两条收尾与 `syncModelsDev()` 写盘后都直接通知失效；事件只作补充。
+  测试见 `test/quick-commands.mjs` 第 13 节（**源码级**护栏：那条路由会真出网、测试不该打网络），
+  变异条目 `BZ` 保证它咬得住。
 - `pricing.ts` 的 `resolvePrice(model, options)` 增加 `provider` / `era` / `providers` / `holidays`，
   返回体增加 `era` / `source` / `unpriced` / `provider`；新增 `eraAt` / `eraIdAt` / `eraById`、
   `isPeakAt` 的节假日与周末边界、`peakPhaseAt`（切换点 + 倒计时）、`formatCountdown`、

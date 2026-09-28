@@ -2,9 +2,11 @@
  * dsh-composer-ux 公共契约：设置字段、默认值、展示元数据。
  * 本模块必须零 import（host 与 client 两半共用，跨端不共享任何运行时身份）。
  *
- * 唯一的例外是 `./terminal/` 下那几个**纯函数**模块（零外部依赖、无 DOM、无 node API），
- * 「默认终端」的字段与判定放在那里，这里只把它们并进设置契约。
+ * 唯一的例外是几个**纯函数**模块（零外部依赖、无 DOM、无 node API）：
+ * `./terminal/` 下那几个（「默认终端」的字段与判定）与 `./pricing.ts`（金额的刊例价与覆盖价
+ * 语义）。两者都满足"两半共用同一份规则"的要求，且不引入任何运行时身份。
  */
+import { parsePriceOverrides, type PriceOverrideTable } from './pricing.ts'
 import {
   DEFAULT_TERMINAL_MODE, TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD,
   TERMINAL_EFFECTIVE_FIELD, TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -85,6 +87,19 @@ export const TERMINAL_ENABLED_FIELD = 'terminalEnabled'
 
 /** 「统计行」栏开关：是否把输入框下方那行的缓存命中率改成三位小数。 */
 export const STATS_ENABLED_FIELD = 'statsEnabled'
+
+/**
+ * 「金额」栏（0.9.1）：用户覆盖价（按模型给高峰/空闲两档的三项单价）。
+ *
+ * 为什么是**一个**字段而不是每格一个字段：模型名是用户自己加的（中转/自建路由的名字
+ * 事先不知道），做成 `priceFlashPeakMiss` 这种平铺字段就没法覆盖任意模型；而 schemastery
+ * 对未声明键原样放行、设置服务只要求"路径上的节点 volatile"，所以整张表存成一个键最省事，
+ * 也最容易整体备份/清空（键消失 = 全部回到官方价）。
+ *
+ * 值不符合形状时**整项丢掉**（`parsePriceOverrides`）：与其它字段同一态度，
+ * 一个手抖的逗号不该把整页设置打成默认。
+ */
+export const PRICE_OVERRIDES_FIELD = 'priceOverrides'
 
 /** 键位字段名。 */
 export const SEND_KEY_FIELD = 'sendKey'
@@ -646,6 +661,7 @@ export type SettingsField =
   | typeof TERMINAL_MODE_FIELD
   | typeof TERMINAL_BASH_PATH_FIELD
   | typeof STATS_ENABLED_FIELD
+  | typeof PRICE_OVERRIDES_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -740,6 +756,14 @@ export interface ComposerUxSettings {
    * 这一栏是新能力，用户要求装完即生效，所以按普通布尔字段处理（同 `headerEnabled`）。
    */
   statsEnabled: boolean
+  /**
+   * 「金额」栏（0.9.1）：用户覆盖价 —— 按模型给高峰/空闲两档的三项单价（人民币 / 1M tokens）。
+   *
+   * `undefined` = 全部沿用内置刊例价（**默认**，也是"清空"的终态）。键是模型名：既可以是
+   * 内置的三个，也可以用户自己加（中转/自建路由的名字，那些名字不在刊例表里，
+   * 不覆盖就只能按 `deepseek-flash` 估价）。
+   */
+  priceOverrides?: PriceOverrideTable
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -784,6 +808,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   // 「统计行」（0.7.0）：默认开 —— 用户 2026-09-28 要的是"装完立刻看得到效果"，
   // 所以这一栏不参与下面那套"碰过才开"的迁移（见 STATS_ENABLED_FIELD 上方的说明）。
   statsEnabled: true,
+  // 「金额」（0.9.1）：默认没有覆盖价 = 全部按内置刊例价估算（与 0.8.0 的行为一致）。
+  priceOverrides: undefined,
 }
 
 /**
@@ -1023,5 +1049,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     // 「统计行」（0.7.0）：普通布尔字段、默认开 —— **不走** sectionEnabledOf（那套是给
     // 已发布的五栏做"碰过才开"迁移用的；新栏没有痕迹可依，且用户要求默认生效）。
     statsEnabled: asBool(STATS_ENABLED_FIELD),
+    // 「金额」（0.9.1）：整张覆盖价表，形状不对的项由 parsePriceOverrides 逐项丢掉。
+    priceOverrides: parsePriceOverrides(source[PRICE_OVERRIDES_FIELD]),
   }
 }

@@ -1,5 +1,5 @@
 /**
- * 「按 route 分列」的纯逻辑：把一个会话的事件流折成 per-`(provider, model)` 的 token 桶。
+ * 「按 route 分列」的纯逻辑：把一个会话的事件流折成 per-`(provider, model, 档位)` 的 token 桶。
  *
  * ## 为什么这件事只能在宿主半做
  *
@@ -23,13 +23,24 @@
  *     `stream[i].type === 'chunk' && stream[i].chunk.type === 'usage'` 里的**最后一条**
  *     （官方 `lastAssistantStreamChunk(stream, 'usage')` 就是从后往前找这一条）
  *
- * ## 三条口径（每条错了都会静默算错）
+ * ## 四条口径（每条错了都会静默算错）
  *
  * 1. **归属**：一条 usage 记在它**之前最近一条** `request/header` 的 `(provider, model)` 头上。
  * 2. **同一步是替换而不是累加**：同一 `(turn, step)` 再次上报时要用"新值 − 旧值"替换旧值
  *    （官方 `addReplacing`）。直接累加会把同一步重复计费，直接覆盖又会丢掉前一次那份。
  * 3. **重试要重新开始记**：`llm/retry-started` 命中同一步时清掉替换槽（官方做法），
  *    这样重试那次的用量是**加**上去而不是减出来的。
+ * 4. **峰谷按请求时刻分档**（0.9.1 起）：官方按请求发生时刻计费（高峰价是空闲价的 2 倍），
+ *    所以一条 usage 的档位取"它那条 `request/header` 的时间"（没有就用事件自己的 `time`，
+ *    两者都没有则把 `Number.NaN` 交给调用方兜底）。**同一步后续的替换增量沿用该步第一次
+ *    判定的档位** —— 否则一次跨越 09:00 的请求会被拆成两档，凭空多出一个"高峰用量"。
+ *    档位判定函数由调用方注入（{@link PeakAt}），本模块不 import 任何东西。
+ *
+ * ## 增量折叠（{@link createUsageFolder}）
+ *
+ * 折叠是**有状态**的：宿主半把它按会话缓存起来，用 `session/event` 增量喂事件，
+ * 这样金额胶囊每次取价是 O(1)，不必反复重读整份会话日志（`readSession` 会深拷贝全部事件）。
+ * `feed()` 按 `seq` 幂等：重复喂同一批事件不会重复计费（这一点是缓存能安全复用的前提）。
  *
  * ## 出处
  *
@@ -54,24 +65,49 @@ export interface UsageBuckets {
   readonly cacheWriteTokens: number
 }
 
-/** 一条 route 的用量：`(provider, model)` 一对即一条。 */
+/**
+ * 一条 route 的用量：`(provider, model, 档位)` 一组即一条 —— 峰谷**拆开**成两条。
+ *
+ * 为什么拆：高峰价是空闲价的 2 倍，合成一条就没法按不同单价计价了；而"这一条到底按哪个价
+ * 算的"恰恰是用户要看的东西（`panel` 会把两档分行显示）。
+ */
 export interface RouteUsage {
   readonly provider: string
   readonly model: string
+  /** 高峰档（true）还是空闲档（false）。 */
+  readonly peak: boolean
   readonly usage: UsageBuckets
+}
+
+/** 两档各自的小计。 */
+export interface TierUsage {
+  readonly peak: UsageBuckets
+  readonly offPeak: UsageBuckets
 }
 
 /** 一个会话折出来的结果。 */
 export interface SessionUsageFold {
   /** 全部 route 相加（应当等于官方 `tokenUsage` 投影的四个桶）。 */
   readonly total: UsageBuckets
-  /** 按 token 总量从多到少排好的 route 列表。 */
+  /** 高峰 / 空闲两档的小计（逐项相加恰好等于 {@link total}）。 */
+  readonly tiers: TierUsage
+  /** 按 token 总量从多到少排好的 route 列表（峰谷已拆开）。 */
   readonly routes: readonly RouteUsage[]
   /** 折过的事件条数（诊断用：分列出不来时，界面靠它区分"没事件"和"形状不对"）。 */
   readonly events: number
   /** 真正折到 usage 的样本条数（诊断用）。 */
   readonly samples: number
 }
+
+/**
+ * 峰谷判定：给一个毫秒时刻，回它算不算高峰。
+ *
+ * **由调用方注入**而不是在这里 import 一份判定规则：规则与刊例价同源（`pricing.ts` 的
+ * `isPeakAt`，UTC 周一至周五 01–04、06–10），但本模块要能在 node 里用**定死的时刻**
+ * 逐例钉住，也要让宿主半对"没有时间戳"自己决定兜底（它退回"现在"）。
+ * 事件里既没有 `request/header` 时间、自身也没有 `time` 时传 `Number.NaN`。
+ */
+export type PeakAt = (timeMs: number) => boolean
 
 /** 认不出 provider/model 时用的标签（客户端会把它标出来，不假装知道）。 */
 export const UNKNOWN_ROUTE = '未知'
@@ -125,6 +161,18 @@ function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
+/** 事件信封上的 `time`（毫秒）；没有/不是有限数就是 `NaN`（交给 {@link PeakAt} 兜底）。 */
+function timeOf(event: Record<string, unknown>): number {
+  const time = event.time
+  return typeof time === 'number' && Number.isFinite(time) ? time : Number.NaN
+}
+
+/** 事件信封上的 `seq`（幂等去重与"喂到哪了"都靠它）；不是有限数就是 `undefined`。 */
+function seqOf(event: Record<string, unknown>): number | undefined {
+  const seq = event.seq
+  return typeof seq === 'number' && Number.isFinite(seq) ? seq : undefined
+}
+
 /** 从 `request/header` 取 provider/model。 */
 function headerOf(event: Record<string, unknown>): { provider: string; model: string } | undefined {
   if (event.type !== 'request/header') return undefined
@@ -169,58 +217,264 @@ function bucketsOf(usage: unknown): UsageBuckets {
 }
 
 /**
- * 把一个会话的事件流折成 per-route 用量。
+ * 增量折叠器：宿主半按会话缓存一个，用 `session/event` 增量喂。
  *
- * @param events 会话事件（`sessionQuery.readSession(sessionId).events`）；形状不对的条目直接跳过。
- * @returns 各 route 的用量（按 token 总量降序）、总和与诊断计数。
+ * 与一次性版（{@link foldSessionUsage}）**同一份实现**：后者只是"新建 + 喂一批 + 取快照"，
+ * 免得两套折叠逻辑日后各自漂移（漂移的后果是"面板与胶囊数字不一致"这种最难查的问题）。
  */
-export function foldSessionUsage(events: readonly unknown[]): SessionUsageFold {
-  const byRoute = new Map<string, { provider: string; model: string; usage: UsageBuckets }>()
+export interface UsageFolder {
+  /** 喂一批事件（按 `seq` 幂等：已折过的不会再折一遍）。 */
+  feed(events: readonly unknown[]): void
+  /** 当前结果快照（每次调用新建数组/对象，调用方可以随便持有）。 */
+  snapshot(): SessionUsageFold
+}
+
+/**
+ * 造一个增量折叠器。
+ * @param peakAt 峰谷判定（见 {@link PeakAt}）；宿主半传 `isPeakAt` 包装，测试传定死的表。
+ * @returns 折叠器：`feed()` 可反复调用，`snapshot()` 随时取结果。
+ */
+export function createUsageFolder(peakAt: PeakAt): UsageFolder {
+  const byRoute = new Map<string, { provider: string; model: string; peak: boolean; usage: UsageBuckets }>()
   let provider = UNKNOWN_ROUTE
   let model = UNKNOWN_ROUTE
-  let last: { turn: unknown; step: unknown; buckets: UsageBuckets } | null = null
+  /** 最近一条 `request/header` 的时刻（请求发出时刻 = 官方计费时刻）。 */
+  let headerTime = Number.NaN
+  let last: { turn: unknown; step: unknown; buckets: UsageBuckets; peak: boolean } | null = null
   let total = zeroBuckets()
+  let tierPeak = zeroBuckets()
+  let tierOffPeak = zeroBuckets()
+  let events = 0
   let samples = 0
+  /** 已经折到的事件 seq：重复喂同一批（缓存复用、重读日志）不会重复计费。 */
+  let lastSeq: number | undefined
 
-  for (const raw of events) {
-    if (typeof raw !== 'object' || raw === null) continue
-    const event = raw as Record<string, unknown>
-    const header = headerOf(event)
-    if (header !== undefined) {
-      provider = header.provider
-      model = header.model
-      continue
+  return {
+    feed(batch: readonly unknown[]): void {
+      for (const raw of batch) {
+        if (typeof raw !== 'object' || raw === null) continue
+        const event = raw as Record<string, unknown>
+        const seq = seqOf(event)
+        if (seq !== undefined && lastSeq !== undefined && seq <= lastSeq) continue
+        if (seq !== undefined) lastSeq = seq
+        events += 1
+
+        const header = headerOf(event)
+        if (header !== undefined) {
+          provider = header.provider
+          model = header.model
+          headerTime = timeOf(event)
+          continue
+        }
+        // 重试：同一步重新开始记（否则重试那次的用量会在替换时被减掉）。
+        if (event.type === 'llm/retry-started') {
+          const data = event.data as { turn?: unknown; step?: unknown } | undefined
+          if (last !== null && data?.turn === last.turn && data?.step === last.step) last = null
+          continue
+        }
+        const usage = usageOf(event)
+        if (usage === undefined) continue
+        const data = event.data as { turn?: unknown; step?: unknown }
+        const buckets = bucketsOf(usage)
+        samples += 1
+        // 同一步再次上报 = 替换旧值（官方 addReplacing）：这次的值减去上一次那一步的值。
+        const previous = last !== null && last.turn === data.turn && last.step === data.step ? last : undefined
+        if (previous !== undefined && sameBuckets(previous.buckets, buckets)) continue
+        const delta = previous === undefined ? buckets : subBuckets(buckets, previous.buckets)
+        // 档位只在**这一步第一次上报**时判一次，后续替换增量沿用同一个档位（见文件头第 4 条）。
+        const slotPeak = previous?.peak
+          ?? peakAt(Number.isFinite(headerTime) ? headerTime : timeOf(event))
+        last = { turn: data.turn, step: data.step, buckets, peak: slotPeak }
+        if (isZero(delta)) continue
+        const key = `${provider}\u0000${model}\u0000${slotPeak ? 'peak' : 'offPeak'}`
+        const row = byRoute.get(key) ?? { provider, model, peak: slotPeak, usage: zeroBuckets() }
+        row.usage = addBuckets(row.usage, delta)
+        byRoute.set(key, row)
+        total = addBuckets(total, delta)
+        if (slotPeak) tierPeak = addBuckets(tierPeak, delta)
+        else tierOffPeak = addBuckets(tierOffPeak, delta)
+      }
+    },
+    snapshot(): SessionUsageFold {
+      const routes = [...byRoute.values()]
+        .filter(row => !isZero(row.usage))
+        .sort((left, right) => bucketTotal(right.usage) - bucketTotal(left.usage))
+      return {
+        total,
+        tiers: { peak: tierPeak, offPeak: tierOffPeak },
+        routes,
+        events,
+        samples,
+      }
+    },
+  }
+}
+
+/**
+ * 把一个会话的事件流折成 per-route 用量（一次性）。
+ *
+ * @param events 会话事件（`sessionQuery.readSession(sessionId).events`）；形状不对的条目直接跳过。
+ * @param peakAt 峰谷判定（见 {@link PeakAt}）；宿主半传 `isPeakAt` 包装，测试传定死的表。
+ * @returns 各 route 的用量（按 token 总量降序）、总和与诊断计数。
+ */
+export function foldSessionUsage(events: readonly unknown[], peakAt: PeakAt): SessionUsageFold {
+  const folder = createUsageFolder(peakAt)
+  folder.feed(events)
+  return folder.snapshot()
+}
+
+/** 空折（没有任何可归因用量）。 */
+export function emptyFold(): SessionUsageFold {
+  return {
+    total: zeroBuckets(),
+    tiers: { peak: zeroBuckets(), offPeak: zeroBuckets() },
+    routes: [],
+    events: 0,
+    samples: 0,
+  }
+}
+
+/** {@link UsageCache.sync} 的结果。 */
+export interface UsageCacheOutcome {
+  readonly fold: SessionUsageFold
+  /** `sessionQuery` = 这一轮完整读过日志；`cache` = 直接用缓存（含"日志读不到"的兜底）。 */
+  readonly source: 'sessionQuery' | 'cache'
+}
+
+/**
+ * 按会话缓存的增量折叠器（宿主半用）。
+ *
+ * 为什么需要它：金额胶囊要跟着流式用量刷新，而 `sessionQuery.readSession()` 会深拷贝整份日志
+ * 并重新校验（几千条事件要几百毫秒），不能每次取价都重读。
+ *
+ * 两条腿走路：
+ *   · {@link UsageCache.event} —— 会话事件订阅，一条条喂进对应会话的折叠器，取价时是 O(1)；
+ *   · {@link UsageCache.sync} —— 首次（或发现落后）时完整读一次日志播种。
+ *
+ * ## 播种窗口：这里最贵的错误是"静默少算"
+ *
+ * `UsageFolder.feed()` 的去重是 **seq 水位**式的：一旦折过 seq=12 的事件，再喂 seq=5 的会被
+ * 整条跳过。而播种要先 `await read()`（深拷贝整份日志，几百毫秒），这期间追加的事件订阅会
+ * 先看到。若那时直接折进去，水位就跳到了快照之后 —— 快照里那些**中间**事件被永久跳过，
+ * 金额少算而且再也补不回来（`feed()` 是幂等的，补也补不进去）。
+ *
+ * 所以播种期间订阅来的事件进 `buffered`，读完快照后按 seq 升序补上。`test/usage-fold.mjs`
+ * 第 8 节用一个"读的时候顺手追加两条事件"的假 read 把这条钉住。
+ *
+ * @param peakAt 峰谷判定（见 {@link PeakAt}）。
+ * @param options.maxSessions 同时保留几个会话（默认 8；超出按最先被问的顺序淘汰）。
+ */
+export interface UsageCache {
+  /** 订阅到一条事件；**没被问过的会话直接忽略**（不占内存、也不做无用折叠）。 */
+  event(sessionId: string, event: unknown): void
+  /**
+   * 同步一个会话到最新，并取出快照。
+   * @param sessionId 会话 id。
+   * @param liveSeq 活会话的 `seq`（= 已写入条数，所以最后一条事件的 seq 是它减一）；
+   *   归档会话拿不到就传 `undefined`，此时只在首次同步时读一次。
+   * @param read 完整读一次会话事件；**允许抛**（读不到就用已有缓存，绝不冒泡给路由）。
+   * @returns 折叠快照与这一轮事件来源。
+   */
+  sync(
+    sessionId: string,
+    liveSeq: number | undefined,
+    read: () => Promise<readonly unknown[]>,
+  ): Promise<UsageCacheOutcome>
+}
+
+/** 内部行状态。 */
+interface CacheRow {
+  readonly folder: UsageFolder
+  /** 已折到的事件 seq；`undefined` = 还没成功播种过（下次仍要读）。 */
+  lastSeq: number | undefined
+  /** 正在播种：订阅来的事件先攒着（见 {@link UsageCache} 的"播种窗口"）。 */
+  seeding: boolean
+  buffered: unknown[]
+}
+
+/**
+ * 造一个按会话缓存的增量折叠器。
+ * @param peakAt 峰谷判定。
+ * @param options.maxSessions 同时保留几个会话（默认 8）。
+ * @returns 缓存；`event()` 可随时调，`sync()` 取快照并按需播种。
+ */
+export function createUsageCache(peakAt: PeakAt, options: { maxSessions?: number } = {}): UsageCache {
+  const rows = new Map<string, CacheRow>()
+  const maxSessions = options.maxSessions ?? 8
+  const trim = (): void => {
+    while (rows.size > maxSessions) {
+      // Map 保持插入顺序：最先被问的那个先淘汰（切会话时不会立刻丢掉上一个）。
+      const oldest = rows.keys().next().value
+      if (oldest === undefined) return
+      rows.delete(oldest)
     }
-    // 重试：同一步重新开始记（否则重试那次的用量会在替换时被减掉）。
-    if (event.type === 'llm/retry-started') {
-      const data = event.data as { turn?: unknown; step?: unknown } | undefined
-      if (last !== null && data?.turn === last.turn && data?.step === last.step) last = null
-      continue
+  }
+  const seqOf = (event: unknown): number | undefined => {
+    const seq = (event as { seq?: unknown } | null)?.seq
+    return typeof seq === 'number' && Number.isFinite(seq) ? seq : undefined
+  }
+  /** 把一批事件按 seq 升序喂进去（`feed()` 自己会跳过已折过的）。 */
+  const feedAll = (row: CacheRow, events: readonly unknown[]): void => {
+    if (events.length === 0) return
+    row.folder.feed(events)
+    for (const event of events) {
+      const seq = seqOf(event)
+      if (seq !== undefined) row.lastSeq = seq
     }
-    const usage = usageOf(event)
-    if (usage === undefined) continue
-    const data = event.data as { turn?: unknown; step?: unknown }
-    const buckets = bucketsOf(usage)
-    samples += 1
-    // 同一步再次上报 = 替换旧值（官方 addReplacing）：这次的值减去上一次那一步的值。
-    const previous = last !== null && last.turn === data.turn && last.step === data.step
-      ? last.buckets
-      : undefined
-    if (previous !== undefined && sameBuckets(previous, buckets)) continue
-    const delta = previous === undefined ? buckets : subBuckets(buckets, previous)
-    last = { turn: data.turn, step: data.step, buckets }
-    if (isZero(delta)) continue
-    const key = `${provider}\u0000${model}`
-    const row = byRoute.get(key) ?? { provider, model, usage: zeroBuckets() }
-    row.usage = addBuckets(row.usage, delta)
-    byRoute.set(key, row)
-    total = addBuckets(total, delta)
   }
 
-  const routes = [...byRoute.values()]
-    .filter(row => !isZero(row.usage))
-    .sort((left, right) => bucketTotal(right.usage) - bucketTotal(left.usage))
-  return { total, routes, events: events.length, samples }
+  return {
+    event(sessionId: string, event: unknown): void {
+      const row = rows.get(sessionId)
+      if (row === undefined) return
+      if (row.seeding) {
+        row.buffered.push(event)
+        return
+      }
+      feedAll(row, [event])
+    },
+    async sync(
+      sessionId: string,
+      liveSeq: number | undefined,
+      read: () => Promise<readonly unknown[]>,
+    ): Promise<UsageCacheOutcome> {
+      let row = rows.get(sessionId)
+      const behind = row === undefined
+        // 没成功播种过（首次或上次读失败）→ 必须再读。
+        || row.lastSeq === undefined
+        // `seq` 是"下一条的序号"，所以已写入的最后一条是 `liveSeq - 1`。
+        || (liveSeq !== undefined && liveSeq - 1 > row.lastSeq)
+      if (!behind) return { fold: row!.folder.snapshot(), source: 'cache' }
+
+      if (row === undefined) {
+        row = { folder: createUsageFolder(peakAt), lastSeq: undefined, seeding: true, buffered: [] }
+        rows.set(sessionId, row)
+        trim()
+      } else {
+        row.seeding = true
+      }
+      const seeding = row
+      let source: 'sessionQuery' | 'cache' = 'cache'
+      try {
+        const events = await read()
+        if (events.length > 0) {
+          feedAll(seeding, events)
+          source = 'sessionQuery'
+        }
+      } catch {
+        /* 读不到就用缓存里已有的那份（首帧时可能什么都没有，调用方如实回报空分列） */
+      }
+      // 播种结束：把期间攒下的事件按 seq 升序补上。
+      seeding.seeding = false
+      const tail = seeding.buffered
+      seeding.buffered = []
+      if (tail.length > 0) {
+        tail.sort((left, right) => (seqOf(left) ?? 0) - (seqOf(right) ?? 0))
+        feedAll(seeding, tail)
+      }
+      return { fold: seeding.folder.snapshot(), source }
+    },
+  }
 }
 
 /**

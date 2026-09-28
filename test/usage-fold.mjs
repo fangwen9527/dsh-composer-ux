@@ -71,17 +71,34 @@ const messageWithStream = (turn, step, usage, extraRecords = []) => ({
 const retry = (turn, step) => ({ type: 'llm/retry-started', data: { turn, step } })
 const usage = (inputTokens, outputTokens, cacheReadTokens = 0, cacheWriteTokens = 0) =>
   ({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens })
+/**
+ * 峰谷判定：本文件的老用例（1–6 节）只关心归属、差分与诊断计数，所以默认**全判空闲档**
+ * —— 那样每条 route 的桶与 0.8.0 完全一样，只有多出来的 `peak` 标记不同。
+ * 逐笔准时的用例（第 7 节）各传自己的判定。
+ */
+const offPeakOnly = () => false
+const fold = (events, peakAt = offPeakOnly) => pure.foldSessionUsage(events, peakAt)
+/** 给事件补上官方信封里的 `time`（毫秒）与 `seq`。 */
+const stamped = (event, time, seq) => ({ ...event, time, seq })
+/** 两个定死的时刻（UTC 02:00 = 高峰、UTC 12:00 = 空闲）。 */
+const T_PEAK = Date.UTC(2026, 8, 28, 2, 0)
+const T_OFF = Date.UTC(2026, 8, 28, 12, 0)
+/** 只按 UTC 小时判峰（比真规则窄一档，够用且与 `pricing.ts` 解耦）。 */
+const peakByUtc = ms => {
+  const hour = new Date(ms).getUTCHours()
+  return hour >= 1 && hour < 4
+}
 
 // ══════════════ 1. 空与单条 ══════════════════════════════════════════════════
 console.log('1. 基本折叠')
 {
-  const empty = pure.foldSessionUsage([])
+  const empty = fold([])
   check('空事件 → 全零、无 route',
     pure.bucketTotal(empty.total) === 0 && empty.routes.length === 0)
   check('零桶形状完整',
     JSON.stringify(pure.zeroBuckets()) === JSON.stringify({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }))
 
-  const one = pure.foldSessionUsage([header('deepseek-account', 'deepseek-flash'), attempt(1, 1, usage(100, 20, 30, 5))])
+  const one = fold([header('deepseek-account', 'deepseek-flash'), attempt(1, 1, usage(100, 20, 30, 5))])
   check('一条 usage → 一个 route',
     one.routes.length === 1 && one.routes[0].provider === 'deepseek-account' && one.routes[0].model === 'deepseek-flash')
   check('四个桶原样入账',
@@ -93,7 +110,7 @@ console.log('1. 基本折叠')
 // ══════════════ 2. 同一 (turn, step) 是累计值，必须相减 ═════════════════════════
 console.log('2. 同一步的累计上报（不减就会重复计费）')
 {
-  const folded = pure.foldSessionUsage([
+  const folded = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(100, 10)),
     attempt(1, 1, usage(100, 50)),   // 累计：这一步最终 100/50
@@ -104,7 +121,7 @@ console.log('2. 同一步的累计上报（不减就会重复计费）')
     JSON.stringify(folded.total))
   check('重复上报不产生第二条 route', folded.routes.length === 1)
 
-  const twoSteps = pure.foldSessionUsage([
+  const twoSteps = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(100, 10)),
     attempt(1, 2, usage(120, 30)),
@@ -112,7 +129,7 @@ console.log('2. 同一步的累计上报（不减就会重复计费）')
   check('不同 step 相加（100+120 / 10+30）',
     JSON.stringify(twoSteps.total) === JSON.stringify(usage(220, 40)), JSON.stringify(twoSteps.total))
 
-  const twoTurns = pure.foldSessionUsage([
+  const twoTurns = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(100, 10)),
     attempt(2, 1, usage(100, 10)),
@@ -121,7 +138,7 @@ console.log('2. 同一步的累计上报（不减就会重复计费）')
     twoTurns.total.inputTokens === 200, String(twoTurns.total.inputTokens))
 
   // `assistant/message` 与 `assistant/attempt` 是同一套差分口径
-  const mixed = pure.foldSessionUsage([
+  const mixed = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(100, 10)),
     message(1, 1, usage(100, 12)),
@@ -133,7 +150,7 @@ console.log('2. 同一步的累计上报（不减就会重复计费）')
 // ══════════════ 3. 归属：usage 记在它之前最近那条 request/header 头上 ════════════
 console.log('3. 按 route 归因')
 {
-  const folded = pure.foldSessionUsage([
+  const folded = fold([
     header('deepseek-account', 'deepseek-flash'),
     attempt(1, 1, usage(1000, 100)),
     header('go', 'deepseek-flash'),
@@ -154,21 +171,21 @@ console.log('3. 按 route 归因')
   check('按 token 总量降序（opencode-go > go > 官方）',
     folded.routes[0].provider === 'opencode-go' && folded.routes[2].provider === 'deepseek-account')
 
-  const beforeHeader = pure.foldSessionUsage([attempt(1, 1, usage(100, 10))])
+  const beforeHeader = fold([attempt(1, 1, usage(100, 10))])
   check('没有 request/header → 记成未知，不猜',
     beforeHeader.routes.length === 1
     && beforeHeader.routes[0].provider === pure.UNKNOWN_ROUTE
     && beforeHeader.routes[0].model === pure.UNKNOWN_ROUTE,
     JSON.stringify(beforeHeader.routes))
 
-  const partial = pure.foldSessionUsage([header('', ''), attempt(1, 1, usage(5, 5))])
+  const partial = fold([header('', ''), attempt(1, 1, usage(5, 5))])
   check('provider/model 为空串也记成未知', partial.routes[0].provider === pure.UNKNOWN_ROUTE)
 }
 
 // ══════════════ 4. 脏数据不许把数字算成 NaN ══════════════════════════════════
 console.log('4. 脏数据')
 {
-  const dirty = pure.foldSessionUsage([
+  const dirty = fold([
     null,
     42,
     'nope',
@@ -199,13 +216,13 @@ console.log('5. 桶运算与一致性判据')
     JSON.stringify(pure.subBuckets(b, a)) === JSON.stringify({ inputTokens: 9, outputTokens: 18, cacheReadTokens: 27, cacheWriteTokens: 36 }))
   check('bucketTotal 是四项之和', pure.bucketTotal(a) === 10)
 
-  const fold = pure.foldSessionUsage([header('go', 'deepseek-flash'), attempt(1, 1, usage(100, 20, 30, 5))])
-  check('与投影一致 → true', pure.agreesWithProjection(fold, usage(100, 20, 30, 5)) === true)
+  const folded = fold([header('go', 'deepseek-flash'), attempt(1, 1, usage(100, 20, 30, 5))])
+  check('与投影一致 → true', pure.agreesWithProjection(folded, usage(100, 20, 30, 5)) === true)
   check('投影里缓存写那一项对不上 → false',
-    pure.agreesWithProjection(fold, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 0 }) === false)
-  check('对不上 → false', pure.agreesWithProjection(fold, usage(999, 20, 30, 5)) === false)
+    pure.agreesWithProjection(folded, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 0 }) === false)
+  check('对不上 → false', pure.agreesWithProjection(folded, usage(999, 20, 30, 5)) === false)
   check('没有投影（还没读到）→ true（不因此拒绝分列）',
-    pure.agreesWithProjection(fold, undefined) === true)
+    pure.agreesWithProjection(folded, undefined) === true)
 }
 
 // ══════════════ 6. 本版真实形状的两个细节（踩过坑的地方）═══════════════════════
@@ -213,7 +230,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
 {
   // 官方 `lastAssistantStreamChunk` 是从后往前找**最后**一条 usage 原始块：前面带别的记录不影响，
   // 后面若还有一条 usage（不该出现）也以最后一条为准。这里把这两种情况都钉住。
-  const withRecords = pure.foldSessionUsage([
+  const withRecords = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(100, 20), [
       { type: 'text-chunks', time0: 0, index: 0, dt: [1, 2], texts: ['你', '好'] },
@@ -224,7 +241,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
     withRecords.total.inputTokens === 100 && withRecords.total.outputTokens === 20,
     JSON.stringify(withRecords.total))
 
-  const twoUsage = pure.foldSessionUsage([
+  const twoUsage = fold([
     header('go', 'deepseek-flash'),
     { type: 'assistant/attempt', data: { turn: 1, step: 1, stream: [
       { type: 'chunk', time: 0, chunk: { type: 'usage', usage: usage(100, 10) } },
@@ -234,7 +251,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
   check('stream 里有多条 usage → 取最后一条（30，不是 10 也不是 40）',
     twoUsage.total.outputTokens === 30, String(twoUsage.total.outputTokens))
 
-  const fromMessageStream = pure.foldSessionUsage([
+  const fromMessageStream = fold([
     header('go', 'deepseek-flash'),
     messageWithStream(1, 1, usage(50, 5)),
   ])
@@ -243,7 +260,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
     JSON.stringify(fromMessageStream.total))
 
   // 重试：重试那次的用量应当**加**上去，而不是在替换时被减掉。
-  const retried = pure.foldSessionUsage([
+  const retried = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(1000, 10)),   // 第一次尝试
     retry(1, 1),                       // 重试：清掉替换槽
@@ -252,7 +269,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
   check('重试后的同一步用量是加（1000+800 / 10+8）',
     retried.total.inputTokens === 1800 && retried.total.outputTokens === 18,
     JSON.stringify(retried.total))
-  const notRetried = pure.foldSessionUsage([
+  const notRetried = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(1000, 10)),
     attempt(1, 1, usage(800, 8)),      // 没有重试标记 = 同一步替换 → 以 800/8 为准
@@ -260,7 +277,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
   check('没有重试标记时同一步是替换（800/8，不是 1800/18）',
     notRetried.total.inputTokens === 800 && notRetried.total.outputTokens === 8,
     JSON.stringify(notRetried.total))
-  const retryOtherStep = pure.foldSessionUsage([
+  const retryOtherStep = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(1000, 10)),
     retry(2, 1),                       // 别的步重试，不该清掉这一步的槽
@@ -270,7 +287,7 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
     retryOtherStep.total.inputTokens === 800, String(retryOtherStep.total.inputTokens))
 
   // 诊断计数：分列出不来时界面靠这两个数区分"没事件"和"形状不对"。
-  const diag = pure.foldSessionUsage([
+  const diag = fold([
     header('go', 'deepseek-flash'),
     attempt(1, 1, usage(10, 1)),
     attempt(1, 2, usage(20, 2)),
@@ -279,11 +296,182 @@ console.log('6. attempt 的 stream / 重试 / 诊断计数')
   check('events 数 = 输入条数', diag.events === 4, String(diag.events))
   check('samples 数 = 折到 usage 的条数（2）', diag.samples === 2, String(diag.samples))
   check('只有一条 usage 时 samples = 1',
-    pure.foldSessionUsage([attempt(1, 1, usage(1, 1))]).samples === 1)
+    fold([attempt(1, 1, usage(1, 1))]).samples === 1)
 }
 
-// ══════════════ 7. 接口路径（两半必须用同一个常量）═════════════════════════════
-console.log('7. 接口路径')
+// ══════════════ 7. 峰谷按"每笔用量发生的时间"判定（0.9.1）═══════════════════════
+//
+// 这一节钉的是 0.8.0 的一个静默错处与 0.9.1 的两条新规则：
+//   · 官方按**请求发生时刻**计费，而"看面板的那一秒"不是那个时刻 —— 昨晚跑的会话今天上午看
+//     会整份按高峰价显示（差 2 倍，屏幕上只是个数字）；
+//   · 同一步的**替换增量**必须沿用该步第一次判定的档，否则一次跨过 09:00 的请求会被拆成两档，
+//     凭空多出一个"高峰用量"；
+//   · 宿主半要用的**增量**折叠器必须与一次性折叠逐字节同结果，且重复喂同一批事件不会重复计费
+//     （`seq` 幂等 —— 缓存能安全复用的前提）。
+console.log('7. 逐笔按时间分峰谷档')
+{
+
+  // 同一模型、两档各一次 → 拆成两条 route，`peak` 标记不同。
+  const both = fold([
+    stamped(header('go', 'deepseek-flash'), T_PEAK, 1),
+    stamped(attempt(1, 1, usage(100, 10)), T_PEAK, 2),
+    stamped(header('go', 'deepseek-flash'), T_OFF, 3),
+    stamped(attempt(2, 1, usage(200, 20)), T_OFF, 4),
+  ], peakByUtc)
+  const peakRow = both.routes.find(row => row.peak === true)
+  const offRow = both.routes.find(row => row.peak === false)
+  check('高峰那一条只记高峰用量（100/10）',
+    peakRow !== undefined && peakRow.usage.inputTokens === 100 && peakRow.usage.outputTokens === 10,
+    JSON.stringify(both.routes))
+  check('空闲那一条只记空闲用量（200/20）',
+    offRow !== undefined && offRow.usage.inputTokens === 200 && offRow.usage.outputTokens === 20,
+    JSON.stringify(both.routes))
+  check('两条 route 的 provider/model 相同，只有档位不同',
+    both.routes.length === 2 && peakRow.provider === offRow.provider && peakRow.model === offRow.model)
+  check('两档小计相加恰好等于 total',
+    JSON.stringify(pure.addBuckets(both.tiers.peak, both.tiers.offPeak)) === JSON.stringify(both.total))
+  check('tiers 各自对得上（高峰 100/10、空闲 200/20）',
+    both.tiers.peak.inputTokens === 100 && both.tiers.offPeak.inputTokens === 200)
+
+  // 同一步的替换增量沿用第一次的档（哪怕其后来了新 header、时间跨到高峰）。
+  const replaced = fold([
+    stamped(header('go', 'deepseek-flash'), T_OFF, 1),
+    stamped(attempt(1, 1, usage(100, 10)), T_OFF, 2),
+    stamped(header('go', 'deepseek-flash'), T_PEAK, 3),
+    stamped(attempt(1, 1, usage(100, 50)), T_PEAK, 4),
+  ], peakByUtc)
+  check('同一步的替换增量仍算第一次那档（空闲），高峰档为 0',
+    replaced.routes.length === 1 && replaced.routes[0].peak === false
+    && replaced.tiers.peak.inputTokens === 0 && replaced.total.outputTokens === 50,
+    JSON.stringify(replaced.routes))
+
+  // 没有 request/header 时间、事件自己也没有 time → 判定函数收到 NaN（由调用方兜底）。
+  const seen = []
+  fold([attempt(1, 1, usage(5, 5))], ms => { seen.push(ms); return false })
+  check('既没有 header 时间也没有事件 time → 判定函数收到 NaN（不瞎猜成 0 时刻）',
+    seen.length === 1 && Number.isNaN(seen[0]), String(seen[0]))
+  // 事件自己有 time、没有 header → 用事件自己的时间。
+  const eventTime = []
+  fold([stamped(attempt(1, 1, usage(5, 5)), T_PEAK, 1)], ms => { eventTime.push(ms); return true })
+  check('没有 header 时用事件自己的 time',
+    eventTime.length === 1 && eventTime[0] === T_PEAK
+    && fold([stamped(attempt(1, 1, usage(5, 5)), T_PEAK, 1)], peakByUtc).routes[0].peak === true)
+
+  // 增量折叠器：分两批喂 == 一次性折；再喂一遍同一批不会重复计费。
+  const events = [
+    stamped(header('go', 'deepseek-flash'), T_PEAK, 1),
+    stamped(attempt(1, 1, usage(100, 10)), T_PEAK, 2),
+    stamped(header('go', 'deepseek-flash'), T_OFF, 3),
+    stamped(attempt(2, 1, usage(200, 20)), T_OFF, 4),
+  ]
+  const folder = pure.createUsageFolder(peakByUtc)
+  folder.feed(events.slice(0, 2))
+  const midway = folder.snapshot()
+  folder.feed(events.slice(2))
+  const incremental = folder.snapshot()
+  const oneShot = fold(events, peakByUtc)
+  check('增量折叠：中途快照只有高峰那条',
+    midway.routes.length === 1 && midway.routes[0].peak === true && midway.total.inputTokens === 100)
+  check('增量折叠与一次性折叠结果逐字节一致',
+    JSON.stringify(incremental) === JSON.stringify(oneShot),
+    JSON.stringify(incremental))
+  folder.feed(events)   // 整批重喂（宿主半"落后就重读一次"的补齐路径）
+  check('重复喂同一批（seq 幂等）不会重复计费',
+    JSON.stringify(folder.snapshot()) === JSON.stringify(oneShot),
+    JSON.stringify(folder.snapshot()))
+  check('诊断计数也不因重喂而翻倍',
+    folder.snapshot().events === oneShot.events && folder.snapshot().samples === oneShot.samples)
+  // 没有 seq 的事件无法去重（宿主半那条路的事件一定有 seq，这里只钉住"有 seq 才幂等"）。
+  const noSeq = pure.createUsageFolder(offPeakOnly)
+  noSeq.feed([attempt(7, 7, usage(1, 1))])
+  noSeq.feed([attempt(7, 7, usage(1, 1))])
+  check('没有 seq：两条事件都算（第一遍折出 1/1，第二遍同一步同值 → 差异为 0，所以仍是 1/1）',
+    noSeq.snapshot().total.inputTokens === 1, String(noSeq.snapshot().total.inputTokens))
+}
+
+// ══════════════ 8. 增量缓存：播种窗口 / 落后检测 / 淘汰（宿主半那条路）═══════════
+//
+// 这一段钉的是**宿主半唯一会"静默少算"的地方**：`feed()` 的去重是 seq 水位式的，一旦折过
+// seq=12，再喂 seq=5 会被整条跳过。而播种要先 `await read()`（深拷贝整份日志，几百毫秒），
+// 这期间追加的事件订阅会先看到 —— 若不缓冲，水位跳到快照之后，快照里那些中间事件**永久**
+// 算不进来（补也补不进去）。所以用"读的时候顺手追加两条事件"的假 read 把它钉死。
+console.log('8. 增量缓存 createUsageCache')
+{
+  const snapshot = () => [
+    stamped(header('go', 'deepseek-flash'), T_PEAK, 1),
+    stamped(attempt(1, 1, usage(100, 10)), T_PEAK, 2),
+  ]
+
+  // ── 首次读、之后走缓存 ──
+  let reads = 0
+  const cache = pure.createUsageCache(peakByUtc)
+  const first = await cache.sync('s1', 3, async () => { reads += 1; return snapshot() })
+  check('首次 sync 读日志并折出用量',
+    first.source === 'sessionQuery' && first.fold.total.inputTokens === 100, JSON.stringify(first.fold.total))
+  const second = await cache.sync('s1', 3, async () => { reads += 1; return snapshot() })
+  check('没落后就不读日志（source=cache，读次数仍是 1）', second.source === 'cache' && reads === 1)
+  check('缓存保住了档位（高峰那条仍在）',
+    second.fold.routes.length === 1 && second.fold.routes[0].peak === true)
+
+  // ── 落后检测：liveSeq 前进 → 重读补齐（只补新的那部分）──
+  const grown = [...snapshot(), stamped(attempt(2, 1, usage(50, 5)), T_PEAK, 3)]
+  const third = await cache.sync('s1', 4, async () => { reads += 1; return grown })
+  check('liveSeq 前进 → 重读并把新的补上（150/15，不是 200/20 也不是 100/10）',
+    third.source === 'sessionQuery' && third.fold.total.inputTokens === 150 && third.fold.total.outputTokens === 15,
+    JSON.stringify(third.fold.total))
+  check('补齐不会把已经折过的重复计费（samples 只加了新的那条）',
+    reads === 2 && third.fold.samples === 2, String(third.fold.samples))
+
+  // ── 播种窗口：读日志期间追加的事件 ──
+  const windowCache = pure.createUsageCache(peakByUtc)
+  const late = [stamped(attempt(2, 1, usage(7, 7)), T_PEAK, 3)]
+  const windowed = await windowCache.sync('s2', 4, async () => {
+    // 模拟"读还没回来、会话又追加了事件"：此刻订阅先看到它们。
+    for (const event of late) windowCache.event('s2', event)
+    return snapshot()
+  })
+  check('播种窗口内追加的事件不会被吞掉（100/10 + 7/7）',
+    windowed.fold.total.inputTokens === 107 && windowed.fold.total.outputTokens === 17,
+    JSON.stringify(windowed.fold.total))
+  check('播种窗口内的事件只算一次（两条 usage，不是三条）',
+    windowed.fold.samples === 2 && windowed.fold.events === 3, `${windowed.fold.samples}/${windowed.fold.events}`)
+
+  // ── 读失败不冒泡，且下次仍会重试 ──
+  const failing = pure.createUsageCache(peakByUtc)
+  const bad = await failing.sync('s3', undefined, async () => { throw new Error('boom') })
+  check('read 抛错不冒泡（返回空折、source=cache）',
+    bad.source === 'cache' && bad.fold.total.inputTokens === 0)
+  const retry = await failing.sync('s3', undefined, async () => snapshot())
+  check('上次没读成功过 → 下次仍会重试（不会永久空着）',
+    retry.source === 'sessionQuery' && retry.fold.total.inputTokens === 100)
+
+  // ── 归档会话（拿不到 liveSeq）：只在首次读 ──
+  let archivedReads = 0
+  const archived = pure.createUsageCache(peakByUtc)
+  await archived.sync('a1', undefined, async () => { archivedReads += 1; return snapshot() })
+  const again = await archived.sync('a1', undefined, async () => { archivedReads += 1; return snapshot() })
+  check('没有 liveSeq（归档会话）时只在首次读一次', archivedReads === 1 && again.source === 'cache')
+
+  // ── 没被问过的会话：订阅事件要被忽略，也不能因此建行 ──
+  const cold = pure.createUsageCache(peakByUtc)
+  cold.event('nope', stamped(attempt(1, 1, usage(9, 9)), T_PEAK, 1))
+  const coldFold = await cold.sync('nope', undefined, async () => [])
+  check('没被问过的会话：先到的订阅事件被忽略（不凭空多出用量）',
+    coldFold.fold.total.inputTokens === 0, JSON.stringify(coldFold.fold.total))
+
+  // ── 上限淘汰：回来了就重读 ──
+  let evictReads = 0
+  const evict = pure.createUsageCache(peakByUtc, { maxSessions: 2 })
+  const rd = async () => { evictReads += 1; return snapshot() }
+  await evict.sync('a', undefined, rd)
+  await evict.sync('b', undefined, rd)
+  await evict.sync('c', undefined, rd)
+  await evict.sync('a', undefined, rd)
+  check('超过上限按"最先被问的"淘汰（回来要重读）', evictReads === 4, String(evictReads))
+}
+
+// ══════════════ 9. 接口路径（两半必须用同一个常量）═════════════════════════════
+console.log('9. 接口路径')
 {
   check('USAGE_API_PATH 在 composer-ux 命名空间下',
     pure.USAGE_API_PATH === '/composer-ux/usage', String(pure.USAGE_API_PATH))

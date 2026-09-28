@@ -104,6 +104,15 @@ export interface PriceOverride {
 /** 覆盖价表：键是模型名（别名也可）。 */
 export type PriceOverrideTable = Readonly<Record<string, PriceOverride>>
 
+/** 三项单价的键名（设置页那一行六个数字框按这个顺序排：未缓存输入 / 缓存命中 / 输出）。 */
+export const PRICE_FIELDS = ['miss', 'hit', 'out'] as const
+
+/** 一项单价的键名。 */
+export type PriceField = (typeof PRICE_FIELDS)[number]
+
+/** 内置刊例价里有哪几个模型（顺序即 {@link PRICE_TABLE} 的声明顺序，设置页照这个排）。 */
+export const BUILTIN_PRICING_MODELS: readonly string[] = Object.keys(PRICE_TABLE)
+
 /** 解析后的定价结果。 */
 export interface ResolvedPrice {
   /** 归一化后的模型键（一定落在 {@link PRICE_TABLE} 里）。 */
@@ -194,6 +203,10 @@ function applyTier(base: PriceTriple, tier: PriceOverrideTier | undefined): { pr
  * @param model 模型名（可用别名）。
  * @param options.currency 币种，默认人民币。
  * @param options.at 计价时刻，默认现在（决定峰谷档）。
+ * @param options.peak **直接指定档位**，给了就不看时刻。两处需要它：
+ *   1. 设置页要同时显示高峰/空闲两档的生效价（不可能同时"是"两个时刻）；
+ *   2. 宿主半按**每条事件自己的时间戳**判档后逐档计价（见 `usage-fold.ts`），
+ *      分档已经是事实，再让 resolvePrice 去猜时刻只会把整数拆错。
  * @param options.overrides 用户覆盖价（人民币/1M）。
  */
 export function resolvePrice(
@@ -201,13 +214,14 @@ export function resolvePrice(
   options: {
     currency?: Currency
     at?: Date
+    peak?: boolean
     overrides?: PriceOverrideTable | undefined
   } = {},
 ): ResolvedPrice {
   const currency = options.currency === 'USD' ? 'USD' : 'CNY'
   const normalized = normalizeModel(model)
   const base = PRICE_TABLE[normalized] ?? PRICE_TABLE[DEFAULT_PRICING_MODEL]!
-  const peak = isPeakAt(options.at ?? new Date())
+  const peak = options.peak ?? isPeakAt(options.at ?? new Date())
   const tier = peak ? base.peak : base.offPeak
   const override = options.overrides?.[normalized] ?? options.overrides?.[String(model ?? '')]
   const overrideTier = peak ? override?.peak : override?.offPeak
@@ -343,4 +357,134 @@ export function parsePriceOverrides(raw: unknown): PriceOverrideTable | undefine
     if (Object.keys(tiers).length > 0) out[String(model).trim().toLowerCase()] = tiers
   }
   return Object.keys(out).length > 0 ? out : undefined
+}
+
+/**
+ * 官方（刊例）单价里某一档的三项 —— 设置页拿它当输入框的**占位提示**。
+ *
+ * 认不出的模型按 {@link DEFAULT_PRICING_MODEL} 返回：那正是 `resolvePrice` 对未列名模型的
+ * 兜底价，所以占位提示与"不填时会按什么价算"永远一致（差一个模型就是 2 倍价差）。
+ */
+export function officialTripleOf(model: unknown, peak: boolean): PriceTriple {
+  const base = PRICE_TABLE[normalizeModel(model)] ?? PRICE_TABLE[DEFAULT_PRICING_MODEL]!
+  return peak ? base.peak.cny : base.offPeak.cny
+}
+
+/**
+ * 覆盖价表里某模型某档的原始项（没写过就是 undefined）。
+ *
+ * 键的匹配与 `resolvePrice` **同一套**：先归一化名（别名 → 现役名），再退回原样名字。
+ * 两处若分叉，会出现"设置页显示已填、实际计价没生效"这种最难查的偏差。
+ */
+export function overrideTierOf(
+  table: PriceOverrideTable | undefined,
+  model: unknown,
+  peak: boolean,
+): PriceOverrideTier | undefined {
+  if (table === undefined) return undefined
+  const override = table[normalizeModel(model)] ?? table[String(model ?? '')]
+  return peak ? override?.peak : override?.offPeak
+}
+
+/** 某一格当前填了什么：没填是 `undefined`（界面要显示成空框，而不是 `0`）。 */
+export function overrideValueOf(
+  table: PriceOverrideTable | undefined,
+  model: unknown,
+  peak: boolean,
+  field: PriceField,
+): number | undefined {
+  const tier = overrideTierOf(table, model, peak)
+  if (tier === undefined) return undefined
+  // 只认 canonical 键：`cacheMissInput` 之类的别名键在写入端已经归一到 miss/hit/out，
+  // 手工在设置文件里写别名也能被 resolvePrice 认，但这里不重复一套优先级。
+  return finite(tier[field])
+}
+
+/**
+ * 写入/清空一格，返回**新的**覆盖价表（不可变；原表不动）。
+ *
+ * 清空的传播规则（不这么写就会留下一堆空壳，设置文件越滚越脏、界面还会多出空行）：
+ *   · 一档三项全空 → 删掉这一档；
+ *   · 一个模型两档全空 → 删掉这个模型；
+ *   · 整表全空 → 返回 `undefined`（调用方据此把这个键从设置里去掉）。
+ *
+ * @param table 现有覆盖价表（可为空）。
+ * @param model 模型名（大小写/空格会被归一；别名按名字原样存，不强行改成现役名）。
+ * @param peak 高峰档还是空闲档。
+ * @param field 三项里的哪一项。
+ * @param value 数字则写入；`undefined`/非有限数/负数都当**清空**（界面只会传合法值）。
+ */
+export function withOverrideValue(
+  table: PriceOverrideTable | undefined,
+  model: unknown,
+  peak: boolean,
+  field: PriceField,
+  value: number | undefined,
+): PriceOverrideTable | undefined {
+  const key = String(model ?? '').trim().toLowerCase()
+  if (key.length === 0) return table
+  const next: Record<string, PriceOverride> = { ...(table ?? {}) }
+  const tierName = peak ? 'peak' : 'offPeak'
+  const current = next[key] ?? {}
+  const tier: Record<string, number> = { ...(peak ? current.peak : current.offPeak) } as Record<string, number>
+  const n = finite(value)
+  if (n === undefined || n < 0) delete tier[field]
+  else tier[field] = n
+  const entry: { peak?: PriceOverrideTier; offPeak?: PriceOverrideTier } = { ...current }
+  if (Object.keys(tier).length === 0) delete entry[tierName]
+  else entry[tierName] = tier as PriceOverrideTier
+  if (entry.peak === undefined && entry.offPeak === undefined) delete next[key]
+  else next[key] = entry
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+/**
+ * 表里**自定义**的模型名（内置刊例价与它的别名之外的那些）—— 设置页据此多渲染几行。
+ *
+ * 别名不算自定义：`deepseek-chat` 与 `deepseek-flash` 是同一份价，给它单开一行只会让人
+ * 以为可以分开调。按表里的键原样返回（保持稳定顺序），不改写大小写。
+ */
+export function customPricingModels(table: PriceOverrideTable | undefined): readonly string[] {
+  if (table === undefined) return []
+  return Object.keys(table).filter(key => !isKnownModel(key))
+}
+
+/**
+ * 把某个模型整个从覆盖价表里删掉（"恢复官方价" / 删掉自定义行），返回新表（不可变）。
+ *
+ * 与 {@link withOverrideValue} 的分工：那个改一格（并按"空了就往上收"清理空壳），
+ * 这个整行删掉 —— 用户点「恢复官方价」时不该只剩一个空对象留在设置里。
+ */
+export function withoutPricingModel(
+  table: PriceOverrideTable | undefined,
+  model: unknown,
+): PriceOverrideTable | undefined {
+  if (table === undefined) return undefined
+  const key = String(model ?? '').trim().toLowerCase()
+  const next: Record<string, PriceOverride> = { ...table }
+  delete next[key]
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+/** 设置页数字框的文本解析结果。 */
+export type PriceTextParse =
+  /** 空框 = 清掉这一格（沿用官方价）。 */
+  | { readonly kind: 'empty' }
+  /** 合法单价（有限非负数）。 */
+  | { readonly kind: 'number'; readonly value: number }
+  /** 既不是空也无法当数字（例如 `1,02`、`2元`）——**不要**当成清空，界面要报错。 */
+  | { readonly kind: 'invalid' }
+
+/**
+ * 数字框文本 → 结果。
+ *
+ * 为什么要分成三态而不是"非法就当空"：把 `1,02` 静默当成"清空这一格"，用户看到的是
+ * **价格悄悄回到官方价**（数字看着还算合理），而真正的问题（千分位逗号）一点提示都没有。
+ */
+export function parsePriceText(text: string): PriceTextParse {
+  const trimmed = text.trim()
+  if (trimmed === '') return { kind: 'empty' }
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || value < 0) return { kind: 'invalid' }
+  return { kind: 'number', value }
 }

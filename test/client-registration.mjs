@@ -271,11 +271,19 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
   check('不再用 font: 简写（简写会把字号重置回继承）',
     !costSource.includes("font: 'inherit'"))
   // 「按 route 分列」只能由宿主半给（session.events 客户端读不到），所以客户端必须
-  // **按 sessionId 去问那条路由**；并且分列到手后总额要用分列之和，否则会出现
-  // "各行加了不等于总数"这种一眼假的面板。
-  check('点开时按 sessionId 向宿主半取分列',
-    costSource.includes('USAGE_API_PATH') && costSource.includes('sessionId'))
-  check('总额以分列之和为准（routeTotal）', costSource.includes('routeTotal'))
+  // **按 sessionId 去问那条路由**（0.9.1 起抽成了 `session-cost.ts`：折叠态胶囊也要这个数字，
+  // 而且它得跟着流式用量节流刷新，所以不能只写在"点开"那条路上）。
+  const costFetchSource = readFileSync('src/client/session-cost.ts', 'utf8')
+  check('按 sessionId 向宿主半取费用',
+    costFetchSource.includes('USAGE_API_PATH') && costFetchSource.includes('encodeURIComponent(sessionId)'))
+  check('折叠态也走这条取数（把 sessionId 与用量指纹交给它）',
+    costSource.includes('useSessionCost(sessionId') && costSource.includes('fingerprint'))
+  check('总额用宿主半算好的那份（分列之和在宿主半成立）',
+    costSource.includes('data?.cost?.total') && costSource.includes('useBreakdown'))
+  check('逐笔准时看得见：面板按高峰/空闲两档分列',
+    costSource.includes('高峰档') && costSource.includes('空闲档'))
+  check('峰谷档位由宿主半按事件时间判定（客户端不自己重构时间线）',
+    !costSource.includes('isPeakAt') && readFileSync('src/host.ts', 'utf8').includes('peakAt'))
   check('分列与投影对不上时退回投影口径并说明', costSource.includes('agreesWithProjection'))
   // 2026-09-28 命中率显示 100%（旁边官方胶囊 98.206%）的**真因**：`billedInputTokens()` 只认
   // `uncachedInputTokens`，调用处却传了 `inputTokens` → 分母丢掉整块未缓存输入 → 恒 100%。
@@ -550,6 +558,121 @@ console.log('10. 「统计行」的实现约定：窄域、只改文本、可还
     entryCode.includes('active ? HIT_DIGITS : 0'))
   check('锚点常驻挂载：关掉之后仍要能定位到统计行把官方原样写回去',
     entryCode.includes('data-composer-ux-stats-anchor') && !entryCode.includes('if (!active) return null'))
+}
+
+console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不自己造时间线')
+{
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
+  const card = readFileSync('src/client/CostCard.tsx', 'utf8')
+  const contract = readFileSync('src/settings-contract.ts', 'utf8')
+  const host = readFileSync('src/host.ts', 'utf8')
+
+  check('设置页多了一张「金额」折卡，且内容区是我们自己的组件',
+    section.includes('name="金额"') && section.includes('<CostCardBody'))
+  check('这一栏没有卡级开关（用户只要"能改价"，不要这一栏的开关）',
+    !/name="金额"[\s\S]{0,200}toggle=/.test(section))
+  check('卡片把 setField / clearField 都接上了（清空要能把那个键从设置里去掉）',
+    card.includes('setField(PRICE_OVERRIDES_FIELD') && card.includes('clearField(PRICE_OVERRIDES_FIELD'))
+  // 留空＝官方价：占位提示必须来自官方价目表，绝不能用 `value={值 ?? 0}` 之类把空当 0。
+  check('占位提示 = 官方价（留空＝沿用官方价，不是 0）',
+    card.includes('placeholder={String(official[field])}') && card.includes('officialTripleOf'))
+  check('非法文本标红并保留，不当清空（parsePriceText 三态）',
+    card.includes('parsePriceText') && card.includes("parsed.kind === 'invalid'"))
+  check('写设置合并 + 识别回声（连改几格不会被自己的回声冲掉）',
+    card.includes('WRITE_DEBOUNCE_MS') && card.includes('lastWritten') && card.includes('canonical'))
+  check('内置三个模型常显、可自加任意模型名',
+    card.includes('BUILTIN_PRICING_MODELS') && card.includes('customPricingModels'))
+  check('「恢复默认」会清掉覆盖价（否则金额还是按旧价算）',
+    readFileSync('src/client.tsx', 'utf8').includes('PRICE_OVERRIDES_FIELD'))
+  check('契约里登记了这个字段（schemastery 侧才能写）',
+    contract.includes("export const PRICE_OVERRIDES_FIELD = 'priceOverrides'"))
+  check('宿主半的 schema 收下了这个字段（z.any：键是用户自加的模型名）',
+    host.includes('[PRICE_OVERRIDES_FIELD]: z.any()'))
+  // 客户端不可能知道"每笔用量发生在什么时候"（投影只有累计桶），所以时间线只能在宿主半。
+  check('宿主半订阅 session/event 增量喂折叠缓存（胶囊取价才是 O(1)）',
+    host.includes("on?.('session/event'") && host.includes('createUsageCache')
+    && host.includes('usageCache.event('))
+  check('宿主半按需播种（readSession 只读一次，之后走缓存）',
+    host.includes('usageCache.sync(') && host.includes('readSession'))
+  check('宿主半按事件时间判档，并把成本一起算好回给客户端',
+    host.includes('peakAt') && host.includes('costPartsOf') && host.includes("resolvePrice(item.model, { peak: item.peak, overrides }"))
+}
+
+console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻那三步校验）')
+{
+  // 为什么值得单独跑一遍：这张表是**一个字段装一棵树**（键是用户自加的模型名），
+  // 能不能写进设置文档取决于三件事同时成立：字段是 volatile、schema 类型容得下、
+  // 写入校验不在它下面继续挑刺。这三条任何一条不成立，表现都是"改了价、界面没反应"
+  // 或者"点了保存没报错但设置文件里什么都没有" —— 都必须在这里挡住。
+  const { pathToFileURL } = await import('node:url')
+  const repoPath = (process.env.DSH_REPO_PATH ?? 'D:/DeepSeek Harness').replace(/\\/g, '/')
+  const schemastery = pathToFileURL(`${repoPath}/vendor/schemastery/lib/index.mjs`).href
+  const { default: z } = await import(schemastery)
+  const { Config } = await import('../lib/index.js')
+
+  // 下面两个函数与 DSH 的 `packages/settings/settings/src/schema.ts` 逐行同义。
+  const plainSchema = schema => {
+    const result = new z(schema.toJSON())
+    const walk = node => {
+      delete node.meta.volatile
+      for (const child of Object.values(node.dict ?? {})) walk(child)
+      if (node.inner) walk(node.inner)
+      for (const child of node.list ?? []) walk(child)
+    }
+    walk(result)
+    return result
+  }
+  const volatileForm = schema => {
+    if (schema.meta.volatile) return plainSchema(schema)
+    if (schema.type === 'object') {
+      const dict = Object.fromEntries(Object.entries(schema.dict ?? {}).flatMap(([key, child]) => {
+        const field = volatileForm(child)
+        return field === undefined ? [] : [[key, field]]
+      }))
+      return Object.keys(dict).length === 0 ? undefined : z.object(dict)
+    }
+    return undefined
+  }
+  const isVolatilePath = (schema, path) => {
+    if (schema.meta.volatile) return true
+    const [key, ...rest] = path
+    const child = key === undefined ? undefined : schema.dict?.[key]
+    return child !== undefined && isVolatilePath(child, rest)
+  }
+  const projectForm = (schema, value) => schema.type === 'object' && value !== null && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(schema.dict ?? {}).flatMap(([key, child]) => {
+        const field = value[key]
+        return field === undefined ? [] : [[key, projectForm(child, field)]]
+      }))
+    : value
+
+  const field = readFileSync('src/settings-contract.ts', 'utf8')
+  const fieldName = /PRICE_OVERRIDES_FIELD = '([^']+)'/.exec(field)?.[1]
+  check('契约里的字段名就是 schema 里的那个键', fieldName === 'priceOverrides')
+  check('这个字段是 volatile（否则设置页根本写不进去）',
+    isVolatilePath(Config, [fieldName]) === true)
+  check('类型是"接受任何值"（键是动态的模型名，对象 schema 表达不了）',
+    Config.dict[fieldName].type === 'any')
+  const form = volatileForm(Config)
+  check('volatileForm 能把这棵树建出来（含这张表）',
+    form !== undefined && form.dict?.[fieldName] !== undefined)
+  const value = { 'deepseek-flash': { peak: { miss: 3 } }, 'my-relay': { offPeak: { out: 4.5 } } }
+  const current = projectForm(form, { [fieldName]: value })
+  check('读回来的值原样保留（不会被 schema 吃掉）',
+    JSON.stringify(current[fieldName]) === JSON.stringify(value))
+  let rejected = ''
+  const validatePaths = (next, node, path = []) => {
+    for (const [key, child] of Object.entries(next)) {
+      const target = [...path, key]
+      if (isVolatilePath(Config, target)) continue
+      const fields = node.dict ?? {}
+      const child0 = Object.hasOwn(fields, key) ? fields[key] : undefined
+      if (child !== null && typeof child === 'object' && !Array.isArray(child) && child0 !== undefined) validatePaths(child, child0, target)
+      else rejected = target.join('.')
+    }
+  }
+  validatePaths(current, form)
+  check('写入校验放过它（不许在表下面继续挑刺）', rejected === '')
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

@@ -146,21 +146,25 @@ export {
  * `lib/client.js`）的那几个函数原样抄进去当基准，逐样本对拍。
  */
 export {
-  CNY_PER_USD, DEFAULT_PRICING_MODEL, MODEL_ALIASES, PEAK_UTC_RANGES, PRICE_TABLE,
-  PRICE_VERIFIED_AT,
-  costBucketsOf, costOf, costPartsOf, formatMoney, formatTokens, isKnownModel, isPeakAt,
-  normalizeModel, parsePriceOverrides, resolvePrice,
+  BUILTIN_PRICING_MODELS, CNY_PER_USD, DEFAULT_PRICING_MODEL, MODEL_ALIASES, PEAK_UTC_RANGES,
+  PRICE_FIELDS, PRICE_TABLE, PRICE_VERIFIED_AT,
+  costBucketsOf, costOf, costPartsOf, customPricingModels, formatMoney, formatTokens,
+  isKnownModel, isPeakAt, normalizeModel, officialTripleOf, overrideTierOf, overrideValueOf,
+  parsePriceOverrides, parsePriceText, resolvePrice, withOverrideValue, withoutPricingModel,
 } from '../src/pricing.ts'
 /**
- * 「金额」的**按 route 归因**（0.8.0）：会话事件折叠、桶运算、与官方投影的一致性判据。
+ * 「金额」的**按 route 归因**（0.8.0，0.9.1 起按事件时间分峰谷档）：会话事件折叠、桶运算、
+ * 与官方投影的一致性判据、以及宿主半要用的**增量**折叠器。
  *
  * 这块逻辑落在宿主半（`session.events` 客户端读不到），但规则本身是纯函数，必须能在 node 里
- * 单独钉住 —— 尤其两条：**同一 `(turn, step)` 的上报是累计值、要相减**（不减就重复计费），
- * 以及 **usage 归属它之前最近一条 `request/header`**（归错就把 Zen 的花费记到官方头上）。
+ * 单独钉住 —— 尤其三条：**同一 `(turn, step)` 的上报是累计值、要相减**（不减就重复计费）、
+ * **usage 归属它之前最近一条 `request/header`**（归错就把 Zen 的花费记到官方头上）、
+ * 以及 **峰谷按该请求的时刻判定、同一步的替换增量沿用同一档**（否则一次跨 09:00 的请求
+ * 会被拆成两档，凭空多出一个"高峰用量"）。
  */
 export {
-  UNKNOWN_ROUTE, addBuckets, agreesWithProjection, bucketTotal, foldSessionUsage,
-  subBuckets, zeroBuckets,
+  UNKNOWN_ROUTE, addBuckets, agreesWithProjection, bucketTotal, createUsageCache,
+  createUsageFolder, emptyFold, foldSessionUsage, subBuckets, zeroBuckets,
 } from '../src/usage-fold.ts'
 /** 「按 route 分列」接口路径（宿主半注册、客户端半调用）。 */
-export { USAGE_API_PATH } from '../src/settings-contract.ts'
+export { PRICE_OVERRIDES_FIELD, USAGE_API_PATH } from '../src/settings-contract.ts'

@@ -1,5 +1,5 @@
 /**
- * 「金额」条目（0.8.0）：注册在 `conversation.composer.dock` 上的一颗极简金额胶囊。
+ * 「金额」条目：注册在 `conversation.composer.dock` 上的一颗极简金额胶囊。
  *
  * ## 外观：逐项抄官方，不自己发明
  *
@@ -28,11 +28,19 @@
  *
  * ## 两种口径，别混
  *
- *  · **折叠态那一个数字**：用官方 `tokenUsage` 投影 + `modelSelection.lastUsed` 的模型算
- *    （纯客户端、零请求、随流式更新），是"马上能看"的估值。
- *  · **展开态的分列**：必须逐请求归因，只有宿主半能做到，所以点开时才向
- *    `/composer-ux/usage?sessionId=…` 取一次（折叠规则在 `src/usage-fold.ts`）。
+ *  · **折叠态那一个数字**：0.9.1 起**以宿主半算的"逐笔按时"金额为准**（见 `session-cost.ts`），
+ *    它还没到手、或会话日志还没跟上投影时，用本地的"按当前时刻判峰谷"估值顶上 ——
+ *    胶囊从不空着，但面板里会说明当前这个数字是哪一种。
+ *  · **展开态的分列**：必须逐请求归因，只有宿主半能做到，所以点开时强制取一次
+ *    `/composer-ux/usage?sessionId=…`（折叠规则在 `src/usage-fold.ts`）。
  *    **分列到手后，面板总额改成分列之和**，这样"分列加起来等于总额"永远成立。
+ *
+ * ## 0.9.1：峰谷按"每笔用量发生的时间"判，不按"你看面板的时间"
+ *
+ * 官方按请求发生时刻计费（高峰价是空闲价的 2 倍），而客户端投影**没有任何时间信息**，
+ * 所以这件事只能在宿主半做：折叠时用每条事件的 `time` 判档、按 `(provider, model, 档)`
+ * 拆桶，**金额也由宿主半算好**（用户覆盖价也读自设置）。这样"折叠 → 分档 → 单价"只有一处，
+ * 胶囊、面板与测试看到的是同一份数字。
  *
  * ## 字段名坑（2026-09-28 真机踩过，别再犯）
  *
@@ -51,12 +59,14 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-store'
-import { USAGE_API_PATH, type ComposerUxSettings } from '../settings-contract.ts'
 import {
-  PRICE_VERIFIED_AT, costBucketsOf, costPartsOf, formatMoney, formatTokens, isKnownModel, resolvePrice,
+  PRICE_VERIFIED_AT, costBucketsOf, costPartsOf, formatMoney, formatTokens, isKnownModel,
+  overrideTierOf, resolvePrice,
 } from '../pricing.ts'
+import type { ComposerUxSettings } from '../settings-contract.ts'
 import { UNKNOWN_ROUTE, agreesWithProjection, type UsageBuckets } from '../usage-fold.ts'
 import { billedInputTokens, cacheHitText } from './stats-line.ts'
+import { useSessionCost, type SessionCostBuckets, type SessionCostRoute } from './session-cost.ts'
 
 /** 位置夹紧：与官方 `useStatDialog` 同值（视口两边各留 12px）。 */
 const VIEWPORT_MARGIN = 12
@@ -78,25 +88,24 @@ interface ModelSelectionLike {
   readonly lastUsed?: { readonly provider?: string; readonly model?: string } | null
 }
 
-/** 宿主半 `/composer-ux/usage` 的响应。 */
-interface UsageBreakdown {
-  readonly ok?: boolean
-  readonly error?: string
-  /** 事件来源：`sessionQuery`（官方完整日志）/ `live`（活会话对象）/ `none`。 */
-  readonly source?: string
-  /** 折过的事件条数与真正折到 usage 的条数（诊断用：区分"没事件"与"形状不对"）。 */
-  readonly events?: number
-  readonly samples?: number
-  readonly total?: UsageBuckets
-  readonly routes?: readonly { readonly provider?: string; readonly model?: string; readonly usage?: UsageBuckets }[]
-}
-
 /** 注入面：标准套件给 `sessionId` / `useProjection`，我们自己的 `inject` 给 `live`。 */
 export interface CostChipInjected {
   readonly useLive: SnapshotSelectorHook<ComposerUxSettings>
   /** 当前会话 id（session 级槽位由框架解析后注入）。 */
   readonly sessionId?: string
   readonly useProjection: (key: string) => unknown
+}
+
+/** 有限数才认，其余当 0（宿主半的响应字段都是可选的，缺了不许算成 NaN）。 */
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** 一个 token 桶的总量（宿主半的桶字段都可选，缺的当 0）。 */
+function tokenTotal(buckets: SessionCostBuckets | undefined): number {
+  if (buckets === undefined) return 0
+  return num(buckets.inputTokens) + num(buckets.outputTokens)
+    + num(buckets.cacheReadTokens) + num(buckets.cacheWriteTokens)
 }
 
 /** 一条明细行（官方 stat-dialog 的 dt/dd 两格）。 */
@@ -122,14 +131,19 @@ function note(text: string, key?: string): React.ReactElement {
   )
 }
 
+/** 三项单价写成一行（`2.05 / 0.041 / 8.18`）。 */
+function priceText(triple: { readonly miss: number; readonly hit: number; readonly out: number }): string {
+  return `${triple.miss} / ${triple.hit} / ${triple.out}`
+}
+
 /**
  * 金额胶囊本体。
  *
  * hooks 一律在早退之前调用（没有用量时返回 null 只是不画，不是不挂载）。
  */
 export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInjected): React.ReactElement | null {
-  // 设置快照这一版还没用上（币种/覆盖价/开关在下一版接入），但读它能让组件在设置变化时重画。
-  useLive(item => item)
+  const settings = useLive(item => item)
+  const overrides = settings.priceOverrides
   const project = typeof useProjection === 'function' ? useProjection : () => undefined
   const usage = project('tokenUsage') as TokenUsageLike | undefined
   const selection = project('modelSelection') as ModelSelectionLike | undefined
@@ -137,16 +151,22 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   const [open, setOpen] = React.useState(false)
   const [hover, setHover] = React.useState(false)
   const [anchor, setAnchor] = React.useState<{ readonly left: number; readonly top: number } | null>(null)
-  const [breakdown, setBreakdown] = React.useState<UsageBreakdown | null>(null)
-  const [loading, setLoading] = React.useState(false)
   const chip = React.useRef<HTMLButtonElement | null>(null)
 
   // 两个名字都认（投影 `uncachedInputTokens` / 日志 `inputTokens`）—— 见文件头"字段名坑"。
   const buckets = costBucketsOf(usage)
+  const write = num(usage?.cacheWriteTokens)
   const model = selection?.lastUsed?.model
-  const price = resolvePrice(model, {})
-  const parts = costPartsOf(buckets, price.prices)
-  const billed = buckets.miss + buckets.hit + buckets.out + (usage?.cacheWriteTokens ?? 0)
+  const billed = buckets.miss + buckets.hit + buckets.out + write
+
+  // 宿主半那份"逐笔按时"的费用：用量一变就（节流）刷一次；点开面板时强制刷一次。
+  const fingerprint = `${buckets.miss}|${buckets.hit}|${write}|${buckets.out}`
+  const { data, loading } = useSessionCost(sessionId, fingerprint, open)
+
+  // 本地估值（兜底口径）：按**当前**时刻判峰谷，所以对跨峰谷的会话必然有偏差 ——
+  // 面板里那两条说明会把"这个数字是哪一种"讲清楚。
+  const estimate = resolvePrice(model, { overrides })
+  const estimateParts = costPartsOf(buckets, estimate.prices)
 
   const close = React.useCallback((): void => { setOpen(false); setAnchor(null) }, [])
   const toggle = (): void => {
@@ -162,19 +182,6 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
     setAnchor({ left, top: rect.top - 8 })
     setOpen(true)
   }
-
-  // 点开时才去问宿主半"这个会话按 route 各花了多少"。每次打开都重取一次，数字不会停在旧值上。
-  React.useEffect(() => {
-    if (!open || typeof sessionId !== 'string' || sessionId.length === 0) return
-    let cancelled = false
-    setLoading(true)
-    fetch(`${USAGE_API_PATH}?sessionId=${encodeURIComponent(sessionId)}`, { headers: { accept: 'application/json' } })
-      .then(response => response.json() as Promise<UsageBreakdown>)
-      .then(data => { if (!cancelled) setBreakdown(data) })
-      .catch(() => { if (!cancelled) setBreakdown({ ok: false, error: '取不到按 route 的分列' }) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [open, sessionId])
 
   // 浮层开着时：点别处 / 按 Esc 关掉（官方弹层同一行为）。
   React.useEffect(() => {
@@ -198,40 +205,49 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   if (billed === 0 && buckets.out === 0) return null
 
   // ── 分列（到齐且与投影一致才敢当权威）─────────────────────────────────────
-  const fold = breakdown?.ok === true && Array.isArray(breakdown.routes)
+  const hostRoutes: readonly SessionCostRoute[] = data?.ok === true && Array.isArray(data.routes) ? data.routes : []
+  const foldTotal = data?.ok === true
     ? {
-        total: breakdown.total ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        routes: breakdown.routes,
+        inputTokens: num(data.total?.inputTokens),
+        outputTokens: num(data.total?.outputTokens),
+        cacheReadTokens: num(data.total?.cacheReadTokens),
+        cacheWriteTokens: num(data.total?.cacheWriteTokens),
       }
     : null
-  const foldAgrees = fold !== null && agreesWithProjection(
-    { total: fold.total },
+  const foldAgrees = foldTotal !== null && agreesWithProjection(
+    { total: foldTotal },
     {
       inputTokens: buckets.miss,
       outputTokens: buckets.out,
       cacheReadTokens: buckets.hit,
-      cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
+      cacheWriteTokens: write,
     },
   )
-  const routeRows = fold?.routes
-    .filter(route => {
-      const row = route.usage ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
-      return row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens > 0
-    })
+  const routeRows = hostRoutes
+    .filter(route => tokenTotal(route.usage) > 0)
     .map(route => {
-      const row = route.usage ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
-      const priced = resolvePrice(route.model ?? '')
-      const rowParts = costPartsOf(costBucketsOf(row), priced.prices)
+      const row: UsageBuckets = {
+        inputTokens: num(route.usage?.inputTokens),
+        outputTokens: num(route.usage?.outputTokens),
+        cacheReadTokens: num(route.usage?.cacheReadTokens),
+        cacheWriteTokens: num(route.usage?.cacheWriteTokens),
+      }
       return {
         provider: route.provider === undefined || route.provider === '' ? UNKNOWN_ROUTE : route.provider,
         model: route.model === undefined || route.model === '' ? UNKNOWN_ROUTE : route.model,
+        peak: route.peak === true,
         unknownModel: isKnownModel(route.model) === false,
-        tokens: row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens,
-        cost: rowParts.total,
-        parts: rowParts,
+        tokens: tokenTotal(row),
+        cost: num(route.cost),
+        parts: { miss: num(route.parts?.miss), hit: num(route.parts?.hit), out: num(route.parts?.out) },
       }
-    }) ?? []
-  const routeTotal = routeRows.reduce((sum, route) => sum + route.cost, 0)
+    })
+  /** 两档各自的小计：这正是"逐笔准时"看得见的地方（同一模型在两档里的用量分别列出来）。 */
+  const tierOf = (peak: boolean): { readonly tokens: number; readonly cost: number } => routeRows
+    .filter(route => route.peak === peak)
+    .reduce((sum, route) => ({ tokens: sum.tokens + route.tokens, cost: sum.cost + route.cost }), { tokens: 0, cost: 0 })
+  const peakTier = tierOf(true)
+  const offTier = tierOf(false)
   // 分列里三个分项的**加和**：这样"未缓存输入 + 缓存命中 + 输出"三行加起来**恰好**是合计，
   // 即使两条 route 的模型单价不同也不会出现"分项之和对不上总数"。
   const routeParts = routeRows.reduce(
@@ -242,27 +258,27 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
     }),
     { miss: 0, hit: 0, out: 0 },
   )
-  const useBreakdown = routeRows.length > 0 && foldAgrees
-  // ── 展示口径：分列到手就用分列，否则用投影 ─────────────────────────────────
+  const useBreakdown = routeRows.length > 0 && foldAgrees && foldTotal !== null
+  // ── 展示口径：分列到手就用宿主半算好的那份，否则用本地估值 ───────────────────
   // 命中率必须和面板上那些数字**同源**（否则同一个面板里两个数字互相打脸），而分母必须是
   // 官方 `billedInputTokens()` 的口径（未缓存 + 缓存读 + 缓存写）——注意这里的**键名**，
   // 见文件头"字段名坑"的第二次踩坑记录。
-  const view = useBreakdown && fold !== null
+  const view = useBreakdown && foldTotal !== null
     ? {
-        miss: fold.total.inputTokens,
-        hit: fold.total.cacheReadTokens,
-        write: fold.total.cacheWriteTokens,
-        out: fold.total.outputTokens,
-        parts: routeParts,
-        total: routeTotal,
+        miss: foldTotal.inputTokens,
+        hit: foldTotal.cacheReadTokens,
+        write: foldTotal.cacheWriteTokens,
+        out: foldTotal.outputTokens,
+        parts: { miss: num(data?.cost?.miss), hit: num(data?.cost?.hit), out: num(data?.cost?.out) },
+        total: num(data?.cost?.total),
       }
     : {
         miss: buckets.miss,
         hit: buckets.hit,
-        write: usage?.cacheWriteTokens ?? 0,
+        write,
         out: buckets.out,
-        parts,
-        total: parts.total,
+        parts: estimateParts,
+        total: estimateParts.total,
       }
   const viewBilledInput = billedInputTokens({
     uncachedInputTokens: view.miss,
@@ -274,6 +290,12 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   const headline = formatMoney(view.total)
   const expanded = hover || open
 
+  // 两档生效单价（用户覆盖价 > 刊例价）：面板里显式列出来，改价之后一眼能核对。
+  const peakPrice = resolvePrice(model, { peak: true, overrides })
+  const offPrice = resolvePrice(model, { peak: false, overrides })
+  const overridden = peakPrice.overridden || offPrice.overridden
+    || overrideTierOf(overrides, model, true) !== undefined || overrideTierOf(overrides, model, false) !== undefined
+
   return (
     <>
       <button
@@ -281,7 +303,9 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         type="button"
         data-composer-ux-cost=""
         aria-expanded={open}
-        title="本会话费用（估算）"
+        title={useBreakdown
+          ? '本会话费用（按每笔用量发生的时间计价）'
+          : '本会话费用（估算）'}
         onClick={toggle}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
@@ -360,11 +384,17 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             {useBreakdown ? (
               <>
                 {routeRows.map(route => detail(
-                  `${route.provider} · ${route.model}`,
+                  `${route.provider} · ${route.model}${route.peak ? '（高峰）' : '（空闲）'}`,
                   `${formatTokens(route.tokens)} · ${formatMoney(route.cost)}`,
-                  `${route.provider}|${route.model}`,
+                  `${route.provider}|${route.model}|${String(route.peak)}`,
                 ))}
                 {detail('合计', `${formatTokens(view.miss + view.hit + view.write + view.out)} · ${formatMoney(view.total)}`, '__total__')}
+                {peakTier.tokens > 0
+                  ? detail('高峰档', `${formatTokens(peakTier.tokens)} · ${formatMoney(peakTier.cost)}`, '__peak__')
+                  : null}
+                {offTier.tokens > 0
+                  ? detail('空闲档', `${formatTokens(offTier.tokens)} · ${formatMoney(offTier.cost)}`, '__off__')
+                  : null}
                 {detail('未缓存输入', `${formatTokens(view.miss)} · ${formatMoney(view.parts.miss)}`, '__miss__')}
                 {detail('缓存命中', `${formatTokens(view.hit)} · ${formatMoney(view.parts.hit)}`, '__hit__')}
                 {detail('输出', `${formatTokens(view.out)} · ${formatMoney(view.parts.out)}`, '__out__')}
@@ -374,26 +404,29 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
               </>
             ) : (
               <>
-                {detail('未缓存输入', `${formatTokens(buckets.miss)} · ${formatMoney(parts.miss)}`)}
-                {detail('缓存命中', `${formatTokens(buckets.hit)} · ${formatMoney(parts.hit)}`)}
-                {detail('输出', `${formatTokens(buckets.out)} · ${formatMoney(parts.out)}`)}
+                {detail('未缓存输入', `${formatTokens(buckets.miss)} · ${formatMoney(estimateParts.miss)}`)}
+                {detail('缓存命中', `${formatTokens(buckets.hit)} · ${formatMoney(estimateParts.hit)}`)}
+                {detail('输出', `${formatTokens(buckets.out)} · ${formatMoney(estimateParts.out)}`)}
                 {note(loading
                   ? '正在按 route 归因…'
                   : routeRows.length > 0 && !foldAgrees
-                    ? '日志与投影对不上（会话可能刚写入），这里按投影口径显示总额'
-                    : breakdown?.ok === true
-                      ? `这个会话还没有可归因的用量（读了 ${breakdown.events ?? 0} 条事件、`
-                        + `${breakdown.samples ?? 0} 条 usage，来源 ${breakdown.source ?? '未知'}）`
-                      : breakdown?.ok === false
-                        ? `按 route 分列取不到：${breakdown.error ?? '未知原因'}`
+                    ? '日志与投影对不上（会话可能刚写入），这里先按当前档位估算总额'
+                    : data?.ok === true
+                      ? `这个会话还没有可归因的用量（读了 ${data.events ?? 0} 条事件、`
+                        + `${data.samples ?? 0} 条 usage，来源 ${data.source ?? '未知'}）`
+                      : data?.ok === false
+                        ? `按 route 分列取不到：${data.error ?? '未知原因'}`
                         : '按 route 分列需要宿主半读会话日志', '__fold__')}
               </>
             )}
             {detail('缓存命中率', viewHitRate === null ? '—' : `${viewHitRate}%`)}
-            {detail('单价（每 1M）', `${price.prices.miss} / ${price.prices.hit} / ${price.prices.out}`)}
-            {note(`${model === undefined || model === '' ? '未知模型（按默认模型计价）' : model} · `
-              + `${price.peak ? '高峰档' : '空闲档'} · 刊例价快照 ${PRICE_VERIFIED_AT}`)}
-            {note('各 route 都按 DeepSeek 官方价估算，未含中转加价；实际扣费以各家账单为准。')}
+            {detail('高峰单价（每 1M）', priceText(peakPrice.prices))}
+            {detail('空闲单价（每 1M）', priceText(offPrice.prices))}
+            {note((model === undefined || model === '' ? '未知模型（按默认模型计价）' : model)
+              + ` · 刊例价快照 ${PRICE_VERIFIED_AT}`
+              + (overridden ? ' · 已用你在设置页「金额」里填的价' : ''))}
+            {note('峰谷按每笔用量发生的时间判定；各 route 都按 DeepSeek 官方价估算，'
+              + '未含中转加价，实际扣费以各家账单为准。')}
           </div>
         </div>,
         document.body,

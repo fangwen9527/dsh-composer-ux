@@ -35,6 +35,7 @@ import {
   sanitizeTerminalCandidates,
 } from '../terminal/contracts.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
+import { CostCardBody } from './CostCard.tsx'
 import { OptimizerPromptEditor } from './OptimizerPromptEditor.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { PillChoice } from './PillChoice.tsx'
@@ -1041,6 +1042,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         : (settings.terminalEffective === 'bash' ? '当前：Git Bash' : '当前：PowerShell（未接管）')
   // 统计行卡片的概览。这一栏只有一个开关（是否三位小数），所以概览就是它的状态。
   const statsSummary = `${HIT_DIGITS} 位小数`
+  // 金额卡片的概览：改了价就说改了几个模型，没改就说按官方刊例价（这一栏没有开关，
+  // 概览就是它唯一的状态展示 —— 用户扫一眼就知道"我到底有没有覆盖过价"）。
+  const costSummary = (() => {
+    const models = settings.priceOverrides === undefined ? [] : Object.keys(settings.priceOverrides)
+    return models.length === 0 ? '按官方刊例价估算' : `已覆盖 ${models.length} 个模型的单价`
+  })()
 
   return (
     <div style={{ padding: '4px 2px' }}>
@@ -1474,6 +1481,15 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           连它的无障碍名字一起改（读屏听到的也是三位小数）；点开统计行的弹窗、每轮用量弹窗里的
           百分比保持官方原样。关掉上方的开关，本插件会把官方那一版原样写回去。
         </p>
+      </FoldCard>
+
+      {/*
+        「金额」（0.9.1）。这一栏**没有总开关**：金额胶囊是常显的一条记录，用户没要开关；
+        要做的事只有一件 —— 让"按模型改峰/谷单价"有个地方填。做法/坑见 client/CostCard.tsx
+        的文件头（留空＝官方价、非法文本不静默清空、写设置合并 + 回声识别）。
+      */}
+      <FoldCard name="金额" summary={costSummary}>
+        <CostCardBody settings={settings} setField={actions.setField} clearField={actions.clearField} />
       </FoldCard>
       </>)}
     </div>

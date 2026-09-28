@@ -30,14 +30,18 @@ import {
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZER_API_PATH, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
-  PANEL_WIDTH_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
+  PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
   type QuickPromptBook,
 } from './settings-contract.ts'
-import { foldSessionUsage } from './usage-fold.ts'
+import {
+  costBucketsOf, costPartsOf, isPeakAt, parsePriceOverrides, resolvePrice,
+  type PriceOverrideTable,
+} from './pricing.ts'
+import { createUsageCache } from './usage-fold.ts'
 import {
   TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
   TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -421,6 +425,13 @@ function ownSchema(): z {
     // 相反）：它没有"碰过才开"的迁移需求，默认就是开，且必须能被设置页写入
     // （写不进去 = 开关点了没反应，本插件为此专门有一条回读校验）。
     [STATS_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.statsEnabled),
+    // 「金额」（0.9.1）：用户覆盖价整张表（按模型 → 档 → 三项单价）。
+    //
+    // **故意用 `z.any()`**：键是用户自己加的模型名，schemastery 的对象 schema 表达不了动态键。
+    // 形状检查交给 `parsePriceOverrides`（逐项宽容、坏项丢掉），schema 再拦一道反而会造出
+    // "设置页写不进去"这种最难解释的故障 —— 写入路径只需这一项是 volatile（整个字段一起写，
+    // 不做嵌套路径写），所以逐字段标记那一套照旧成立。
+    [PRICE_OVERRIDES_FIELD]: z.any().required(false),
   })
 }
 
@@ -921,6 +932,47 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }
 
+    /**
+     * 峰谷判定（0.9.1）：按**每条用量事件自己的时间戳**判档，而不是"看面板的那一秒"。
+     *
+     * 这就是 0.8.0 的一个静默错处：昨晚（空闲档）跑的会话，今天上午 10 点看会整份按高峰档
+     * 显示 —— 差 2 倍，而屏幕上只是个数字。事件没有可用时间戳时退回"现在"（＝旧行为），
+     * 但绝不静默把一切判成空闲档。
+     */
+    const peakAt = (ms: number): boolean => isPeakAt(new Date(Number.isFinite(ms) ? ms : Date.now()))
+
+    /**
+     * 每个被问过的会话一个**增量**折叠缓存（`createUsageCache`，纯逻辑在 `usage-fold.ts`）。
+     *
+     * 为什么要缓存：金额胶囊要跟着流式用量刷新，而 `sessionQuery.readSession()` 会深拷贝整份
+     * 日志并重新校验（几千条事件也要几百毫秒），每次取价都重读不可接受。缓存靠两条腿走路：
+     *   · 下面的 `session/event` 订阅 —— 活会话的事件一条条喂进来，取价时是 O(1)；
+     *   · `sync()` 里的 `seq` 落后检测 —— 首次（或发现落后）时完整读一次播种，
+     *     播种期间订阅来的事件由缓存内部攒着、读完按 seq 补上（细节见 `usage-fold.ts`）。
+     */
+    const usageCache = createUsageCache(peakAt)
+    usageCtx.on?.('session/event', ((session: unknown, event: unknown) => {
+      try {
+        const id = (session as { id?: unknown } | null)?.id
+        if (typeof id !== 'string' || id === '') return
+        usageCache.event(id, event)
+      } catch (error: unknown) {
+        // 折叠失败绝不能影响会话本身：这里只记一条日志。
+        console.warn('[composer-ux] 会话用量折叠失败', error)
+      }
+    }) as never)
+
+    /** 当前生效的用户覆盖价（读不到就当没填：一次设置读失败不该把金额算成全 0）。 */
+    const readOverrides = (): PriceOverrideTable | undefined => {
+      try {
+        const service = usageCtx.get('settings') as { get?: (ns: string) => unknown } | undefined
+        const row = service?.get?.(NAMESPACE)
+        return parsePriceOverrides((row as Record<string, unknown> | undefined)?.[PRICE_OVERRIDES_FIELD])
+      } catch {
+        return undefined
+      }
+    }
+
     const handle = (
       req: { method?: string; url?: string },
       res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
@@ -939,37 +991,44 @@ export function apply(ctx: Context, config?: unknown): void {
         return
       }
       void (async (): Promise<void> => {
-        // 事件来源优先级：
-        //   1. 官方 `sessionQuery.readSession(sessionId)` —— 带 data 的完整日志，活会话与归档会话
-        //      都能读。**2026-09-28 真机踩坑**：最早只在活会话对象上找 `events`，结果一条都折不出来
-        //      （面板只能显示"还没有可归因的用量"），实际上这一版没有 `assistant/chunk` 事件，
-        //      usage 藏在 `assistant/attempt` 的 stream 里（见 src/usage-fold.ts 文件头）。
-        //   2. 活会话对象上的 `events`（早先那份社区实现的路子，留着当退路）。
-        // 两条都拿不到就如实回报，让界面退回"只有总额"，绝不编一个空的分列糊上去。
-        let events: readonly unknown[] = []
-        let source = 'none'
-        try {
+        // ── 1) 把折叠器同步到最新 ───────────────────────────────────────────────
+        // 第一次被问（缓存里还没有这个会话）与"落后检测"命中时，缓存内部会用
+        // `sessionQuery.readSession()` 完整读一次播种；之后全靠 `session/event` 订阅增量喂。
+        // **2026-09-28 真机踩坑**：这一版没有 `assistant/chunk` 事件，usage 藏在
+        // `assistant/attempt` 的 stream 里（见 src/usage-fold.ts 文件头），所以"一条都没读到"
+        // 必须如实回报，绝不编一份空分列糊上去。
+        const live = liveSessions().find(row => (row as { id?: unknown } | null)?.id === sessionId) as
+          { seq?: unknown } | undefined
+        // `seq` 是"下一条事件的序号"（= 已写入条数），所以最后一条已写入事件的 seq 是 `liveSeq - 1`。
+        const liveSeq = typeof live?.seq === 'number' && Number.isFinite(live.seq) ? live.seq : undefined
+        const { fold, source } = await usageCache.sync(sessionId, liveSeq, async () => {
           const query = usageCtx.get('sessionQuery') as
             { readSession?: (id: string) => Promise<{ events?: readonly unknown[] } | undefined> } | undefined
-          if (typeof query?.readSession === 'function') {
-            const snapshot = await query.readSession(sessionId)
-            if (Array.isArray(snapshot?.events)) {
-              events = snapshot.events
-              source = 'sessionQuery'
-            }
-          }
-        } catch {
-          /* 退到下面那条路 */
-        }
-        if (events.length === 0) {
-          const live = liveSessions()
-            .find(row => (row as { id?: unknown } | null)?.id === sessionId) as { events?: readonly unknown[] } | undefined
-          if (Array.isArray(live?.events)) {
-            events = live.events
-            source = 'live'
-          }
-        }
-        const fold = foldSessionUsage(events)
+          const snapshot = typeof query?.readSession === 'function' ? await query.readSession(sessionId) : undefined
+          return Array.isArray(snapshot?.events) ? snapshot.events : []
+        })
+
+        // ── 2) 逐 route 计价 ────────────────────────────────────────────────────
+        // 档位来自折叠结果（**每条用量事件自己的时间**），单价来自用户覆盖价 + 内置刊例价。
+        // 计价放在宿主半是刻意的：这样"折叠规则 → 分档 → 单价"只有一处，胶囊与面板
+        // （以及 `test/*.mjs`）看到的是同一份数字，不会各算各的。
+        const overrides = readOverrides()
+        const routes = fold.routes.map(item => {
+          const parts = costPartsOf(
+            costBucketsOf(item.usage),
+            resolvePrice(item.model, { peak: item.peak, overrides }).prices,
+          )
+          return { ...item, cost: parts.total, parts }
+        })
+        const cost = routes.reduce(
+          (sum, item) => ({
+            miss: sum.miss + item.parts.miss,
+            hit: sum.hit + item.parts.hit,
+            out: sum.out + item.parts.out,
+            total: sum.total + item.cost,
+          }),
+          { miss: 0, hit: 0, out: 0, total: 0 },
+        )
         sendJson(res, 200, {
           ok: true,
           sessionId,
@@ -978,7 +1037,10 @@ export function apply(ctx: Context, config?: unknown): void {
           events: fold.events,
           samples: fold.samples,
           total: fold.total,
-          routes: fold.routes,
+          /** 高峰 / 空闲两档的小计（界面按档显示，也是"逐笔准时"看得见的地方）。 */
+          tiers: fold.tiers,
+          routes,
+          cost,
         })
       })()
     }

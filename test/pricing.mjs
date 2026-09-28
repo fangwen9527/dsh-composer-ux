@@ -391,5 +391,108 @@ console.log('8. 覆盖价解析')
     ours.resolvePrice('deepseek-flash', { at: MON_PEAK, overrides: parsed }).prices.miss === 3)
 }
 
+// ══════════════ 9. 设置页「金额」那一栏的纯逻辑（0.9.1）═════════════════════════
+//
+// 卡片本身只是几个输入框，真正会出错的是"怎么把六格变成覆盖价表"和"怎么把文本变成数字"：
+//   · 留空必须**清掉**这一格（沿用官方价），而不是写成 0 —— 写成 0 的话金额会变成 0，
+//     屏幕上看不出任何异常；
+//   · 非法文本（`1,02`、`2元`）必须**拒绝**，不能当清空 —— 静默清空等于价格悄悄回到官方价，
+//     而用户以为改成功了；
+//   · 空壳要往上收（一档三项全空 → 删档；一个模型两档全空 → 删模型；整表全空 → undefined），
+//     否则设置文件里会堆满空对象、界面还会多出永远填不上的空行。
+console.log('9. 金额栏的纯逻辑')
+{
+  check('内置模型与字段顺序就是界面上的行与列',
+    JSON.stringify(ours.BUILTIN_PRICING_MODELS) === JSON.stringify(Object.keys(ours.PRICE_TABLE))
+    && JSON.stringify(ours.PRICE_FIELDS) === JSON.stringify(['miss', 'hit', 'out']))
+
+  // ── 文本三态 ──
+  check('空串 / 只有空白 → empty', ours.parsePriceText('').kind === 'empty'
+    && ours.parsePriceText('   ').kind === 'empty')
+  check('合法数字（含小数、0）→ number',
+    ours.parsePriceText(' 1.02 ').kind === 'number' && ours.parsePriceText(' 1.02 ').value === 1.02
+    && ours.parsePriceText('0').value === 0)
+  check('千分位逗号 / 带单位 / 负数 / 非数 → invalid（绝不静默清空）',
+    ours.parsePriceText('1,02').kind === 'invalid'
+    && ours.parsePriceText('2元').kind === 'invalid'
+    && ours.parsePriceText('-1').kind === 'invalid'
+    && ours.parsePriceText('abc').kind === 'invalid')
+
+  // ── 改一格 ──
+  const base = ours.withOverrideValue(undefined, 'deepseek-flash', true, 'miss', 3)
+  check('第一次写入就建出表与档', base['deepseek-flash'].peak.miss === 3)
+  const twoCells = ours.withOverrideValue(base, 'deepseek-flash', true, 'out', 9)
+  check('同档第二格不覆盖第一格', twoCells['deepseek-flash'].peak.miss === 3 && twoCells['deepseek-flash'].peak.out === 9)
+  const cleared = ours.withOverrideValue(twoCells, 'deepseek-flash', true, 'out', undefined)
+  check('清空一格 = 删掉那个键（不是写 0）',
+    cleared['deepseek-flash'].peak.out === undefined && cleared['deepseek-flash'].peak.miss === 3)
+  check('一档三项全清 → 整档消失', ours.withOverrideValue(
+    ours.withOverrideValue(cleared, 'deepseek-flash', true, 'miss', undefined),
+    'deepseek-flash', true, 'hit', undefined,
+  ) === undefined)
+  const bothTiers = ours.withOverrideValue(
+    ours.withOverrideValue(undefined, 'deepseek-flash', true, 'miss', 3),
+    'deepseek-flash', false, 'miss', 1.5,
+  )
+  check('两档各留一格 → 模型那一项还活着',
+    bothTiers['deepseek-flash'].peak.miss === 3 && bothTiers['deepseek-flash'].offPeak.miss === 1.5)
+  check('两档都清空 → 模型那一项消失',
+    ours.withOverrideValue(
+      ours.withOverrideValue(bothTiers, 'deepseek-flash', true, 'miss', undefined),
+      'deepseek-flash', false, 'miss', undefined,
+    ) === undefined)
+  const twoModels = ours.withOverrideValue(base, 'My-Relay', true, 'miss', 7)
+  check('键归一化（大小写/空格）', twoModels['my-relay'] !== undefined && twoModels['deepseek-flash'] !== undefined)
+  check('改一个模型不动另一个', twoModels['deepseek-flash'].peak.miss === 3)
+  check('负数 = 清空（不是写进表里）',
+    ours.withOverrideValue(twoModels, 'my-relay', true, 'miss', -5)['my-relay'] === undefined)
+  check('原表不被改动（不可变）', base['deepseek-flash'].peak.miss === 3 && base['my-relay'] === undefined)
+
+  // ── 删整行 / 读一格 ──
+  check('读一格：没填 → undefined（界面要显示空框，不是 0）',
+    ours.overrideValueOf(undefined, 'deepseek-flash', true, 'miss') === undefined
+    && ours.overrideValueOf(base, 'deepseek-flash', true, 'hit') === undefined)
+  check('读一格：填了 → 数字', ours.overrideValueOf(base, 'deepseek-flash', true, 'miss') === 3)
+  check('删整行（恢复官方价）', ours.withoutPricingModel(twoModels, 'deepseek-flash')['deepseek-flash'] === undefined)
+  check('删最后一行 → undefined（设置里那个键就该消失）',
+    ours.withoutPricingModel(base, 'deepseek-flash') === undefined)
+  check('删不存在的键是空操作', JSON.stringify(ours.withoutPricingModel(base, 'nope')) === JSON.stringify(base))
+
+  // ── 占位提示 = "不填时会按什么价算" ──
+  check('内置模型的官方占位价（高峰/空闲）',
+    ours.officialTripleOf('deepseek-flash', true).miss === ours.PRICE_TABLE['deepseek-flash'].peak.cny.miss
+    && ours.officialTripleOf('deepseek-flash', false).out === ours.PRICE_TABLE['deepseek-flash'].offPeak.cny.out)
+  check('认不出的模型按 deepseek-flash 的价当占位（与 resolvePrice 的兜底一致）',
+    ours.officialTripleOf('my-relay', true).miss === ours.PRICE_TABLE['deepseek-flash'].peak.cny.miss)
+
+  // ── 与计价接上：填了就必须真的生效 ──
+  const card = ours.parsePriceOverrides(
+    ours.withOverrideValue(ours.withOverrideValue(undefined, 'my-relay', true, 'miss', 12), 'my-relay', false, 'miss', 6),
+  )
+  check('自定义模型的高峰/空闲两档都被计价采纳',
+    ours.resolvePrice('my-relay', { peak: true, overrides: card }).prices.miss === 12
+    && ours.resolvePrice('my-relay', { peak: false, overrides: card }).prices.miss === 6)
+  check('没填的项沿用官方价（那两档的 hit/out 还是 flash 的）',
+    ours.resolvePrice('my-relay', { peak: true, overrides: card }).prices.out
+      === ours.PRICE_TABLE['deepseek-flash'].peak.cny.out)
+  check('`peak` 参数直接指定档位（不看时刻）',
+    ours.resolvePrice('deepseek-flash', { at: MON_PEAK, peak: false }).prices.miss
+      === ours.PRICE_TABLE['deepseek-flash'].offPeak.cny.miss
+    && ours.resolvePrice('deepseek-flash', { peak: true }).prices.miss
+      === ours.PRICE_TABLE['deepseek-flash'].peak.cny.miss)
+  check('按别名键写的覆盖价也能被 resolvePrice 认到（原样名兜底）',
+    ours.resolvePrice('deepseek-chat', {
+      peak: true,
+      overrides: ours.withOverrideValue(undefined, 'deepseek-chat', true, 'miss', 5),
+    }).prices.miss === 5)
+  check('自定义行列表：内置与别名都不算自定义',
+    JSON.stringify(ours.customPricingModels({
+      ...card,
+      'deepseek-flash': { peak: { miss: 1 } },
+      'deepseek-chat': { peak: { miss: 1 } },
+    })) === JSON.stringify(['my-relay'])
+    && JSON.stringify(ours.customPricingModels(undefined)) === JSON.stringify([]))
+}
+
 console.log(`\n${passes} passed / ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

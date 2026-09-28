@@ -10,7 +10,7 @@ import {
   MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
-  STATS_ENABLED_FIELD,
+  STATS_ENABLED_FIELD, PRICE_OVERRIDES_FIELD,
   activeSections, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
@@ -304,6 +304,10 @@ export function apply(ctx: any): void {
         // 所以"恢复默认"看到的仍是开着的——与上面五栏（清掉即关）方向相反，但各自都对：
         // 清掉的定义是"回到从没碰过的样子"，而这一栏从没碰过的样子就是开。
         STATS_ENABLED_FIELD,
+        // 「金额」（0.9.1）的覆盖价也清掉：清掉 = 回到 schema 默认 = 没有覆盖价（全按官方刊例价）。
+        // 不清的话，"恢复默认"之后金额还会按用户之前填的价算——那是用户唯一能看出
+        // "恢复默认到底生没生效"的数字。
+        PRICE_OVERRIDES_FIELD,
         // 0.5.0 里那个「可选重启命令」字段已经删掉，但老文档里可能还留着值：
         // 顺手清掉，免得它永远躺在设置文件里没人认识。
         'restartCommand',

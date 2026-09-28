@@ -9,7 +9,9 @@
 > model's PowerShell tool with **Git Bash** (git-anchored discovery, WSL excluded, per-session tool-surface
 > trim, official-identical sandbox/approval/timeout semantics), a **composer stats-line upgrade** that renders the
 > built-in cache-hit percentage with **three decimals** (keeping upstream's "never round a partial hit up to 100%"
-> rule), plus a **one-click "restart DSH"** button
+> rule), a **cost capsule** whose peak/off-peak prices you can edit **per model** in settings (empty field =
+> official list price; peak/off-peak is decided by **each usage event's own timestamp**, not by when you look
+> at the panel), plus a **one-click "restart DSH"** button
 > in the settings-card header (market-proven self-restart: detached node helper, port-release wait,
 > hidden-console relaunch, same-origin fence, boot-id reload).
 > Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
@@ -21,7 +23,7 @@ DeepSeek Harness Web 输入体验增强插件：
 
 > 上图即 0.5.0 的设置页（六栏都开着）。注意标题行**只有卡级开关与从属控件** —— 右键菜单那 7 个条目开关已按实测反馈搬进卡内的「自定义」档（见第 0 条）。
 
-0. **两层开关：总开关 + 每栏开关**。设置页顶部「启用输入增强」是**总开关（默认开）**，它是一道总闸；七张折叠卡的标题行右端各有一个**卡级开关**，决定「这一栏要不要生效」。两处都满足才生效（`enabled && 该栏开关`）。前六栏默认**关**；第 7 栏「统计行」默认**开**（它是唯一例外，理由见下条）。
+0. **两层开关：总开关 + 每栏开关**。设置页顶部「启用输入增强」是**总开关（默认开）**，它是一道总闸；八张折叠卡里**前七张**的标题行右端各有一个**卡级开关**，决定「这一栏要不要生效」（第 8 张「金额」没有开关 —— 金额胶囊常驻显示）。两处都满足才生效（`enabled && 该栏开关`）。前六栏默认**关**；第 7 栏「统计行」默认**开**（它是唯一例外，理由见下条）。
    - **兼容性**：同一个产物同时支持 **DSH 0.1.6 与 0.1.7**。两代的设置服务形状不同（`settingsScope.bind` → `configForms.get`、宿主 `settings.register` 被删除、事件名换代），代码按**能力探测**分支，不维护两份产物。
    - ⚠️ **升级 DSH 到 0.1.7 之前先备份 `~/.dsh/settings.yaml`**：0.1.7 的官方升级会把它改名成 `settings.yaml.imported` 并逐节导入 profile patch（一次性、不可逆），而本插件这一段在旧版上**导不进去**（那时还没有 Config 字段表），旧值只会留在那个 `.imported` 文件里。
    - **老用户不会被升级弄坏**：卡级开关的默认值不是硬编码的 `false`，而是按「设置文档里有没有『你在用』的痕迹」迁移 —— 碰过的栏保持开着、没碰过的才是关；全新安装（空白文档）才是六栏全关。「快捷指令」那一栏多一条文件判据（0.3.0 起条目存在 `quick-prompts.json`，设置文档里看不出来）。
@@ -30,7 +32,7 @@ DeepSeek Harness Web 输入体验增强插件：
    - **关掉一栏 = 这一块完全不介入**，且栏内的值全部保留（打开即原样恢复）：键位关 → 输入框按 DSH 原生键位；右键菜单关 → 本插件不介入；快捷指令关 → 输入框那枚按钮消失；设置面板关 → 不拖大小；OpenCode 请求头关 → 停止注入并撤销已写入的头；默认终端关 → 保持 PowerShell。
    - 「OpenCode 请求头」那一栏**没有额外的开关**：原来的「附加请求头」本来就是「这一栏要不要生效」，直接搬到了标题行。
 1. **设置 → 输入体验**（设置页新增条目）
-   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下七个栏目为**可折叠卡片** —— 标题行左侧是「标题 + 一句动态概览 + 展开箭头」，右侧是**这一栏的开关与从属控件**（设置面板的缩放开关、默认终端的三档都在这里），长说明与其余控件在展开后的内容区；**默认全部折叠、不记忆展开状态**，可同时展开多个。标题行**只放卡级开关与从属控件**：右键菜单那 7 个条目开关按用户后来的反馈**搬回了卡内**（它们只对「自定义」档有意义，见下一条）。
+   - 版式对齐社区插件 `@linxin666/dsh-web-all` 的「Web 插件」页：顶部常显「中文名 + 内嵌英文包名 `dsh-composer-ux` 的一行描述 + 总开关」；其下八个栏目为**可折叠卡片** —— 标题行左侧是「标题 + 一句动态概览 + 展开箭头」，右侧是**这一栏的开关与从属控件**（设置面板的缩放开关、默认终端的三档都在这里），长说明与其余控件在展开后的内容区；**默认全部折叠、不记忆展开状态**，可同时展开多个。标题行**只放卡级开关与从属控件**：右键菜单那 7 个条目开关按用户后来的反馈**搬回了卡内**（它们只对「自定义」档有意义，见下一条）。
    - **键位**：分别配置「发送键」「换行键」——常用预设（Enter / Ctrl+Enter / Alt+Enter / Shift+Enter）+ 点击「自定义…」后直接按任意组合键录制（Esc 取消，Backspace 清除），支持清空为「无」；发送与换行不能设为相同按键；可一键恢复默认。
    - **右键菜单**：三档「菜单来源」（官方不介入 / 浏览器菜单 / 自定义菜单，见下「右键菜单」一节）；卡内**只显示当前选中那一档的说明**（点官方看官方的、点浏览器看浏览器的、点自定义看自定义的；自定义档还带 Chrome / Edge 与 Firefox 的剪贴板授权说明）；那 7 个条目（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）**只在「自定义」档显示**、逐个开关（旁边一个「全部开启」）。这三件事有**真渲染测试**盯着（`node test/settings-render.mjs`：把设置页渲染成 HTML，断言三档正文互斥、那 7 行只在自定义档、标题行没有第二个入口）。
    - **快捷指令**：分类增删改 / 条目增删改与上下移 / 跨分类移动 / 每条一个插入模式（关 · 每次 · 仅首次）/ 优化强度三档（详见下节）。
@@ -38,7 +40,7 @@ DeepSeek Harness Web 输入体验增强插件：
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
    - **默认终端**：Windows 上把模型用的终端工具从 PowerShell 换成 Git Bash（三档在标题行；详见下节）。
    - **统计行**：输入框下方那行「缓存命中 xx%」按三位小数显示（0.7.0 新增，**唯一默认开的栏**，只有一个开关；详见下节）。
-   - **金额**：输入框下方一颗极简金额胶囊（本会话费用估算，按 DeepSeek 官方刊例价；点开看三分项明细）。**这一版常驻显示、还没有开关**（0.8.0 新增；详见下节）。
+   - **金额**：输入框下方一颗极简金额胶囊（本会话费用估算，按 DeepSeek 官方刊例价；点开看三分项明细）。**这一栏没有卡级开关**（胶囊常驻显示），卡内是**按模型改高峰/空闲两档单价**的编辑器（0.9.1 新增；留空＝沿用官方价，可自加任意模型名；详见下节）。
    - **重启 DSH**：卡片抬头右端（GitHub 链接左边）那枚按钮，两步确认后原地重启（详见「维护：重启 DSH」）。
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
@@ -246,19 +248,26 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 - **护栏**：`node test/stats-line.mjs`（52 项）盯小数语义、两个字符串变换与"不许碰"的范围；`node test/stats-dom.mjs`（17 项）用**按官方源码复刻的假 DOM** 盯定位与改写范围（这两件坏事都是静默的），并断言"不写任何行内样式"；两条都已进 `npm test`。
   `test/mutation-guards.mjs` 的 `AF`–`AM` 八条变异盯"退化成 `toFixed(3)` / 判据放宽 / 默认改成关 / 扫全页 / 不同步 `aria-label` / 去掉层数上限 / 撤掉的加宽长回来 / 加宽常量重新引入"这八种退化。
 
-## 金额（输入框下方显示本会话费用）
+## 金额（输入框下方显示本会话费用 + 设置页可改峰谷单价）
 
-- **设置页位置**：**这一版还没有开关**（常驻显示）。币种（¥/$）、单价覆盖、折叠态是否带余额、账户余额与今日/月累计，随后的版本接入设置栏（第 8 张卡）。
-- **长什么样**：不点击时是输入框下方一颗极简胶囊（`¥0.42`，与官方那行统计**同排、排在其后**，order 100）；点开后是贴在它上方的浮层 —— 各 route 的 token 与花费、合计、三分项（未缓存输入 / 缓存命中 / 输出）各自的 token 数与花费、缓存命中率、生效单价、模型名与峰谷档，并注明"按官方刊例价估算、未含中转加价"。
+- **设置页位置**：第 8 张卡「金额」（**没有卡级开关**：胶囊常驻显示）。卡内是按模型改**高峰 / 空闲两档**的三项单价（未缓存输入 / 缓存命中 / 输出，元每 1M tokens）：
+  - 内置 `deepseek-flash`、`deepseek-v4-flash`、`deepseek-v4-pro` **三行常显**（并标出别名 `deepseek-chat` / `deepseek-reasoner`），下面一行「再加一个模型」可以填**任意模型名** —— 中转/自建路由的名字不在官方价表里，不覆盖就只能按 `deepseek-flash` 估价。
+  - **留空＝沿用官方刊例价**：输入框里的灰字占位就是官方价（认不出的模型显示 `deepseek-flash` 那一档，与计价兜底完全一致）。清空的传播是往上收的：一档三项全空 → 那一档消失；一个模型两档都空 → 那一整行消失；整表全空 → 设置里这个键直接删掉。
+  - **非法文本不静默清空**：`1,02`、`2元`、`-1` 会留在框里**标红**（`parsePriceText` 三态），不写进设置 —— 把它当"清空"的话，价格会悄悄回到官方价，而用户以为改成功了。
+  - 写入是**合并 + 认回声**：连改几格只发一次设置写入（300ms 合并）；用规范化比对分辨"设置里来的新值"与"自己刚写进去的回声"，否则回声会把还没写完的第二格编辑冲掉。「恢复默认」也会清掉这张表。
+  - 改价**即时生效**（胶囊与明细页当场跟着变），不用刷新页面、不用重启。
+- **长什么样**：不点击时是输入框下方一颗极简胶囊（`¥0.42`，与官方那行统计**同排、排在其后**，order 100）；点开后是贴在它上方的浮层 —— 各 route 的 token 与花费、合计、**高峰档 / 空闲档各自的小计**、三分项（未缓存输入 / 缓存命中 / 输出）各自的 token 数与花费、缓存命中率、**两档生效单价**、模型名与刊例价核对日期，并注明"按官方刊例价估算、未含中转加价"。
 - **字号与亮度照抄官方那颗胶囊，不自己定**：文字大小/行高取官方 `StatsPills.module.css` 里 **`.root`** 的两条（`calc(var(--dsh-content-font-size-secondary, 13px) - 1px)` 与 `calc(20px + var(--dsh-content-font-delta-secondary, 0px))`），亮度取 `.pill` 的"静止 `label-tertiary`、hover/展开 `label-secondary`"。**坑**：那两条在 `.root` 上，不在 `.pill` 上 —— `.pill` 里的 `font: inherit` 只是为了抵消 button 的 UA 字体；本条目是同一槽位里的另一条记录，不在那颗 `.root` 里，只写 `font: inherit` 会继承输入框那一层（默认 14px），真机上看就是"插件输入框下方的字比官方的大"（2026-09-28 用户反馈）。所以这里显式写 `.root` 的两条，并**不用 `font:` 简写**（简写会把字号重置回继承）。
 - **为什么是浮层而不是就地展开**：输入卡片会裁掉溢出内容，官方那几颗胶囊（ContextMeter、时间胶囊）也都是浮层；这里用 React portal 挂到 `document.body`，位置由胶囊的视口矩形算出，点别处或按 Esc 关闭。
-- **钱是怎么算的**：`未缓存输入 × miss价 + 缓存命中 × hit价 + 输出 × out价`（每 1M tokens；DeepSeek 不对缓存写入单独计价，所以 `cacheWriteTokens` 只进"计费输入"的显示、不进费用）。峰谷档按官方规则（北京时间工作日 09:00–12:00、14:00–18:00 为高峰，价格 ×2）。
+- **钱是怎么算的**：`未缓存输入 × miss价 + 缓存命中 × hit价 + 输出 × out价`（每 1M tokens；DeepSeek 不对缓存写入单独计价，所以 `cacheWriteTokens` 只进"计费输入"的显示、不进费用）。**峰谷按每笔用量真正发生的时间判定**（官方规则：UTC 周一至周五 01–04、06–10，即北京时间工作日 09:00–12:00、14:00–18:00），高峰价是空闲价的 2 倍，用户覆盖价由设置页「金额」栏提供。
+- **峰谷为什么必须按事件时间判（0.9.1 修的既有缺陷）**：官方按**请求发生时刻**计费，而 0.8.0 拿"你打开面板的那一秒"当所有用量的时刻 —— 昨晚（空闲档）跑的会话今天上午 10 点看，整份会按高峰价显示，差 2 倍而屏幕上只是个数字。现在宿主半折叠时用每条事件的 `time` 判档、按 `(provider, model, 档位)` 拆桶，**同一步的替换增量沿用该步第一次判定的档**（否则一次跨过 09:00 的请求会被拆成两档、凭空多出一个"高峰用量"）；事件既没有 `request/header` 时间、自己也没有 `time` 时，判定函数收到 `NaN`，宿主半退回"现在"（＝旧行为），绝不静默判成空闲档。
 - **为什么金额必须自己算**：DSH 送到浏览器的 `tokenUsage` 投影**只有 token 桶**，全库没有一处把"钱"送到客户端；`llm-pi-ai` 里那个 `cost` 只活在 provider 内部，而且用户自定义的路由（profile 里手写的 provider）拿到的是 `NO_COST`（全 0）。所以费用只能由本插件按刊例价算。
 - **数据全部来自官方、不新增采集**：token 桶读 `tokenUsage` 投影（与官方统计行**同一份**），模型读 `modelSelection` 投影（来自 `request/header` 事件）。会话中途换过模型时按**最后一次请求**的模型计价（近似，浮层里写明）。
-- **按 route 分列**（折叠态那一个数字仍由客户端按官方投影算；点开才去问宿主半）：面板里列出每条 route（provider + model）的 token 与花费，**总额以分列之和为准**，所以"各行加起来等于总额"永远成立；三分项的钱**按各 route 自己的单价分别累加**，所以"三项相加 = 合计"也精确成立（两条 route 单价不同时也成立）。逐请求归因只能宿主半做，走只读路由 `GET /composer-ux/usage?sessionId=…`（`src/host.ts` 注册）：**事件取自官方 `sessionQuery.readSession(sessionId)`**（带 data 的完整日志，活会话与归档会话都能读），折叠规则在 [src/usage-fold.ts](src/usage-fold.ts)。**事件形状按本版官方 `SessionEventMap` 的真实声明**（`assistant/attempt` 的 `stream` 里取最后一条 usage 块，或 `assistant/message` 的 `data.usage`；**本版没有 `assistant/chunk` 事件**），口径对齐官方 `token-meter` 的 `usage-projection`（同一步替换、`llm/retry-started` 重开替换槽）。`test/usage-fold.mjs`（39 项）逐条钉住差分、归属、重试与脏数据；分列出不来时面板会显示"读了 N 条事件、M 条 usage、来源哪条路"，一眼就能定位。
+- **按 route 分列与"逐笔准时"的取数**（点开才去问宿主半；折叠态那颗胶囊也走同一条路由）：面板里列出每条 route（provider + model + 高峰/空闲）的 token 与花费，**金额由宿主半按档算好**（用户覆盖价一并读自设置），所以"各行加起来等于总额""三项相加等于合计"都精确成立。逐请求归因只能宿主半做，走只读路由 `GET /composer-ux/usage?sessionId=…`（`src/host.ts` 注册）：首次（或发现 `seq` 落后）用官方 `sessionQuery.readSession(sessionId)` 完整读一次，之后靠 `session/event` 订阅**增量**喂折叠缓存（`createUsageCache`，纯逻辑在 [src/usage-fold.ts](src/usage-fold.ts)）—— 所以胶囊取价是 O(1)，不必反复重读整份日志。**播种窗口**（读日志期间追加的事件）会先缓冲、读完按 `seq` 补上：不这么做的话水位会跳过快照里那些中间事件，金额**永久少算**（`feed()` 的 seq 幂等，补也补不进去）。**事件形状按本版官方 `SessionEventMap` 的真实声明**（`assistant/attempt` 的 `stream` 里取最后一条 usage 块，或 `assistant/message` 的 `data.usage`；**本版没有 `assistant/chunk` 事件**），口径对齐官方 `token-meter` 的 `usage-projection`（同一步替换、`llm/retry-started` 重开替换槽）。`test/usage-fold.mjs`（64 项）逐条钉住差分、归属、重试、脏数据、逐笔分档与增量缓存；分列出不来时面板会显示"读了 N 条事件、M 条 usage、来源哪条路"，一眼就能定位。
+- **折叠态那个数字怎么来的**：客户端投影只有累计 token 桶、**没有任何时间信息**，所以"逐笔准时"的数字只能从宿主半拿（`src/client/session-cost.ts`）：最短 600ms 间隔、期间有变化排一次**尾随**请求（保证流结束后的数字是准的）、同一时刻只有一个请求在飞、旧响应按序号丢弃。宿主半那份还没到手、或会话日志与投影对不上时，退回本地的"按当前档位估算"并在面板里说明是哪种口径 —— 胶囊从不空着。
 - **命中率与旁边那行必然是同一个数**：面板只在"分列与投影**四个桶全等**"（`agreesWithProjection` 是精确比较）时才把分列当权威，此时分列算出的命中率与官方胶囊逐位相同；否则退回投影口径。**两个坑**：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens` —— 第一版在 `billedInputTokens()` 里认对了名字，却在**调用处**传了 `inputTokens`，于是分母丢掉整块未缓存输入、命中率恒 100%（旁边官方胶囊 98.206%）。现在调用处也走官方键名，`test/client-registration.mjs` 同时钉住"调用处键名"与"与输入框下面那一行同一套函数"。
 - **计价只看模型名，不看 provider**：所以用 OpenCode（Zen）的接口跑 DeepSeek 模型，用量照样按 **DeepSeek 官方价**进这个金额。代价如浮层所写：Zen 可能有自己的加价/订阅，这个数字不等于你付给 Zen 的钱。
-- **出处与对拍**：价目表、模型别名、峰谷规则与格式分档来自 [`dsh-plugin-usage-meter`](https://github.com/fancr-code/dsh-plugin-usage-meter) 1.9.1（**MIT**，Copyright (c) 2026 fancr-code）。`node test/pricing.mjs`（81 项）把那份实现的几个函数**原样抄进来当基准**逐样本对拍：刊例价表逐项、峰谷判定（一周 593 个时刻）、定价解析（模型 × 币种 × 时段 × 覆盖价 216 组）、费用（30 组）、金额（40 组）、Token 格式（16 组）。
+- **出处与对拍**：价目表、模型别名、峰谷规则与格式分档来自 [`dsh-plugin-usage-meter`](https://github.com/fancr-code/dsh-plugin-usage-meter) 1.9.1（**MIT**，Copyright (c) 2026 fancr-code）。`node test/pricing.mjs`（107 项）把那份实现的几个函数**原样抄进来当基准**逐样本对拍：刊例价表逐项、峰谷判定（一周 593 个时刻）、定价解析（模型 × 币种 × 时段 × 覆盖价 216 组）、费用（30 组）、金额（40 组）、Token 格式（16 组），外加第 9 节覆盖价编辑器的纯逻辑（文本三态、空壳往上收、占位价＝官方价、`peak` 参数直选档位）。
 - **与出处有意不同的两处**（都钉在测试里）：① 金额**至少保留两位小数**（出处会把 `0.1` 显示成 `¥0.1`、把 `0` 显示成 `¥0.`）；② **覆盖价的币种语义**——出处是"有覆盖价时先整体重建人民币档、美元再从人民币折算"，写成"在美元列上套覆盖价再折算"会差一个汇率（≈15 倍）而屏幕上只是个数字，所以专门有一条断言守着。
 
 ## 维护：重启 DSH
@@ -299,7 +308,7 @@ dsh-composer-ux/
 │   ├── settings-contract.ts       # 字段/默认值/菜单元数据 + 栏开关的迁移判据（零依赖共享）
 │   ├── restart.ts                 # 「重启 DSH」：助手进程/等端口/隐藏控制台/信任关卡/优雅退出（零 import）
 │   ├── pricing.ts                 # 金额：刊例价 / 峰谷判定 / 覆盖价语义 / 费用与金额、Token 格式（零 import，两半共用）
-│   ├── usage-fold.ts              # 金额：会话事件按 (provider, model) 归因折叠（零 import，宿主半用）
+│   ├── usage-fold.ts              # 金额：会话事件按 (provider, model, 峰谷档) 归因折叠 + 增量缓存（零 import，宿主半用）
 │   ├── client.tsx                 # Browser 半：设置页 + 菜单浮层 + 拦截器
 │   ├── terminal/                  # 「默认终端」（Windows：pwsh → Git Bash），全部零官方运行时依赖
 │   │   ├── discover.ts            # 探测：git 锚定反推 bash、硬排除 WSL、多候选排序（纯函数）
@@ -318,6 +327,8 @@ dsh-composer-ux/
 │       ├── stats-dom.ts           # 统计行：定位与改写（DOM 助手，不 import React）
 │       ├── StatsLineEntry.tsx     # 统计行：composer dock 上的隐形条目 + 观察器（React 胶水）
 │       ├── CostChipEntry.tsx      # 金额：composer dock 上的金额胶囊 + portal 浮层明细（React 胶水）
+│       ├── session-cost.ts        # 金额：向宿主半取"逐笔准时"的费用（节流 + 尾随 + 单飞）
+│       ├── CostCard.tsx           # 金额：设置页那一栏（按模型改峰谷单价、可自加模型名）
 │       └── styles.ts              # --dsw-* 令牌内联样式
 ├── docs/settings-panel-0.5.0.png  # README 顶部那张设置页截图（用 tag 固定的 raw 链接引用，不进 npm 包）
 ├── test/
@@ -331,9 +342,9 @@ dsh-composer-ux/
 │   ├── stats-dom.mjs                   # 统计行：假 DOM 钉住定位、改写范围与"不碰样式"
 │   ├── pricing.mjs                     # 金额：与出处实现（MIT）原文逐样本对拍 + 有意差异
 │   ├── usage-fold.mjs                  # 金额：按 route 归因的折叠规则（差分 / 归属 / 脏数据）
-│   ├── client-registration.mjs         # 客户端注册协议、右键行为、抬头按钮、七栏开关与标题行布局
+│   ├── client-registration.mjs         # 客户端注册协议、右键行为、抬头按钮、七栏开关、金额栏护栏与设置写入校验
 │   ├── settings-service-adopt.mjs      # 客户端两代设置服务认领（settingsScope / configForms / 都没有）
-│   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红（57 条）
+│   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红（65 条）
 │   ├── settings-render.mjs             # 真渲染测试（手动跑）：借 profile 的 react 把设置页渲染成 HTML
 │   ├── check-sections.mjs              # 升级前自查（只读）：拿真实 settings.yaml 跑一遍栏开关迁移
 │   └── opencode-header-wire-probe.mjs  # 线级探针：本地端点，用来看 DSH 出网请求带了什么头
@@ -344,9 +355,9 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-npm test                          # 12 个套件；当前 1063 passed, 0 failed（2026-09-28 实测）
+npm test                          # 12 个套件；当前 1136 passed, 0 failed（2026-09-28 实测）
 node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（57 项，须单独跑）
-node test/settings-render.mjs     # 手动跑：把设置页真渲染成 HTML，断言版式与互斥显示（43 项）
+node test/settings-render.mjs     # 手动跑：把设置页真渲染成 HTML，断言版式与互斥显示（56 项）
 node test/check-sections.mjs      # 只读：升级前看七栏会变成什么
 node test/host-header-mirror.mjs  # 只跑宿主半的请求头测试（写入/撤销/改名/幂等/不误删）
 node test/host-settings-generations.mjs  # 只跑宿主半的「两代设置服务」兼容（0.1.6 / 0.1.7 形状）

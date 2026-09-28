@@ -68,9 +68,9 @@ const actions = {
   saveBook() {}, reloadBook() {}, resetBook() {}, dismissNotice() {},
 }
 
-export function renderWith(mode, notice = '') {
+export function renderWith(mode, notice = '', priceOverrides = undefined) {
   const settings = {
-    ...DEFAULT_SETTINGS, menuMode: mode,
+    ...DEFAULT_SETTINGS, menuMode: mode, priceOverrides,
     keysEnabled: true, menuEnabled: true, quickEnabled: true, panelEnabled: true, terminalEnabled: true,
   }
   const book = defaultQuickBook()
@@ -120,6 +120,11 @@ const html = {
   browser: render('browser'),
   custom: render('custom'),
 }
+/** 带覆盖价的那一版（「金额」栏要能显示已填的值与自定义行）。 */
+const priced = render('official', '', {
+  'deepseek-flash': { peak: { miss: 3 }, offPeak: { out: 4.5 } },
+  'my-relay': { peak: { miss: 9 } },
+})
 
 /** 按 `<span class="dsh-ux-cardName">` 把六张卡切开（比按正文里的字找起点可靠）。 */
 function cardOf(source, name) {
@@ -154,11 +159,11 @@ function check(name, ok, detail = '') {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${detail === '' ? '' : ` — ${detail}`}`)
 }
 
-console.log('1. 设置页能真的渲染出来（七张卡都在）')
+console.log('1. 设置页能真的渲染出来（八张卡都在）')
 for (const [mode, source] of Object.entries(html)) {
-  const names = ['键位', '右键菜单', '快捷指令', '设置面板', 'OpenCode 请求头', '默认终端', '统计行']
+  const names = ['键位', '右键菜单', '快捷指令', '设置面板', 'OpenCode 请求头', '默认终端', '统计行', '金额']
   const missing = names.filter(name => cardOf(source, name) === '')
-  check(`${mode}：七张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
+  check(`${mode}：八张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
 }
 
 console.log('\n1.1 统计行卡：说清"不撒谎"与作用范围，且只有一个开关')
@@ -261,6 +266,47 @@ console.log('\n6. 抬头右端：新增的「刷新」按钮（官方桌面版�
     refresh !== '' && restart !== '' && page.indexOf(refresh) < page.indexOf(restart))
   check('刷新的 title 说清"不重启、不打断会话"',
     refresh.includes('不重启 DSH') && refresh.includes('不打断'))
+}
+
+console.log('\n7. 「金额」卡（0.9.1）：六个数字框 × 内置三个模型 + 可自加模型')
+{
+  const card = cardOf(html.official, '金额')
+  const body = bodyOf(card)
+  const text = textOf(body)
+  const inputs = body.match(/<input[^>]*>/g) ?? []
+  check('渲染出来了，且标题行概览说清"没改价"',
+    card !== '' && textOf(headerOf(card)).includes('按官方刊例价估算'), textOf(headerOf(card)))
+  check('说清只影响本插件估算、留空＝沿用官方价',
+    text.includes('只是本插件显示的费用估算') && text.includes('留空＝沿用官方刊例价'))
+  check('说清峰谷按"每笔用量发生的时间"判定（不是看面板的时刻）',
+    text.includes('每笔用量真正发生的时间') && text.includes('北京时间'))
+  check('输入框数 = 3 个内置模型 × 6 格 + 1 个"新增模型名"',
+    inputs.length === 3 * 6 + 1, String(inputs.length))
+  check('空值的格子 value 是空串（不是 0：留空＝官方价）',
+    inputs.filter(input => input.includes('value=""')).length === inputs.length, String(inputs.length))
+  check('占位提示就是官方价（deepseek-flash 高峰未缓存输入 = 2.05）',
+    body.includes('placeholder="2.05"'), '')
+  check('三个内置模型各一行都渲染了',
+    ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro'].every(name => text.includes(name)))
+  check('别名写在内置行的说明里（deepseek-chat 不该另开一行）',
+    text.includes('别名 deepseek-chat') && !body.includes('>deepseek-chat<'))
+  check('有「添加」按钮与模型名输入框', text.includes('添加') && text.includes('再加一个模型'))
+}
+{
+  const card = cardOf(priced, '金额')
+  const body = bodyOf(card)
+  const text = textOf(body)
+  const inputs = body.match(/<input[^>]*>/g) ?? []
+  check('有覆盖价时：概览说清已覆盖几个模型',
+    textOf(headerOf(card)).includes('已覆盖 2 个模型的单价'), textOf(headerOf(card)))
+  check('已填的格子显示为实填值（3 / 4.5 / 9）',
+    inputs.some(input => input.includes('value="3"'))
+    && inputs.some(input => input.includes('value="4.5"'))
+    && inputs.some(input => input.includes('value="9"')),
+    inputs.map(input => /value="([^"]*)"/.exec(input)?.[1]).join(','))
+  check('自定义模型单开一行，并且那行给的是「删除」而不是「恢复官方价」',
+    text.includes('my-relay') && text.includes('删除'))
+  check('内置行的按钮是「恢复官方价」', text.includes('恢复官方价'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

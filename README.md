@@ -319,7 +319,8 @@ dsh-composer-ux/
 ├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器），并做发行后处理
 ├── scripts/
 │   ├── gen-provider-prices.mjs   # 从 models.dev 的 api.json 生成 src/provider-prices.ts（内置第三方价目快照）
-│   └── live-smoke.mjs            # 手动联网复核：官方页 / models.dev / 余额端点（只读；不进 npm test）
+│   ├── live-smoke.mjs            # 手动联网复核：官方页 / models.dev / 余额端点（只读；不进 npm test）
+│   └── dsh-shape-check.mjs       # 手动形状核对：我们依赖的宿主服务名/方法/事件是否还在（对着 DSH 源码检；只读）
 ├── src/
 │   ├── host.ts                    # Host 半：settings namespace + 请求头镜像 + 「默认终端」+ 金额三条路由（用量/价目同步/余额）+ 「重启 DSH」
 │   ├── settings-contract.ts       # 字段/默认值/菜单元数据 + 栏开关的迁移判据（零依赖共享）
@@ -385,6 +386,7 @@ npm test                          # 16 个套件；当前 1586 passed, 0 failed�
 node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（78 条，须单独跑）
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示（69 条）
 node scripts/live-smoke.mjs       # 手动跑：**联网复核**（官方页 vs 写死的价目表逐格对比 / models.dev vs 内置快照逐条对比 / 余额端点白名单与状态码）；只读，不写任何文件
+node scripts/dsh-shape-check.mjs  # 手动跑：**对着 DSH 源码**核对我们依赖的宿主形状（服务名 / 方法 / 事件 / 版本），升级 DSH 后必跑；只读
 node test/check-sections.mjs      # 只读：升级前看七栏会变成什么
 node test/host-header-mirror.mjs  # 只跑宿主半的请求头测试（写入/撤销/改名/幂等/不误删）
 node test/host-settings-generations.mjs  # 只跑宿主半的「两代设置服务」兼容（0.1.6 / 0.1.7 形状）

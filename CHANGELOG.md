@@ -67,6 +67,17 @@
 
 ### 内部
 
+- **`scripts/dsh-shape-check.mjs`：升级 DSH 后的形状核对**。本插件依赖一批宿主内部形状，它们
+  **名字或形状一变不会报错、只会静默降级**：`sessions` 服务（`ctx.inject([...])` 里缺了它整条用量
+  路由根本不注册）、`sessions.list()`、`Session.id` / **`Session.seq`**（拿不到 `seq` 时 `liveSeq`
+  是 `undefined`，增量重读悄悄失效、面板停在旧数字上）、`sessionQuery.readSession()` 与其返回体里的
+  `events`、**事件信封上的 `seq`/`time`**、设置服务的 `describe/update/replace/mutate` 与
+  `settings/document-updated`（以及"这个版本没有 `get(ns)`"）、`webServer.register(route: WebRoute)`
+  与 `kind: 'exact'`、`connection.requestRejection()`、以及服务器**能绑 `0.0.0.0`**（这正是每条路由
+  都必须过信任关卡的原因）。脚本**读 DSH 源码**逐条核对并打印 `文件:行号`，2026-09-29 实测 20 条全过。
+  写这个脚本本身抓到我两处路径/正则记错（`webServer` 在 `packages/host/webserver`、
+  `requestRejection` 在 `packages/client/connection/src/rpc-host.ts`、写入口签名带 `async`）——
+  正是它要防的那类"凭记忆写死名字"。
 - **`alive` ref 必须在 effect 体里重置**（复查时发现，3 处同病）：客户端三处"卸载后丢弃响应"的写法是
   `useEffect(() => () => { alive.current = false }, [])` —— StrictMode（以及某些 HMR 重挂）会走
   "挂载 → 清理 → 再挂载"，而 ref 在这一轮里是**同一个对象**，于是 `alive` 永远是 `false`，

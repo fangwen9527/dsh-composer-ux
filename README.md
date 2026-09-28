@@ -28,7 +28,7 @@ DeepSeek Harness Web 输入体验增强插件：
    - ⚠️ **升级 DSH 到 0.1.7 之前先备份 `~/.dsh/settings.yaml`**：0.1.7 的官方升级会把它改名成 `settings.yaml.imported` 并逐节导入 profile patch（一次性、不可逆），而本插件这一段在旧版上**导不进去**（那时还没有 Config 字段表），旧值只会留在那个 `.imported` 文件里。
    - **老用户不会被升级弄坏**：卡级开关的默认值不是硬编码的 `false`，而是按「设置文档里有没有『你在用』的痕迹」迁移 —— 碰过的栏保持开着、没碰过的才是关；全新安装（空白文档）才是六栏全关。「快捷指令」那一栏多一条文件判据（0.3.0 起条目存在 `quick-prompts.json`，设置文档里看不出来）。
    - **例外：0.7.0 的「统计行」是唯一默认开的栏**（它不参与上面那套"碰过才开"的迁移）。那五栏都**已经发布过**，一律默认关会在升级那一刻把用户正在用的东西当场关掉；而「统计行」是新能力，没有痕迹可依，用户要的是"装完立刻看得到效果"。`node test/check-sections.mjs` 把它单独列一行说明。
-   - **升级前可以先看一眼**：`node test/check-sections.mjs` 拿你真实的 `settings.yaml` 跑一遍迁移，打印七栏会变成什么（**只读**，不写任何文件）。
+   - **升级前可以先看一眼**：`node test/check-sections.mjs` 拿你真实的设置文档跑一遍迁移，打印七栏会变成什么（**只读**，不写任何文件）。文件名按版本试：0.1.7 把 `settings.yaml` 改名成了 `settings.yaml.imported`，两个都读。
    - **关掉一栏 = 这一块完全不介入**，且栏内的值全部保留（打开即原样恢复）：键位关 → 输入框按 DSH 原生键位；右键菜单关 → 本插件不介入；快捷指令关 → 输入框那枚按钮消失；设置面板关 → 不拖大小；OpenCode 请求头关 → 停止注入并撤销已写入的头；默认终端关 → 保持 PowerShell。
    - 「OpenCode 请求头」那一栏**没有额外的开关**：原来的「附加请求头」本来就是「这一栏要不要生效」，直接搬到了标题行。
 1. **设置 → 输入体验**（设置页新增条目）
@@ -375,7 +375,7 @@ dsh-composer-ux/
 │   ├── mutation-guards.mjs             # 变异测试（手动跑）：把每条护栏拆掉，测试必须变红
 │   ├── settings-render.mjs             # 真渲染测试：借 profile 的 react 把设置页渲染成 HTML（已进 npm test）
 │   ├── cost-panel-render.mjs           # 真渲染测试：同样的手法渲染「金额浮层」（把 portal / 展开态 / 宿主数据在内存里替换掉）
-│   ├── check-sections.mjs              # 升级前自查（只读）：拿真实 settings.yaml 跑一遍栏开关迁移
+│   ├── check-sections.mjs              # 升级前自查（只读）：拿真实设置文档跑一遍栏开关迁移（settings.yaml / settings.yaml.imported 都试）
 │   └── opencode-header-wire-probe.mjs  # 线级探针：本地端点，用来看 DSH 出网请求带了什么头
 └── lib/                  # 构建产物（运行所需）
 ```

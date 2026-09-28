@@ -1,13 +1,17 @@
 /**
- * 「升级前先看一眼」：拿**真实的** `$DSH_HOME/settings.yaml` 跑一遍「每一栏一个开关」的迁移，
+ * 「升级前先看一眼」：拿**真实的**设置文档（`$DSH_HOME/settings.yaml`）跑一遍「每一栏一个开关」的迁移，
  * 打印六栏会变成什么。**只读，不写任何文件**。
  *
  * 为什么需要它：这次改动的默认值是"关"，而它对老用户是靠"你碰过这一栏吗"来迁移的。
  * 迁移判据写在纯函数里，用户没法自己验证 —— 那就用他自己那份文档跑一遍给他看，
  * 而不是让他重启 DSH 之后才发现入口按钮没了。
  *
- *   node test/check-sections.mjs            # 默认读 $DSH_HOME/settings.yaml
+ *   node test/check-sections.mjs            # 默认读 $DSH_HOME 下的设置文档
  *   DSH_HOME=... node test/check-sections.mjs
+ *
+ * ⚠️ 文件名按版本试：0.1.7 把 `settings.yaml` 改名成了 **`settings.yaml.imported`**
+ * （2026-09-29 修：此前只试第一个名字，于是这个工具在 0.1.7 上永远报 ENOENT，
+ * 被交接文档记成"已知红"）。找不到任何一份时会把试过的路径都打出来。
  */
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -17,13 +21,23 @@ import { build } from 'esbuild'
 const home = process.env.DSH_HOME?.trim() !== undefined && process.env.DSH_HOME?.trim() !== ''
   ? process.env.DSH_HOME.trim()
   : join(homedir(), '.dsh')
-const file = join(home, 'settings.yaml')
+/** 候选顺序：老名字在前（同一份文档一般只有一个）。 */
+const CANDIDATES = ['settings.yaml', 'settings.yaml.imported']
 
 let raw
-try {
-  raw = readFileSync(file, 'utf8')
-} catch (error) {
-  console.error(`读不到 ${file}：${error instanceof Error ? error.message : String(error)}`)
+let file
+for (const name of CANDIDATES) {
+  const candidate = join(home, name)
+  try {
+    raw = readFileSync(candidate, 'utf8')
+    file = candidate
+    break
+  } catch {
+    /* 试下一个候选名 */
+  }
+}
+if (raw === undefined || file === undefined) {
+  console.error(`读不到设置文档；试过：${CANDIDATES.map(name => join(home, name)).join('、')}`)
   process.exit(2)
 }
 
@@ -125,7 +139,7 @@ const rows = [
   ['设置面板', 'panel', contract.PANEL_ENABLED_FIELD, false],
   ['默认终端', 'terminal', contract.TERMINAL_ENABLED_FIELD, false],
 ]
-console.log(`settings.yaml：${file}`)
+console.log(`设置文档：${file}`)
 console.log(`总开关 enabled = ${String(settings.enabled)}（默认开；关着时六栏一律不生效）\n`)
 console.log(`${pad('栏目', 12)}${pad('迁移后', 10)}来源`)
 for (const [label, key, field, hasFileSignal] of rows) {

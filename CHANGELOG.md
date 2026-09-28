@@ -61,6 +61,13 @@
 
 ### 内部
 
+- **`alive` ref 必须在 effect 体里重置**（复查时发现，3 处同病）：客户端三处"卸载后丢弃响应"的写法是
+  `useEffect(() => () => { alive.current = false }, [])` —— StrictMode（以及某些 HMR 重挂）会走
+  "挂载 → 清理 → 再挂载"，而 ref 在这一轮里是**同一个对象**，于是 `alive` 永远是 `false`，
+  之后所有响应被静默丢弃（表现为"同步永远停在同步中…""余额一直空白""胶囊永远停在本地估算那个数"）。
+  本机 DSH 客户端当前**没有**开 StrictMode（已查 `packages/client/ui-renderer`），所以还没暴露，
+  但这是一颗定时炸弹。现在三处都改成在 effect 体里 `alive.current = true` 再返回 cleanup；
+  护栏见 `test/client-registration.mjs` 第 14 节，变异条目 `CA`。
 - **写完设置的人自己通知失效，不靠设置变更事件**（复查时发现的静默错处）：0.1.7 的
   `settings/document-updated` 只在 `describe()` 里比对 raw 变化后发出
   （`packages/settings/settings/src/index.ts`），而我们自己用 `mutate` 写设置时**并不调

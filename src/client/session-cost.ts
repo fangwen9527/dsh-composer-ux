@@ -110,9 +110,15 @@ export function useSessionCost(
   /** 最新的"发一次请求"函数（`finally` 里补发尾随时用，避免闭包自引用与陈旧闭包）。 */
   const runRef = React.useRef<() => void>(() => {})
 
-  React.useEffect(() => () => {
-    alive.current = false
-    if (timer.current !== null) clearTimeout(timer.current)
+  React.useEffect(() => {
+    // ⚠️ 重置为 true：StrictMode（及某些 HMR 重挂）会走"挂载 → 清理 → 再挂载"，
+    // ref 在同一轮里是同一个 —— 不重置的话 `alive` 永远 false，之后所有响应被静默丢弃，
+    // 界面上表现为"胶囊永远停在本地估算那一个数"。
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (timer.current !== null) clearTimeout(timer.current)
+    }
   }, [])
 
   const run = React.useCallback((): void => {

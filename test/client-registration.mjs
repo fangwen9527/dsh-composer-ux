@@ -864,5 +864,25 @@ console.log('13. 「峰谷提醒」纯文案（peakNoticeText）：相位 → �
     typeof peak.usePeakPhase === 'function' && typeof peak.usePeakAlert === 'function')
 }
 
+console.log('14. React 副作用：alive ref 必须在 effect 体里重置（StrictMode / HMR 重挂）')
+{
+  // 为什么必须重置：StrictMode（以及某些 HMR 重挂）会走"挂载 → 清理 → 再挂载"，
+  // 而 ref 在这一轮里是同一个对象 —— 只在 cleanup 里置 false、不在 effect 体里置回 true 的话，
+  // `alive` 会**永远是 false**：之后所有响应被静默丢弃（表现是"同步永远停在同步中…""余额一直空白"
+  // "胶囊永远停在本地估算那个数"）。2026-09-29 复查时发现三处都是这个写法，已改。
+  for (const [file, label] of [
+    ['src/client/money-admin.ts', '金额的同步 / 余额两个 hook'],
+    ['src/client/session-cost.ts', '会话金额取数（胶囊那个数字）'],
+  ]) {
+    const source = readFileSync(file, 'utf8')
+    const refs = (source.match(/React\.useRef\(true\)/g) ?? []).length
+    const resets = (source.match(/alive\.current = true/g) ?? []).length
+    check(`${label}：每个 alive ref 都有对应的重置（ref ${refs} 个 / 重置 ${resets} 处）`,
+      refs > 0 && refs === resets, `${refs}/${resets}`)
+    check(`${label}：没有"只写 cleanup、不重置"的旧写法`,
+      !/React\.useEffect\(\(\) => \(\) => \{[\s\S]{0,120}alive\.current = false/.test(source))
+  }
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

@@ -68,7 +68,13 @@ export function usePriceSync(onDone?: () => void): SyncState & { readonly sync: 
   const alive = React.useRef(true)
   /** 忙碌标记放 ref 而不是只靠 state：state 更新是异步的，连点两下会在同一帧里都通过检查。 */
   const busyRef = React.useRef(false)
-  React.useEffect(() => () => { alive.current = false }, [])
+  // ⚠️ 必须在 effect 体里**重置**为 true：StrictMode（以及某些 HMR 重挂）会走
+  // "挂载 → 清理 → 再挂载"，而 ref 在这一轮里是同一个 —— 不重置的话 `alive` 永远是 false，
+  // 之后所有响应都会被静默丢弃（界面上表现为"同步永远停在同步中…"）。
+  React.useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   const sync = React.useCallback((target: 'official' | 'modelsDev'): void => {
     if (busyRef.current) return
@@ -113,7 +119,11 @@ export function useBalance(settings: ComposerUxSettings): BalanceState & { reado
   const [state, setState] = React.useState<BalanceState>({ status: enabled ? 'idle' : 'off' })
   const [nonce, setNonce] = React.useState(0)
   const alive = React.useRef(true)
-  React.useEffect(() => () => { alive.current = false }, [])
+  React.useEffect(() => {
+    // 同上：StrictMode 下 effect 会重跑，这里必须把 `alive` 重置回 true。
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   React.useEffect(() => {
     if (!enabled) {

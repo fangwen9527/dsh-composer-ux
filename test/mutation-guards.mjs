@@ -662,6 +662,14 @@ const cases = [
     test: 'test/quick-commands.mjs',
     expect: '官方价同步的两条收尾（有变化 / 无变化）写完设置都通知失效',
   },
+  {
+    name: 'CA 余额 hook 的 alive 不再重置（StrictMode / HMR 重挂后余额永远空白）',
+    file: 'src/client/money-admin.ts',
+    from: '  React.useEffect(() => {\n    // 同上：StrictMode 下 effect 会重跑，这里必须把 `alive` 重置回 true。\n    alive.current = true\n    return () => { alive.current = false }\n  }, [])',
+    to: '  React.useEffect(() => () => { alive.current = false }, [])',
+    test: 'test/client-registration.mjs',
+    expect: '每个 alive ref 都有对应的重置',
+  },
 ]
 
 let allBit = true

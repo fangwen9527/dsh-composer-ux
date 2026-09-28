@@ -282,8 +282,19 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
     costSource.includes('data?.cost?.total') && costSource.includes('useBreakdown'))
   check('逐笔准时看得见：面板按高峰/空闲两档分列',
     costSource.includes('高峰档') && costSource.includes('空闲档'))
-  check('峰谷档位由宿主半按事件时间判定（客户端不自己重构时间线）',
-    !costSource.includes('isPeakAt') && readFileSync('src/host.ts', 'utf8').includes('peakAt'))
+  // 0.10.0：客户端自己算的只有"现在这一档"（`peak-alert.ts` 的 `peakPhaseAt`，用来写那行提醒），
+  // **逐笔用量的档位**仍然只能来自宿主半（`isPeakAt` 按每条事件自己的时间判）—— 面板里
+  // 「高峰档 / 空闲档」两行读的是 `route.peak`，不是客户端重算的。两条一起钉住才不会
+  // 让后来的人以为"客户端既然会算相位，那也能算档位"。
+  const hostSource = readFileSync('src/host.ts', 'utf8')
+  check('逐笔档位仍由宿主半按事件时间判定（客户端只读 route.peak，不自己重构时间线）',
+    !costSource.includes('isPeakAt')
+    && costSource.includes('route.peak === true')
+    && hostSource.includes('isPeakAt(at, { holidays: moneyRules.holidays })'))
+  check('峰谷提醒的相位规则与宿主半同源（节假日表由宿主半回给客户端）',
+    costSource.includes('usePeakAlert(settings, data?.holidays ?? settings.peakHolidays')
+    && readFileSync('src/client/peak-alert.ts', 'utf8').includes('peakPhaseAt(Date.now()')
+    && hostSource.includes('holidays: moneyRules.holidays'))
   check('分列与投影对不上时退回投影口径并说明', costSource.includes('agreesWithProjection'))
   // 2026-09-28 命中率显示 100%（旁边官方胶囊 98.206%）的**真因**：`billedInputTokens()` 只认
   // `uncachedInputTokens`，调用处却传了 `inputTokens` → 分母丢掉整块未缓存输入 → 恒 100%。
@@ -292,6 +303,39 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
     costSource.includes('uncachedInputTokens: view.miss'))
   check('命中率与输入框下面那一行同一套函数（cacheHitText）',
     costSource.includes('cacheHitText(') && costSource.includes("from './stats-line.ts'"))
+
+  // ── 0.10.0：明细页新增的几行（平坦价 / 峰谷提醒 / 其他路由 / 未定价 / 价格档）──────
+  check('第三方 route 行的档位标签是「（平坦价）」（不再给它摆假的峰/谷两档）',
+    costSource.includes("'（平坦价）'") && costSource.includes("route.peak ? '（高峰）' : '（空闲）'"))
+  check('明细页有「峰谷」一行，文案来自 peak-alert 的 peakNoticeText',
+    costSource.includes("detail('峰谷', peakText)") && costSource.includes("from './peak-alert.ts'")
+    && costSource.includes('const { text: peakText } = usePeakAlert('))
+  check('第三方路由单列一行「其他路由（无峰谷）」小计',
+    costSource.includes("detail('其他路由（无峰谷）'"))
+  check('未定价的 route 金额位置写「未定价」，不写 ¥0.00',
+    costSource.includes("route.unpriced ? '未定价' : formatMoney(route.cost)")
+    && costSource.includes("viewUnpriced ? '未定价' : formatMoney(view.total)"))
+  check('有未定价行时写明少算了哪部分、怎么补价',
+    costSource.includes('未定价**：那是非 DeepSeek 模型')
+    && costSource.includes('同步第三方价目'))
+  check('价格档来自宿主半给的 era，并说明"官方调价不改历史金额"',
+    costSource.includes("era: typeof route.era === 'string' ? route.era : ''")
+    && costSource.includes("route.deepseek && route.era !== ''")
+    && costSource.includes('这批用量按各自发生时刻的价格档结算'))
+}
+
+console.log('2.3 宿主半取数（session-cost）：0.10.0 多回的字段')
+{
+  const fetchSource = readFileSync('src/client/session-cost.ts', 'utf8')
+  // 「金额是 0」与「认不出价」是两回事：前者是算出来就是 0，后者界面必须写"未定价"。
+  // 所以 unpriced 必须是单独一位，不能靠 cost === 0 反推。
+  check('route 行带回价格档 / 生效单价 / 单价来源 / 是否被覆盖 / 是否未定价',
+    ['era', 'price', 'priceSource', 'overridden', 'unpriced'].every(field =>
+      new RegExp(`readonly ${field}\\??:`).test(fetchSource)))
+  check('响应带回宿主半生效的节假日表（客户端算提醒用的是同一份规则）',
+    /readonly holidays\?: readonly string\[\]/.test(fetchSource))
+  check('单价来源是四个白名单取值（official / override / provider / none）',
+    fetchSource.includes('`official` / `override` / `provider` / `none`'))
 }
 
 console.log('3. 只注册到真实存在的槽位名')
@@ -574,13 +618,20 @@ console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不�
   check('卡片把 setField / clearField 都接上了（清空要能把那个键从设置里去掉）',
     card.includes('setField(PRICE_OVERRIDES_FIELD') && card.includes('clearField(PRICE_OVERRIDES_FIELD'))
   // 留空＝官方价：占位提示必须来自官方价目表，绝不能用 `value={值 ?? 0}` 之类把空当 0。
-  check('占位提示 = 官方价（留空＝沿用官方价，不是 0）',
-    card.includes('placeholder={String(official[field])}') && card.includes('officialTripleOf'))
+  // 0.10.0：只有 DeepSeek 系（峰谷两档）的行才给官方价占位；第三方「平坦价」行没有可显示的
+  // 官方价（它的价来自同步来的第三方价目，可能压根没同步过），占位留空 —— "未定价"就是这么来的。
+  // 这里只钉"按档取官方价"这件事（`officialTripleOf(model, peak…`），不钉它后面还带了哪些
+  // 选项 —— 那个参数表还在长（例如同步来的价格档），钉死了只会让正常改动误伤这条断言。
+  check('占位提示 = 官方价（留空＝沿用官方价，不是 0）；平坦价行不给占位',
+    card.includes("placeholder={twoTier ? String(official[field]) : ''}")
+    && card.includes('officialTripleOf(model, peak'))
   check('非法文本标红并保留，不当清空（parsePriceText 三态）',
     card.includes('parsePriceText') && card.includes("parsed.kind === 'invalid'"))
   check('写设置合并 + 识别回声（连改几格不会被自己的回声冲掉）',
     card.includes('WRITE_DEBOUNCE_MS') && card.includes('lastWritten') && card.includes('canonical'))
-  check('内置三个模型常显、可自加任意模型名',
+  // 0.10.0 起内置价目只剩两个（flash / v4-pro）：行数照 `BUILTIN_PRICING_MODELS` 走，
+  // 加上用户自加的行；这里钉的是"两个来源都渲染"，不是写死个数。
+  check('内置模型常显（0.10.0 起两个：deepseek-flash / deepseek-v4-pro）、可自加任意模型名',
     card.includes('BUILTIN_PRICING_MODELS') && card.includes('customPricingModels'))
   check('「恢复默认」会清掉覆盖价（否则金额还是按旧价算）',
     readFileSync('src/client.tsx', 'utf8').includes('PRICE_OVERRIDES_FIELD'))
@@ -594,8 +645,71 @@ console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不�
     && host.includes('usageCache.event('))
   check('宿主半按需播种（readSession 只读一次，之后走缓存）',
     host.includes('usageCache.sync(') && host.includes('readSession'))
-  check('宿主半按事件时间判档，并把成本一起算好回给客户端',
-    host.includes('peakAt') && host.includes('costPartsOf') && host.includes("resolvePrice(item.model, { peak: item.peak, overrides }"))
+  check('宿主半按事件时间判峰谷与价格档，并把成本一起算好回给客户端',
+    host.includes('const tierAt = (ms: number, provider: string, model: string)')
+    && host.includes('isPeakAt(at, { holidays: moneyRules.holidays })')
+    && host.includes('eraIdAt(at, moneyRules.eras)')
+    && host.includes('const parts = costPartsOf(costBucketsOf(item.usage), resolved.prices)')
+    && host.includes('provider: item.provider')
+    && host.includes('era: item.era')
+    && host.includes('providers: moneyRules.providers'))
+}
+
+console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价目同步（界面 + 宿主调用封装）')
+{
+  const card = readFileSync('src/client/CostCard.tsx', 'utf8')
+  const admin = readFileSync('src/client/money-admin.ts', 'utf8')
+  const balancePath = /BALANCE_API_PATH = '([^']+)'/.exec(readFileSync('src/balance.ts', 'utf8'))?.[1]
+
+  check('节假日表：一个 textarea + 保存 / 恢复内置 两个按钮',
+    card.includes('aria-label="法定节假日日期表"')
+    && card.includes('onClick={saveHolidays}') && card.includes('恢复内置')
+    && card.includes('clearField(PEAK_HOLIDAYS_FIELD)'))
+  check('节假日只收 YYYY-MM-DD，坏行逐条点名（不静默丢）',
+    card.includes('isDayKey(item)') && card.includes('这些不是合法日期'))
+  check('峰谷提醒一组控件（启用 / 提前分钟 / 进峰前 / 离峰前 / 系统通知）',
+    ['启用峰谷提醒', '提前多少分钟提醒', '进入高峰前提醒', '离开高峰前提醒', '额外发浏览器通知']
+      .every(label => card.includes(`aria-label="${label}"`))
+    && card.includes('setField(PEAK_ALERT_FIELD'))
+  check('提前量钳在 1–60 分钟（写坏值不会落进设置）',
+    card.includes('Math.min(60, Math.max(1, Math.round(value)))'))
+  check('勾系统通知时先要授权（非安全上下文里 Notification 不存在也不炸）',
+    card.includes("typeof Notification !== 'undefined'") && card.includes('Notification.requestPermission()'))
+  check('余额：一个开关 + 一个刷新按钮，走 BALANCE_ENABLED_FIELD',
+    card.includes('aria-label="启用余额查询"') && card.includes('setField(BALANCE_ENABLED_FIELD')
+    && card.includes('onClick={balance.refresh}') && card.includes('disabled={!settings.balanceEnabled}'))
+  check('两个同步按钮各自只同步一条路（官方价 / 第三方价目）',
+    card.includes("sync.sync('official')") && card.includes("sync.sync('modelsDev')")
+    && card.includes('同步官方价') && card.includes('同步第三方价目')
+    && card.includes('disabled={sync.busy !== null}'))
+  check('同步结果如实显示（失败走失败态样式，不谎报"已同步"）',
+    card.includes('style={sync.ok ? hintInfo : hintError}'))
+  check('卡内显式标出"抓失败不会覆盖本地价"',
+    card.includes('抓失败不会覆盖本地价'))
+  check('第三方模型行只有一档（平坦价），DeepSeek 行才两档',
+    card.includes('const twoTier = isDeepSeekRoute(provider, model)')
+    && card.includes('(twoTier ? [true, false] : [false])'))
+
+  check('价目同步：POST SYNC_API_PATH，body 是 { target }',
+    admin.includes('usePriceSync') && admin.includes('fetch(SYNC_API_PATH, {')
+    && admin.includes("method: 'POST'") && admin.includes('body: JSON.stringify({ target })')
+    && admin.includes("target: 'official' | 'modelsDev'"))
+  check('忙碌期点击被挡住（用 ref 判据，不只看异步的 state）',
+    admin.includes('busyRef.current') && admin.includes('if (busyRef.current) return'))
+  check('余额：只在开关打开时取一次，关掉一个请求都不发',
+    admin.includes('settings.balanceEnabled === true') && admin.includes('if (!enabled) {')
+    && admin.includes("setState({ status: 'off' })"))
+  // 0.10.0 起这里改成**结构性**断言：客户端不再写字面量路径，而是 import `BALANCE_API_PATH`
+  // 本身 —— 那样两处根本不可能分叉。原来那条"字面量逐字一致"的断言在 import 之后必然变红
+  // （源码里再也不出现那个字符串了），所以改成"必须 import + 用常量"。
+  check('余额请求路径用 balance.ts 的 BALANCE_API_PATH（import 常量，不写字面量）',
+    balancePath === '/composer-ux/balance'
+    && admin.includes("import { BALANCE_API_PATH } from '../balance.ts'")
+    && admin.includes('fetch(BALANCE_API_PATH,')
+    && !admin.includes("'/composer-ux/balance'"),
+    String(balancePath))
+  check('余额与同步都不往设置里写值（余额是账户事实，不进设置文档）',
+    !admin.includes('setField'))
 }
 
 console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻那三步校验）')
@@ -673,6 +787,69 @@ console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻
   }
   validatePaths(current, form)
   check('写入校验放过它（不许在表下面继续挑刺）', rejected === '')
+}
+
+console.log('13. 「峰谷提醒」纯文案（peakNoticeText）：相位 → 一行中文（跑真函数，不是搜源码）')
+{
+  // peakNoticeText 是纯函数，直接喂相位断言输出 —— 比"源码里有没有这几个字"硬得多：
+  // 文案里那几种情形（高峰/空闲、周末/节假日谷价、找不到切换点、x 小时 y 分钟）各是一条
+  // 用户会当场读到的句子，写错方向（把"转高峰"写成"转空闲"）屏幕上很难看出来。
+  // 这个模块 import 了 React（只为旁边的两个 hook），所以打包时把 react 换成一个最小桩。
+  const { build } = await import('esbuild')
+  const { join } = await import('node:path')
+  const reactStub = {
+    name: 'react-stub',
+    setup(build) {
+      build.onResolve({ filter: /^react$/ }, () => ({ path: 'react-stub', namespace: 'stub' }))
+      build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
+        contents: 'export default { useState: v => [typeof v === "function" ? v() : v, () => {}], useEffect: () => {}, useCallback: f => f, useRef: v => ({ current: v }) }',
+        loader: 'js',
+      }))
+    },
+  }
+  const bundled = await build({
+    bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
+    stdin: {
+      contents: "export { peakNoticeText, usePeakPhase, usePeakAlert } from './peak-alert.ts'\nexport { peakPhaseAt, formatCountdown } from '../pricing.ts'\n",
+      resolveDir: join(process.cwd(), 'src/client'),
+      loader: 'ts',
+    },
+    plugins: [reactStub],
+  })
+  const code = bundled.outputFiles[0].text
+  const peak = await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)
+
+  /** 造一个相位，只写关心的那几项。 */
+  const phase = over => ({
+    inPeak: false, nextAtMs: Date.parse('2026-10-12T04:00:00Z'), nextIntoPeak: true,
+    minutesUntil: 45, holiday: false, weekend: false, ...over,
+  })
+  const text = p => peak.peakNoticeText(p)
+  check('空闲 + 45 分钟后转高峰', text(phase()) === '空闲档 · 45 分钟后转高峰', text(phase()))
+  check('高峰 + 45 分钟后转空闲', text(phase({ inPeak: true, nextIntoPeak: false })) === '高峰档 · 45 分钟后转空闲',
+    text(phase({ inPeak: true, nextIntoPeak: false })))
+  check('超过 60 分钟走「x 小时 y 分钟」文案',
+    text(phase({ minutesUntil: 135 })) === '空闲档 · 2 小时 15 分钟后转高峰', text(phase({ minutesUntil: 135 })))
+  check('周末谷价写明原因', text(phase({ weekend: true })) === '空闲档（周末谷价） · 45 分钟后转高峰',
+    text(phase({ weekend: true })))
+  check('法定节假日谷价写明原因', text(phase({ holiday: true })) === '空闲档（法定节假日谷价） · 45 分钟后转高峰',
+    text(phase({ holiday: true })))
+  check('高峰档不写谷价原因（周末/节假日只影响谷价那一档）',
+    text(phase({ inPeak: true, nextIntoPeak: false, weekend: true, holiday: true })) === '高峰档 · 45 分钟后转空闲')
+  check('96 小时内找不到切换点 → 只写当前档，不编一个倒计时',
+    text(phase({ nextAtMs: Number.NaN, minutesUntil: 0 })) === '空闲档'
+    && text(phase({ inPeak: true, nextAtMs: Number.NaN, minutesUntil: 0, weekend: true })) === '高峰档')
+  check('分钟数 0 → 「不到 1 分钟」（不写 0 分钟）',
+    text(phase({ minutesUntil: 0 })) === '空闲档 · 不到 1 分钟后转高峰', text(phase({ minutesUntil: 0 })))
+  // 与 pricing.ts 的相位同源：2026-10-12（周一）北京 09:30 → 高峰，北京 12:00 转空闲 = 150 分钟后。
+  check('相位 + 文案串起来跑：周一北京 09:30 → 高峰档 · 2 小时 30 分钟后转空闲',
+    (() => {
+      const now = peak.peakPhaseAt(Date.parse('2026-10-12T01:30:00Z'))
+      return now.inPeak === true && now.minutesUntil === 150
+        && text(now) === '高峰档 · 2 小时 30 分钟后转空闲'
+    })())
+  check('两个 hook 也导出了（胶囊/明细页就是靠它们拿相位与文案）',
+    typeof peak.usePeakPhase === 'function' && typeof peak.usePeakAlert === 'function')
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

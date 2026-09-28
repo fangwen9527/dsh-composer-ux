@@ -33,19 +33,29 @@ export interface SessionCostBuckets {
   readonly cacheWriteTokens?: number
 }
 
-/** 宿主半算好的一行：`(provider, model, 档位)` + token 桶 + 金额（含分项）。 */
+/** 宿主半算好的一行：`(provider, model, 档位, 价格档)` + token 桶 + 金额（含分项与单价）。 */
 export interface SessionCostRoute {
   readonly provider?: string
   readonly model?: string
-  /** 这一行是高峰档（true）还是空闲档（false）。 */
+  /** 这一行是高峰档（true）还是空闲档（false）。第三方路由恒 false（它们没有峰谷两档）。 */
   readonly peak?: boolean
+  /** 这一行按哪个**价格历史档**结算（`pricing.ts` 的 era id）；第三方路由是空串。 */
+  readonly era?: string
   readonly usage?: SessionCostBuckets
-  /** 这一行的金额（元）。 */
+  /** 这一行的金额（元）。`unpriced` 为 true 时是 0。 */
   readonly cost?: number
   readonly parts?: { readonly miss?: number; readonly hit?: number; readonly out?: number }
+  /** 这一行实际用的单价（界面原样显示"按什么价算的"）。 */
+  readonly price?: { readonly miss?: number; readonly hit?: number; readonly out?: number }
+  /** 单价来源：`official` / `override` / `provider` / `none`。 */
+  readonly priceSource?: string
+  /** 单价被你的覆盖价改过。 */
+  readonly overridden?: boolean
+  /** **认不出价**（第三方路由且同步价目里没有它）：金额是 0，界面要写"未定价"而不是 ¥0.00。 */
+  readonly unpriced?: boolean
 }
 
-/** `/composer-ux/usage` 的响应（0.9.1 起多带回 `tiers` 与算好的 `cost`）。 */
+/** `/composer-ux/usage` 的响应（0.9.1 起多带回 `tiers` 与算好的 `cost`；0.10.0 加价格档与节假日）。 */
 export interface SessionCostResponse {
   readonly ok?: boolean
   readonly error?: string
@@ -58,6 +68,13 @@ export interface SessionCostResponse {
   readonly tiers?: { readonly peak?: SessionCostBuckets; readonly offPeak?: SessionCostBuckets }
   readonly routes?: readonly SessionCostRoute[]
   readonly cost?: { readonly miss?: number; readonly hit?: number; readonly out?: number; readonly total?: number }
+  /**
+   * 宿主半当前生效的节假日表（北京日期）。
+   *
+   * 客户端算"下一次峰谷切换"用**同一份**规则：各拿一份表就会出现"胶囊说还有 3 分钟进峰、
+   * 面板说不是"这种无法解释的分歧。宿主没回（老版本/取数失败）时退回设置里的或内置那份。
+   */
+  readonly holidays?: readonly string[]
 }
 
 /** 取数结果：`data` 一定对应当前 `sessionId`（会话切换期间的旧响应不会被交出来）。 */

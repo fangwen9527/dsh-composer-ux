@@ -2,6 +2,73 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.0] — 2026-09-29（节假日 / 峰谷提醒 / 余额 / 官方价同步 / 非 DeepSeek 定价 / 价格历史档）
+
+> 起因：用户要求"联网搜一下最新峰谷价格，解析 `dsh-context` 与 `dsh-cost-meter` 这两个插件
+> 怎么算钱，与我们的对比，并补上我们没有的功能"。一问一答定下范围：**A 节假日、B 峰谷提醒、
+> C 余额、D 官方价同步、E 非 DeepSeek 定价**；随后他又选了 **F 价格历史档**（"旧账要按当时的价
+> 固定"，最大那一档）。顺手修掉三处**会算错钱**的既有错误。
+
+### 修正（先看这三条）
+
+- **flash 的人民币列不再由美元折算**。旧表 `2.05 / 8.18 / 1.02 / 4.09 / 0.041 / 0.020` 是拿官方
+  美元列 ×6.82 凑出来的，而官方人民币页直接给 `2 / 8 / 1 / 4 / 0.04 / 0.02` —— **高报约 2.3%**。
+  现在两列都是官方原值（Flash 两列之比约 6.667、Pro 约 6.82，本来就不是同一个汇率）。
+- **`deepseek-v4-flash` 不再单列一行**。官方脚注明说旧名仍可调用、但由 V4.1-Flash 服务
+  **并按 Flash 价计费**，而它还占着一行 8 月旧价（谷 `1.5 / 0.05 / 4.5`）→ **未命中高报 50%**。
+  现在它是别名（含 `deepseek-v4-flash-vision-exp` / `deepseek-v4.1-flash` / `deepseek-chat`），
+  内置价表只剩**官方现役的两个模型**。
+- **`cacheWriteTokens` 不单独计价（核对，不是改动）**：官方价表只有"缓存命中/未命中"两行输入价，
+  而实测本机投影缓存里 200 处样本全是 0，所以它只进显示口径。这条写进了 `pricing.ts` 的注释，
+  免得下次有人"顺手补上"。
+
+### 新增
+
+- **价格历史档（`PRICE_ERAS`）**：官方 2026-09-10 12:00（北京）调过 Flash 的价
+  （未缓存输入 0.22→0.15、输出 0.66→0.60、命中 0.007→0.003，美元/1M），历史金额不该跟着现在变。
+  于是价目表按**生效时刻**分档（`legacy` 峰谷制之前 / `peak-2026-08` / `flash-2026-09-10`），
+  折叠时给每条用量打上那一刻的档位 id，route key 因此多一维 —— 同一模型在调价前后是**两条**
+  分列，各按当时的价结算，永不互相污染。`test/usage-fold.mjs` 第 10 节与 `test/pricing.mjs`
+  第 10 节各钉一遍。
+- **中国法定节假日全天谷价**（`DEFAULT_PEAK_HOLIDAYS`）：2026 中秋 09-25～27、国庆 10-01～07
+  （国务院办公厅 2026 年安排）。设置页「金额」里有一个文本框可整份覆盖（一行一个 `YYYY-MM-DD`，
+  坏行逐条点名报错，不静默丢）。另外补上**周末全谷价的生效点** `2026-08-22T16:00Z`
+  —— 在那之前的周六（2026-08-22）**是有高峰的**，历史账要按那时的规则算。
+- **峰谷提醒**（`src/client/peak-alert.ts`）：明细页常显"现在哪一档、还有多久切换"
+  （`空闲档 · 2 小时 15 分钟后转高峰`，节假日/周末会写明原因），胶囊的 `title` 也带上；
+  可选浏览器系统通知（需授权），去重放**模块级**按切换点记 —— 放组件里会因重挂而连发。
+- **账号余额**（`src/balance.ts` + 宿主路由）：查官方 `GET /user/balance`，
+  **API Key 只在宿主半**从 `llm-deepseek` 的 `apiKeyEnv`（默认 `DEEPSEEK_API_KEY`）经
+  `credentials.resolve()` 取；**端点白名单只放行 `api.deepseek.com`** —— 你的 baseURL 被指向
+  第三方时**一个请求都不发**，绝不把 Key 交出去。余额用分项相加（不用平台自己的 `total_balance`），
+  拿不准就不显示（不显示 0、也不显示旧值）。
+- **一键同步价目**（`src/price-sync.ts` + `src/official-pricing.ts`）：
+  「同步官方价」抓官方中英文两页（各约 24 KB）解析成一个新档，**有变化才新增档**
+  （原地改档 = 把历史账重算）；「同步第三方价目」抓 models.dev（5.2 MB → 压缩后约 450 KB，
+  落 `$DSH_HOME/storages/composer-ux/prices.json`）。两条都守同一条纪律：
+  **抓失败绝不覆盖本地价**（`test/price-sync.mjs` 用抛错 / 非 2xx / 正文过短 / 只有一页成功
+  四种情形钉住）。
+- **非 DeepSeek 模型定价**：按 `(provider, model)` 查价（精确 → `PROVIDER_ALIASES` 别名 →
+  按模型 id 全局唯一匹配，**多个 provider 同名就拒绝猜**）；覆盖价键支持 `provider:model`；
+  第三方路由没有峰谷两档，设置页给它们渲染**平坦价**一档。**认不出价就说"未定价"**
+  （单价全 0 + 界面上写明怎么补价），**不再把 DeepSeek 的 flash 价静默套到别人头上**。
+- **安全**：新增的三条宿主路由（用量分列 / 价目同步 / 余额）都补上了官方那道
+  `connection.requestRejection(request)` 关卡（Host/Origin 围栏 + 浏览器令牌）——
+  此前只有重启路由挂了它，而 `webServer` 是可以绑 `0.0.0.0` 的。
+
+### 内部
+
+- `pricing.ts` 的 `resolvePrice(model, options)` 增加 `provider` / `era` / `providers` / `holidays`，
+  返回体增加 `era` / `source` / `unpriced` / `provider`；新增 `eraAt` / `eraIdAt` / `eraById`、
+  `isPeakAt` 的节假日与周末边界、`peakPhaseAt`（切换点 + 倒计时）、`formatCountdown`、
+  `parseHolidays`、`isDayKey`、`isDeepSeekRoute`、`providerRateOf`、`parseProviderPrices`、
+  `parsePriceEras`。
+- `usage-fold.ts` 的 `PeakAt` 换成 `TierAt`（多收 `provider` / `model`，回 `{peak, era}`），
+  `RouteUsage` 多一个 `era`；`UsageCache` 多一个 `clear()` —— 判定规则（节假日/价档）一变，
+  宿主半必须整份作废缓存，否则水位去重会让金额一直停在旧规则上（第 11 节钉住这条）。
+- 新增测试：`test/official-pricing.mjs`（45 条，真页面夹具）、`test/balance.mjs`（80 条）、
+  `test/price-sync.mjs`（48 条）；`test/settings-render.mjs` 也进了 `npm test`。
+
 ## [0.9.1] — 2026-09-28（新增：设置页「金额」栏可改峰谷单价；峰谷改成按每笔用量发生的时间判定）
 
 > 起因：用户要求"在插件的设置页面添加一个金额胶囊的设置条目，让我能调峰谷价格之类的"。

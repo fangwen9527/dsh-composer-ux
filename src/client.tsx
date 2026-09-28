@@ -11,6 +11,7 @@ import {
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
   STATS_ENABLED_FIELD, PRICE_OVERRIDES_FIELD,
+  PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD,
   activeSections, sanitizeSettings,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
@@ -308,6 +309,13 @@ export function apply(ctx: any): void {
         // 不清的话，"恢复默认"之后金额还会按用户之前填的价算——那是用户唯一能看出
         // "恢复默认到底生没生效"的数字。
         PRICE_OVERRIDES_FIELD,
+        // 「金额」（0.10.0）的另外三项用户偏好也清掉：节假日表（回到内置那份）、峰谷提醒
+        // （回到默认：开 + 提前 5 分钟 + 两个方向都提醒）、余额开关（回到默认开）。
+        //
+        // **但 `SYNCED_PRICES_FIELD` 故意不清**：那是一份"同步来的价格历史档 + 第三方价目元信息"，
+        // 清掉等于让 9-10 之前那些会话按今天的价重算 —— "恢复默认"恢复的是**偏好**，
+        // 不该动历史账单（与下面那句"宿主半记账字段不清"同一个道理）。
+        PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD,
         // 0.5.0 里那个「可选重启命令」字段已经删掉，但老文档里可能还留着值：
         // 顺手清掉，免得它永远躺在设置文件里没人认识。
         'restartCommand',

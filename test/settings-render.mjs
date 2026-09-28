@@ -68,10 +68,11 @@ const actions = {
   saveBook() {}, reloadBook() {}, resetBook() {}, dismissNotice() {},
 }
 
-export function renderWith(mode, notice = '', priceOverrides = undefined) {
+export function renderWith(mode, notice = '', priceOverrides = undefined, extra = {}) {
   const settings = {
     ...DEFAULT_SETTINGS, menuMode: mode, priceOverrides,
     keysEnabled: true, menuEnabled: true, quickEnabled: true, panelEnabled: true, terminalEnabled: true,
+    ...extra,
   }
   const book = defaultQuickBook()
   return renderToStaticMarkup(h(SettingsSection, {
@@ -120,10 +121,17 @@ const html = {
   browser: render('browser'),
   custom: render('custom'),
 }
-/** 带覆盖价的那一版（「金额」栏要能显示已填的值与自定义行）。 */
+/** 带覆盖价的那一版（「金额」栏要能显示已填的值与自定义行）。
+ *  第三方行的价要写进 **offPeak** 那一格：0.10.0 起非 DeepSeek 行只渲染"平坦价"一档，
+ *  界面读的就是 offPeak（与 `pricing.ts` 的 `override?.offPeak ?? override?.peak` 一致）。 */
 const priced = render('official', '', {
   'deepseek-flash': { peak: { miss: 3 }, offPeak: { out: 4.5 } },
-  'my-relay': { peak: { miss: 9 } },
+  'my-relay': { offPeak: { miss: 9 } },
+})
+/** 自定义节假日 + 同步过第三方价目的那一版（标题行概览要把这两件事说出来）。 */
+const synced = render('official', '', undefined, {
+  peakHolidays: ['2026-10-01', '2026-10-02'],
+  syncedPrices: { modelsDevAt: Date.parse('2026-10-01T00:00:00Z'), modelsDevCount: 123 },
 })
 
 /** 按 `<span class="dsh-ux-cardName">` 把六张卡切开（比按正文里的字找起点可靠）。 */
@@ -268,45 +276,111 @@ console.log('\n6. 抬头右端：新增的「刷新」按钮（官方桌面版�
     refresh.includes('不重启 DSH') && refresh.includes('不打断'))
 }
 
-console.log('\n7. 「金额」卡（0.9.1）：六个数字框 × 内置三个模型 + 可自加模型')
+console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六格 + 平坦价自定义行 + 节假日/提醒/余额/同步')
 {
   const card = cardOf(html.official, '金额')
   const body = bodyOf(card)
   const text = textOf(body)
   const inputs = body.match(/<input[^>]*>/g) ?? []
+  /** 单价格子：只有它们带 `单价` 这个无障碍名。 */
+  const priceInputs = inputs.filter(input => input.includes('单价'))
   check('渲染出来了，且标题行概览说清"没改价"',
     card !== '' && textOf(headerOf(card)).includes('按官方刊例价估算'), textOf(headerOf(card)))
   check('说清只影响本插件估算、留空＝沿用官方价',
-    text.includes('只是本插件显示的费用估算') && text.includes('留空＝沿用官方刊例价'))
+    text.includes('只是本插件显示的费用估算') && text.includes('留空＝沿用官方价'))
   check('说清峰谷按"每笔用量发生的时间"判定（不是看面板的时刻）',
     text.includes('每笔用量真正发生的时间') && text.includes('北京时间'))
-  check('输入框数 = 3 个内置模型 × 6 格 + 1 个"新增模型名"',
-    inputs.length === 3 * 6 + 1, String(inputs.length))
-  check('空值的格子 value 是空串（不是 0：留空＝官方价）',
-    inputs.filter(input => input.includes('value=""')).length === inputs.length, String(inputs.length))
-  check('占位提示就是官方价（deepseek-flash 高峰未缓存输入 = 2.05）',
-    body.includes('placeholder="2.05"'), '')
-  check('三个内置模型各一行都渲染了',
-    ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro'].every(name => text.includes(name)))
-  check('别名写在内置行的说明里（deepseek-chat 不该另开一行）',
-    text.includes('别名 deepseek-chat') && !body.includes('>deepseek-chat<'))
+  // 0.10.0 的 PRICE_TABLE 只剩两个内置模型（flash / v4-pro），每个两档六格：
+  // 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个控件 + 余额开关 1 个 = 19。
+  check('单价框数 = 2 个内置模型 × 6 格（峰谷两档）', priceInputs.length === 2 * 6, String(priceInputs.length))
+  check('输入框总数 = 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个 + 余额开关 1 个',
+    inputs.length === 2 * 6 + 1 + 5 + 1, String(inputs.length))
+  check('两个内置行都是峰谷两档（各一个「高峰（元 / 1M）」+ 一个「空闲（元 / 1M）」）',
+    (body.match(/高峰（元 \/ 1M）/g) ?? []).length === 2
+    && (body.match(/空闲（元 \/ 1M）/g) ?? []).length === 2
+    && (body.match(/平坦价（元 \/ 1M）/g) ?? []).length === 0)
+  check('单价格子 value 是空串（不是 0：留空＝官方价）',
+    priceInputs.every(input => input.includes('value=""')) && priceInputs.length === 12,
+    priceInputs.map(input => /value="([^"]*)"/.exec(input)?.[1]).join(','))
+  // 0.10.0 的 flash 官方价（人民币）：高峰 2 / 0.04 / 8，空闲 1 / 0.02 / 4。
+  check('占位提示就是官方新价（flash 高峰 2 / 0.04 / 8，空闲 1 / 0.02 / 4）',
+    ['2', '0.04', '8', '1', '0.02', '4'].every(value => body.includes(`placeholder="${value}"`))
+    && !body.includes('placeholder="2.05"'),
+    (body.match(/placeholder="[^"]*"/g) ?? []).join(','))
+  check('两个内置模型各一行都渲染了（v4-flash 已退役、不再单开一行）',
+    ['deepseek-flash', 'deepseek-v4-pro'].every(name => text.includes(name))
+    && !body.includes('>deepseek-v4-flash<'))
+  check('别名写在内置行的说明里（deepseek-chat / deepseek-v4-flash 不该另开一行）',
+    text.includes('别名 deepseek-v4-flash') && text.includes('deepseek-chat')
+    && !body.includes('>deepseek-chat<'))
   check('有「添加」按钮与模型名输入框', text.includes('添加') && text.includes('再加一个模型'))
+  check('内置行的按钮是「恢复官方价」（每行一枚）',
+    (text.match(/恢复官方价/g) ?? []).length >= 2)
+
+  // ── 0.10.0 新增的四段：节假日 / 峰谷提醒 / 余额 / 价目同步 ──────────────────
+  check('节假日区：一个 textarea + 保存 / 恢复内置 + 当前生效条数（默认内置 10 天）',
+    (body.match(/<textarea[^>]*>/g) ?? []).length === 1
+    && body.includes('aria-label="法定节假日日期表"')
+    && text.includes('法定节假日（北京日期，一行一个）')
+    && text.includes('保存') && text.includes('恢复内置')
+    && text.includes('当前生效：10 个日期（内置）'))
+  const boxes = inputs.filter(input => input.includes('type="checkbox"'))
+  check('峰谷提醒：4 个复选框（默认 启用/进峰前/离峰前 开、系统通知关）+ 提前量默认 5 分钟',
+    boxes.length === 5
+    && boxes.some(box => box.includes('aria-label="启用峰谷提醒"') && box.includes('checked'))
+    && boxes.some(box => box.includes('aria-label="进入高峰前提醒"') && box.includes('checked'))
+    && boxes.some(box => box.includes('aria-label="离开高峰前提醒"') && box.includes('checked'))
+    && boxes.some(box => box.includes('aria-label="额外发浏览器通知"') && !box.includes('checked'))
+    && /aria-label="提前多少分钟提醒"[^>]*value="5"/.test(body))
+  check('余额：复选框默认开 + 「刷新」按钮（关掉时禁用）+ 说清 Key 只在宿主半读',
+    boxes.some(box => box.includes('aria-label="启用余额查询"') && box.includes('checked'))
+    && text.includes('刷新') && text.includes('API Key 只在宿主半读取'))
+  check('价目同步：两个独立按钮（官方价 / 第三方价目），初始都可点',
+    text.includes('同步官方价') && text.includes('同步第三方价目')
+    && (body.match(/<button[^>]*>同步[^<]*<\/button>/g) ?? []).every(button => !button.includes('disabled'))
+    && text.includes('抓失败不会覆盖本地价'))
 }
+
+console.log('\n7.1 「金额」卡：有覆盖价时（实填值 + 自定义行只一档）')
 {
   const card = cardOf(priced, '金额')
   const body = bodyOf(card)
   const text = textOf(body)
   const inputs = body.match(/<input[^>]*>/g) ?? []
-  check('有覆盖价时：概览说清已覆盖几个模型',
+  const priceInputs = inputs.filter(input => input.includes('单价'))
+  check('概览说清已覆盖几个模型',
     textOf(headerOf(card)).includes('已覆盖 2 个模型的单价'), textOf(headerOf(card)))
+  // flash 高峰 miss=3、flash 空闲 out=4.5 都落在 DeepSeek 的两档里；my-relay 的 9 落在**平坦价**
+  // 那一格（0.10.0 起第三方行只渲染这一档，界面读的也是 offPeak）。
   check('已填的格子显示为实填值（3 / 4.5 / 9）',
     inputs.some(input => input.includes('value="3"'))
     && inputs.some(input => input.includes('value="4.5"'))
     && inputs.some(input => input.includes('value="9"')),
-    inputs.map(input => /value="([^"]*)"/.exec(input)?.[1]).join(','))
-  check('自定义模型单开一行，并且那行给的是「删除」而不是「恢复官方价」',
-    text.includes('my-relay') && text.includes('删除'))
-  check('内置行的按钮是「恢复官方价」', text.includes('恢复官方价'))
+    priceInputs.map(input => /value="([^"]*)"/.exec(input)?.[1]).join(','))
+  check('自定义模型单开一行「平坦价」且只有 3 个格子（没有高峰列）',
+    priceInputs.length === 2 * 6 + 3
+    && (body.match(/平坦价（元 \/ 1M）/g) ?? []).length === 1
+    && body.includes('aria-label="my-relay 平坦 未缓存输入单价"')
+    && !body.includes('my-relay 高峰'))
+  check('平坦价行不给官方占位（价目表里没有它，认不出会写「未定价」）',
+    /aria-label="my-relay 平坦 未缓存输入单价"[^>]*placeholder=""/.test(body))
+  check('那行的按钮是「删除」而不是「恢复官方价」（只有内置行才是恢复官方价）',
+    text.includes('my-relay') && text.includes('删除')
+    && (text.match(/恢复官方价/g) ?? []).length === 2)
+}
+
+console.log('\n7.2 「金额」卡：自定义节假日 + 同步过第三方价目时的概览与状态行')
+{
+  const card = cardOf(synced, '金额')
+  const body = bodyOf(card)
+  const text = textOf(body)
+  const head = textOf(headerOf(card))
+  check('标题行概览把"自定义节假日"与"第三方价目条数"都说出来',
+    head.includes('自定义节假日 2 天') && head.includes('第三方价目 123 个模型'), head)
+  check('节假日区带出当前生效的那份（自定义，不再是内置）',
+    text.includes('当前生效：2 个日期（自定义）') && body.includes('2026-10-01'))
+  check('第三方价目同步过之后就报条数，不再写"从没同步过"',
+    text.includes('（123 个模型）') && !text.includes('第三方价目上次同步：从没同步过'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

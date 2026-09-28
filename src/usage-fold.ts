@@ -1,5 +1,5 @@
 /**
- * 「按 route 分列」的纯逻辑：把一个会话的事件流折成 per-`(provider, model, 档位)` 的 token 桶。
+ * 「按 route 分列」的纯逻辑：把一个会话的事件流折成 per-`(provider, model, 档位, 价格档)` 的 token 桶。
  *
  * ## 为什么这件事只能在宿主半做
  *
@@ -23,18 +23,23 @@
  *     `stream[i].type === 'chunk' && stream[i].chunk.type === 'usage'` 里的**最后一条**
  *     （官方 `lastAssistantStreamChunk(stream, 'usage')` 就是从后往前找这一条）
  *
- * ## 四条口径（每条错了都会静默算错）
+ * ## 五条口径（每条错了都会静默算错）
  *
  * 1. **归属**：一条 usage 记在它**之前最近一条** `request/header` 的 `(provider, model)` 头上。
  * 2. **同一步是替换而不是累加**：同一 `(turn, step)` 再次上报时要用"新值 − 旧值"替换旧值
  *    （官方 `addReplacing`）。直接累加会把同一步重复计费，直接覆盖又会丢掉前一次那份。
  * 3. **重试要重新开始记**：`llm/retry-started` 命中同一步时清掉替换槽（官方做法），
  *    这样重试那次的用量是**加**上去而不是减出来的。
- * 4. **峰谷按请求时刻分档**（0.9.1 起）：官方按请求发生时刻计费（高峰价是空闲价的 2 倍），
- *    所以一条 usage 的档位取"它那条 `request/header` 的时间"（没有就用事件自己的 `time`，
- *    两者都没有则把 `Number.NaN` 交给调用方兜底）。**同一步后续的替换增量沿用该步第一次
- *    判定的档位** —— 否则一次跨越 09:00 的请求会被拆成两档，凭空多出一个"高峰用量"。
- *    档位判定函数由调用方注入（{@link PeakAt}），本模块不 import 任何东西。
+ * 4. **档位按请求发生的时刻判，并固化进 key**（0.9.1 起判峰谷、0.10.0 起连价格档一起判）：
+ *    官方按请求发生时刻计费（高峰价是空闲价的 2 倍，且官方会调价），所以一条 usage 的档位
+ *    取"它那条 `request/header` 的时间"（没有就用事件自己的 `time`，两者都没有则把
+ *    `Number.NaN` 交给调用方兜底）。**同一步后续的替换增量沿用该步第一次判定的档位** ——
+ *    否则一次跨越 09:00 的请求会被拆成两档，凭空多出一个"高峰用量"。
+ *    判定函数由调用方注入（{@link TierAt}），本模块不 import 任何东西。
+ * 5. **价格档是 key 的一部分**（0.10.0）：官方 2026-09-10 调过 Flash 的价，若新旧用量
+ *    折进同一条 route，"每一档各花了多少"就没法按当时的价结算（历史金额会跟着现在变）。
+ *    所以档位里带 {@link UsageTier.era}，由调用方按同一时刻算出来 —— 宿主半把两件事
+ *    绑成一个闭包，本模块只负责把它塞进 key。
  *
  * ## 增量折叠（{@link createUsageFolder}）
  *
@@ -61,12 +66,12 @@ export interface UsageBuckets {
   readonly outputTokens: number
   /** 缓存命中读取（官方 `cacheReadTokens`）。 */
   readonly cacheReadTokens: number
-  /** 缓存写入（官方 `cacheWriteTokens`；DeepSeek 不单独计价，只进显示口径）。 */
+  /** 缓存写入（官方 `cacheWriteTokens`；实测恒 0，只进显示口径）。 */
   readonly cacheWriteTokens: number
 }
 
 /**
- * 一条 route 的用量：`(provider, model, 档位)` 一组即一条 —— 峰谷**拆开**成两条。
+ * 一条 route 的用量：`(provider, model, 档位, 价格档)` 一组即一条 —— 峰谷**拆开**成两条。
  *
  * 为什么拆：高峰价是空闲价的 2 倍，合成一条就没法按不同单价计价了；而"这一条到底按哪个价
  * 算的"恰恰是用户要看的东西（`panel` 会把两档分行显示）。
@@ -74,8 +79,10 @@ export interface UsageBuckets {
 export interface RouteUsage {
   readonly provider: string
   readonly model: string
-  /** 高峰档（true）还是空闲档（false）。 */
+  /** 高峰档（true）还是空闲档（false）。第三方路由恒 false（它们没有峰谷两档）。 */
   readonly peak: boolean
+  /** 价格历史档 id（`pricing.ts` 的 `eraIdAt`）；第三方路由是空串。 */
+  readonly era: string
   readonly usage: UsageBuckets
 }
 
@@ -91,7 +98,7 @@ export interface SessionUsageFold {
   readonly total: UsageBuckets
   /** 高峰 / 空闲两档的小计（逐项相加恰好等于 {@link total}）。 */
   readonly tiers: TierUsage
-  /** 按 token 总量从多到少排好的 route 列表（峰谷已拆开）。 */
+  /** 按 token 总量从多到少排好的 route 列表（峰谷与价格档都已拆开）。 */
   readonly routes: readonly RouteUsage[]
   /** 折过的事件条数（诊断用：分列出不来时，界面靠它区分"没事件"和"形状不对"）。 */
   readonly events: number
@@ -99,15 +106,26 @@ export interface SessionUsageFold {
   readonly samples: number
 }
 
+/** 一条用量该落哪一档（由调用方注入判定，见 {@link TierAt}）。 */
+export interface UsageTier {
+  /** 高峰档还是空闲档。 */
+  readonly peak: boolean
+  /** 价格历史档 id；没有历史价概念（第三方路由）就是空串。 */
+  readonly era: string
+}
+
 /**
- * 峰谷判定：给一个毫秒时刻，回它算不算高峰。
+ * 档位判定：给一个毫秒时刻与它归属的 route，回报峰谷档与价格档。
  *
  * **由调用方注入**而不是在这里 import 一份判定规则：规则与刊例价同源（`pricing.ts` 的
- * `isPeakAt`，UTC 周一至周五 01–04、06–10），但本模块要能在 node 里用**定死的时刻**
+ * `isPeakAt` + `eraIdAt` + `isDeepSeekRoute`），但本模块要能在 node 里用**定死的时刻**
  * 逐例钉住，也要让宿主半对"没有时间戳"自己决定兜底（它退回"现在"）。
  * 事件里既没有 `request/header` 时间、自身也没有 `time` 时传 `Number.NaN`。
+ *
+ * route 一起传进来是因为第三方路由**没有**峰谷与价格档的概念：判定要能按 provider/model
+ * 分叉（否则第三方用量会被打上莫须有的"高峰档"，界面会多出两行假的峰谷小计）。
  */
-export type PeakAt = (timeMs: number) => boolean
+export type TierAt = (timeMs: number, provider: string, model: string) => UsageTier
 
 /** 认不出 provider/model 时用的标签（客户端会把它标出来，不假装知道）。 */
 export const UNKNOWN_ROUTE = '未知'
@@ -161,7 +179,7 @@ function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
-/** 事件信封上的 `time`（毫秒）；没有/不是有限数就是 `NaN`（交给 {@link PeakAt} 兜底）。 */
+/** 事件信封上的 `time`（毫秒）；没有/不是有限数就是 `NaN`（交给 {@link TierAt} 兜底）。 */
 function timeOf(event: Record<string, unknown>): number {
   const time = event.time
   return typeof time === 'number' && Number.isFinite(time) ? time : Number.NaN
@@ -216,12 +234,15 @@ function bucketsOf(usage: unknown): UsageBuckets {
   }
 }
 
-/**
- * 增量折叠器：宿主半按会话缓存一个，用 `session/event` 增量喂。
- *
- * 与一次性版（{@link foldSessionUsage}）**同一份实现**：后者只是"新建 + 喂一批 + 取快照"，
- * 免得两套折叠逻辑日后各自漂移（漂移的后果是"面板与胶囊数字不一致"这种最难查的问题）。
- */
+/** 折叠器内部的一步替换槽。 */
+interface StepSlot {
+  readonly turn: unknown
+  readonly step: unknown
+  readonly buckets: UsageBuckets
+  readonly tier: UsageTier
+}
+
+/** 增量折叠器：宿主半按会话缓存一个，用 `session/event` 增量喂。 */
 export interface UsageFolder {
   /** 喂一批事件（按 `seq` 幂等：已折过的不会再折一遍）。 */
   feed(events: readonly unknown[]): void
@@ -229,18 +250,27 @@ export interface UsageFolder {
   snapshot(): SessionUsageFold
 }
 
+/** 折叠器内部的行（`usage` 要能就地替换，所以这里不是对外的只读 {@link RouteUsage}）。 */
+interface MutableRouteUsage {
+  readonly provider: string
+  readonly model: string
+  readonly peak: boolean
+  readonly era: string
+  usage: UsageBuckets
+}
+
 /**
  * 造一个增量折叠器。
- * @param peakAt 峰谷判定（见 {@link PeakAt}）；宿主半传 `isPeakAt` 包装，测试传定死的表。
+ * @param tierAt 档位判定（见 {@link TierAt}）；宿主半传 `pricing.ts` 包装，测试传定死的表。
  * @returns 折叠器：`feed()` 可反复调用，`snapshot()` 随时取结果。
  */
-export function createUsageFolder(peakAt: PeakAt): UsageFolder {
-  const byRoute = new Map<string, { provider: string; model: string; peak: boolean; usage: UsageBuckets }>()
+export function createUsageFolder(tierAt: TierAt): UsageFolder {
+  const byRoute = new Map<string, MutableRouteUsage>()
   let provider = UNKNOWN_ROUTE
   let model = UNKNOWN_ROUTE
   /** 最近一条 `request/header` 的时刻（请求发出时刻 = 官方计费时刻）。 */
   let headerTime = Number.NaN
-  let last: { turn: unknown; step: unknown; buckets: UsageBuckets; peak: boolean } | null = null
+  let last: StepSlot | null = null
   let total = zeroBuckets()
   let tierPeak = zeroBuckets()
   let tierOffPeak = zeroBuckets()
@@ -282,16 +312,15 @@ export function createUsageFolder(peakAt: PeakAt): UsageFolder {
         if (previous !== undefined && sameBuckets(previous.buckets, buckets)) continue
         const delta = previous === undefined ? buckets : subBuckets(buckets, previous.buckets)
         // 档位只在**这一步第一次上报**时判一次，后续替换增量沿用同一个档位（见文件头第 4 条）。
-        const slotPeak = previous?.peak
-          ?? peakAt(Number.isFinite(headerTime) ? headerTime : timeOf(event))
-        last = { turn: data.turn, step: data.step, buckets, peak: slotPeak }
+        const tier = previous?.tier ?? tierAt(Number.isFinite(headerTime) ? headerTime : timeOf(event), provider, model)
+        last = { turn: data.turn, step: data.step, buckets, tier }
         if (isZero(delta)) continue
-        const key = `${provider}\u0000${model}\u0000${slotPeak ? 'peak' : 'offPeak'}`
-        const row = byRoute.get(key) ?? { provider, model, peak: slotPeak, usage: zeroBuckets() }
+        const key = `${provider}\u0000${model}\u0000${tier.peak ? 'peak' : 'offPeak'}\u0000${tier.era}`
+        const row = byRoute.get(key) ?? { provider, model, peak: tier.peak, era: tier.era, usage: zeroBuckets() }
         row.usage = addBuckets(row.usage, delta)
         byRoute.set(key, row)
         total = addBuckets(total, delta)
-        if (slotPeak) tierPeak = addBuckets(tierPeak, delta)
+        if (tier.peak) tierPeak = addBuckets(tierPeak, delta)
         else tierOffPeak = addBuckets(tierOffPeak, delta)
       }
     },
@@ -314,11 +343,11 @@ export function createUsageFolder(peakAt: PeakAt): UsageFolder {
  * 把一个会话的事件流折成 per-route 用量（一次性）。
  *
  * @param events 会话事件（`sessionQuery.readSession(sessionId).events`）；形状不对的条目直接跳过。
- * @param peakAt 峰谷判定（见 {@link PeakAt}）；宿主半传 `isPeakAt` 包装，测试传定死的表。
+ * @param tierAt 档位判定（见 {@link TierAt}）；宿主半传 `pricing.ts` 包装，测试传定死的表。
  * @returns 各 route 的用量（按 token 总量降序）、总和与诊断计数。
  */
-export function foldSessionUsage(events: readonly unknown[], peakAt: PeakAt): SessionUsageFold {
-  const folder = createUsageFolder(peakAt)
+export function foldSessionUsage(events: readonly unknown[], tierAt: TierAt): SessionUsageFold {
+  const folder = createUsageFolder(tierAt)
   folder.feed(events)
   return folder.snapshot()
 }
@@ -361,7 +390,14 @@ export interface UsageCacheOutcome {
  * 所以播种期间订阅来的事件进 `buffered`，读完快照后按 seq 升序补上。`test/usage-fold.mjs`
  * 第 8 节用一个"读的时候顺手追加两条事件"的假 read 把这条钉住。
  *
- * @param peakAt 峰谷判定（见 {@link PeakAt}）。
+ * ## 什么时候必须整份作废（{@link UsageCache.clear}）
+ *
+ * 折叠结果里**固化了判定当时的事实**：峰谷档、价格档。所以"用户改了节假日表""同步来了新的
+ * 官方价档"这类**判定规则本身**的变化，不能靠"下次再折一遍"生效 —— 水位去重会把旧事件
+ * 整条跳过，金额会一直停在旧规则上（而且看不出来）。宿主半因此在这些设置变化时调 `clear()`：
+ * 下次取价重新读日志、按新规则重折。
+ *
+ * @param tierAt 档位判定（见 {@link TierAt}）。
  * @param options.maxSessions 同时保留几个会话（默认 8；超出按最先被问的顺序淘汰）。
  */
 export interface UsageCache {
@@ -380,6 +416,8 @@ export interface UsageCache {
     liveSeq: number | undefined,
     read: () => Promise<readonly unknown[]>,
   ): Promise<UsageCacheOutcome>
+  /** 丢掉全部缓存（判定规则变了：节假日、价格档、用户覆盖价与第三方价目都算）。 */
+  clear(): void
 }
 
 /** 内部行状态。 */
@@ -394,11 +432,11 @@ interface CacheRow {
 
 /**
  * 造一个按会话缓存的增量折叠器。
- * @param peakAt 峰谷判定。
+ * @param tierAt 档位判定。
  * @param options.maxSessions 同时保留几个会话（默认 8）。
- * @returns 缓存；`event()` 可随时调，`sync()` 取快照并按需播种。
+ * @returns 缓存；`event()` 可随时调，`sync()` 取快照并按需播种，`clear()` 整份作废。
  */
-export function createUsageCache(peakAt: PeakAt, options: { maxSessions?: number } = {}): UsageCache {
+export function createUsageCache(tierAt: TierAt, options: { maxSessions?: number } = {}): UsageCache {
   const rows = new Map<string, CacheRow>()
   const maxSessions = options.maxSessions ?? 8
   const trim = (): void => {
@@ -433,6 +471,9 @@ export function createUsageCache(peakAt: PeakAt, options: { maxSessions?: number
       }
       feedAll(row, [event])
     },
+    clear(): void {
+      rows.clear()
+    },
     async sync(
       sessionId: string,
       liveSeq: number | undefined,
@@ -447,7 +488,7 @@ export function createUsageCache(peakAt: PeakAt, options: { maxSessions?: number
       if (!behind) return { fold: row!.folder.snapshot(), source: 'cache' }
 
       if (row === undefined) {
-        row = { folder: createUsageFolder(peakAt), lastSeq: undefined, seeding: true, buffered: [] }
+        row = { folder: createUsageFolder(tierAt), lastSeq: undefined, seeding: true, buffered: [] }
         rows.set(sessionId, row)
         trim()
       } else {

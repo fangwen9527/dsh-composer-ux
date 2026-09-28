@@ -35,13 +35,23 @@ import {
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
+  SYNC_API_PATH,
+  BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
+  SYNCED_PRICES_FIELD,
   type QuickPromptBook,
 } from './settings-contract.ts'
 import {
-  costBucketsOf, costPartsOf, isPeakAt, parsePriceOverrides, resolvePrice,
-  type PriceOverrideTable,
+  DEFAULT_PEAK_HOLIDAYS, costBucketsOf, costPartsOf, eraAt, eraIdAt, isDeepSeekRoute, isPeakAt,
+  parseHolidays, parsePriceEras, parsePriceOverrides, resolvePrice,
+  type PriceEra, type PriceOverrideTable, type ProviderPriceTable,
 } from './pricing.ts'
-import { createUsageCache } from './usage-fold.ts'
+import {
+  eraFromOfficial, fetchModelsDevPrices, fetchOfficialPages, readPriceFile, samePriceTable, writePriceFile,
+} from './price-sync.ts'
+import {
+  BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
+} from './balance.ts'
+import { createUsageCache, type UsageTier } from './usage-fold.ts'
 import {
   TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
   TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -63,6 +73,14 @@ export const name = 'composer-ux'
 /** 设置面板可调尺寸的上下限（与 client 侧的 clamp 保持一致）。 */
 const PANEL_MIN = 560
 const PANEL_MAX = 4000
+
+/**
+ * DeepSeek 官方 provider 的设置命名空间（`packages/llm/llm-deepseek/src/index.ts` 的 `NS`）。
+ *
+ * 余额查询要从这一行读 `apiKeyEnv`（凭据引用，默认 `DEEPSEEK_API_KEY`）与 `baseURL`
+ * （白名单检查用）—— 与官方适配器取 Key 的那条路完全一致，不另造一份配置。
+ */
+const LLM_DEEPSEEK_NAMESPACE = 'llm-deepseek'
 
 /** 路径寻址写入：与 settings 服务的 SettingsPathOp 结构一致。 */
 type PathOp =
@@ -432,6 +450,23 @@ function ownSchema(): z {
     // "设置页写不进去"这种最难解释的故障 —— 写入路径只需这一项是 volatile（整个字段一起写，
     // 不做嵌套路径写），所以逐字段标记那一套照旧成立。
     [PRICE_OVERRIDES_FIELD]: z.any().required(false),
+    // 「金额」（0.10.0）节假日表：北京日历日的 `YYYY-MM-DD` 数组。**普通数组字段**（键固定，
+    // 不是动态键），所以声明得出来；不填 = 用内置那份（`pricing.ts` 的 DEFAULT_PEAK_HOLIDAYS）。
+    [PEAK_HOLIDAYS_FIELD]: z.array(z.string()).required(false),
+    // 「金额」（0.10.0）峰谷提醒：逐项给默认值，坏值由 `sanitizePeakAlert` 兜（不整份丢）。
+    [PEAK_ALERT_FIELD]: z.object({
+      enabled: z.boolean().default(DEFAULT_PEAK_ALERT.enabled),
+      aheadMinutes: z.number().default(DEFAULT_PEAK_ALERT.aheadMinutes),
+      onPeak: z.boolean().default(DEFAULT_PEAK_ALERT.onPeak),
+      onOffPeak: z.boolean().default(DEFAULT_PEAK_ALERT.onOffPeak),
+      webNotify: z.boolean().default(DEFAULT_PEAK_ALERT.webNotify),
+    }).required(false),
+    // 「金额」（0.10.0）余额开关：默认开。关掉 = 界面不显示余额行、也不发出网请求
+    // （用户不想让插件碰官方接口时的总闸；**不等于**"查了但不显示"）。
+    [BALANCE_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.balanceEnabled),
+    // 「金额」（0.10.0）同步来的价目元信息：`eras` 的键是官方后来才出现的模型名（动态键），
+    // 与 priceOverrides 同一个理由用 `z.any()`。第三方价目本体不进设置（见 price-sync.ts）。
+    [SYNCED_PRICES_FIELD]: z.any().required(false),
   })
 }
 
@@ -475,6 +510,67 @@ function markVolatile(schema: z): z {
   if (dict === undefined) return schema
   for (const key of Object.keys(dict)) dict[key] = markVolatileField(dict[key]!)
   return schema
+}
+
+/**
+ * 第三方价目（models.dev）的**进程内缓存**。
+ *
+ * 为什么放在模块级而不是某个 `inject` 作用域里：写它的是"同步"那条路由、读它的是"用量"那条
+ * 路由，两者是两个独立的 inject 作用域，变量拿不过去。走文件又不行 —— 每次取价都解析
+ * 450 KB（215 个 provider / 7831 个模型）不现实，所以进程内留一份，
+ * 同步成功后把 `loaded` 置回 false 让它下次重读。
+ */
+const priceCache: { loaded: boolean; providers: ProviderPriceTable | undefined } = { loaded: false, providers: undefined }
+
+/** 取第三方价目（首次问磁盘，之后走缓存；读不到就是 `undefined` —— 界面显示"未定价"）。 */
+async function ensureProviderPrices(): Promise<ProviderPriceTable | undefined> {
+  if (priceCache.loaded) return priceCache.providers
+  priceCache.loaded = true
+  try {
+    const file = await readPriceFile()
+    priceCache.providers = file.providers
+  } catch {
+    priceCache.providers = undefined
+  }
+  return priceCache.providers
+}
+
+/** 作废第三方价目缓存（同步路由写完文件后调）。 */
+function invalidateProviderPrices(): void {
+  priceCache.loaded = false
+  priceCache.providers = undefined
+}
+
+/**
+ * 官方信任关卡：`webServer` 可以绑 `0.0.0.0`（`webserver/src/index.ts` 的 bind host），
+ * 所以**每条自己开的路由**都要先问 `connection.requestRejection(request)` ——
+ * 它同时管 Host/Origin 围栏（防 DNS rebinding、跨站）与浏览器登录令牌。
+ * 返回 true = 已被拒并结束响应（调用方立刻 return，连数据都不读）。
+ *
+ * 2026-09-29 补上：`金额` 这一批新路由（用量分列、价目同步、余额）起初漏了这道关卡 ——
+ * 余额那条最严重（任何能访问该端口的人都能读走账号余额），所以三条一起挂。
+ * @param ctx 宿主上下文（用 `get`，不在 inject 列表里也不抛）。
+ * @param req 原始请求（`IncomingMessage`）。
+ * @param res 响应（只用到 `statusCode` 与 `end`；用 rest 参数是为了同时吃下
+ *   `end(body: string)` 与 `end(body?: string)` 两种声明 —— 本文件里两套路由各自声明不同）。
+ */
+function rejectUntrustedRequest(
+  ctx: { get: (name: string) => unknown },
+  req: unknown,
+  res: { statusCode?: number; end: (...args: string[]) => void },
+): boolean {
+  try {
+    const connection = ctx.get('connection') as
+      { requestRejection?: (request: unknown) => number | undefined } | undefined
+    const rejection = connection?.requestRejection?.(req)
+    if (rejection === undefined) return false
+    res.statusCode = rejection
+    res.end()
+    return true
+  } catch {
+    // `get` 不抛；万一这一版的 connection 形状不同，也不该让整条路由挂掉。
+    return false
+  }
 }
 
 /**
@@ -933,13 +1029,66 @@ export function apply(ctx: Context, config?: unknown): void {
     }
 
     /**
-     * 峰谷判定（0.9.1）：按**每条用量事件自己的时间戳**判档，而不是"看面板的那一秒"。
+     * 金额规则（0.10.0）：档位判定要用的三样东西 —— 节假日表、价格历史档、第三方价目。
+     *
+     * 放在一个可变的 `moneyRules` 里而不是"每次取价重读设置"：折叠是**逐事件**调判定的
+     * （一次播种可能几千条），每条都去问设置服务太贵。所以改成"设置一变就重读 + 把折叠缓存
+     * 整份作废"（见下面的 settings 订阅）—— 档位是折进去的，不重折就永远停在旧规则上。
+     */
+    const moneyRules: {
+      holidays: readonly string[]
+      eras: readonly PriceEra[]
+      providers?: ProviderPriceTable
+    } = { holidays: DEFAULT_PEAK_HOLIDAYS, eras: [] }
+
+    /** 第三方价目走进程内缓存（见模块级 `priceCache`）；这里只把它抄进本轮规则。 */
+    const loadProviders = async (): Promise<void> => {
+      moneyRules.providers = await ensureProviderPrices()
+    }
+
+    /**
+     * 读本插件自己那一行 —— **必须走 `makeReader`，不能用 `settings.get(ns)`**。
+     *
+     * ⚠️ 这是一个 0.9.1 就存在、0.10.0 才发现并修掉的真 bug（2026-09-29）：本机跑的是
+     * DSH **0.1.7-rc.1**，它的设置服务**只有 `describe()`**（`packages/settings/settings/src/index.ts`
+     * 里根本没有 `get(ns)`）—— 而旧代码写的是 `service?.get?.(NAMESPACE)`，于是**永远读不到值**：
+     * 用户在设置页「金额」里填的单价**根本没进宿主半的计价**（胶囊与明细页用的是没有覆盖价的数字），
+     * 节假日表与同步来的价格档 likewise。测试没抓到是因为宿主测试的假 settings 服务**有** `get`。
+     * `makeReader` 两代都兼容（0.1.7 走 `describe()`，本行还能直接解引用导出的 volatile `Config` 树）。
+     */
+    const readOwn = makeReader(usageCtx.get('settings') as unknown as SettingsLike, config)
+
+    /** 重读金额相关设置（读不到就退回内置，一次读失败不该把金额算成全 0 或算错档）。 */
+    const readMoneySettings = (): void => {
+      try {
+        const row = readOwn(NAMESPACE)
+        moneyRules.holidays = parseHolidays(row?.[PEAK_HOLIDAYS_FIELD]) ?? DEFAULT_PEAK_HOLIDAYS
+        const synced = row?.[SYNCED_PRICES_FIELD] as Record<string, unknown> | undefined
+        moneyRules.eras = parsePriceEras(synced?.eras) ?? []
+      } catch {
+        moneyRules.holidays = DEFAULT_PEAK_HOLIDAYS
+        moneyRules.eras = []
+      }
+    }
+
+    /**
+     * 档位判定（0.9.1 判峰谷、0.10.0 加价格档）：按**每条用量事件自己的时间戳**判，
+     * 而不是"看面板的那一秒"。
      *
      * 这就是 0.8.0 的一个静默错处：昨晚（空闲档）跑的会话，今天上午 10 点看会整份按高峰档
      * 显示 —— 差 2 倍，而屏幕上只是个数字。事件没有可用时间戳时退回"现在"（＝旧行为），
      * 但绝不静默把一切判成空闲档。
+     *
+     * 第三方路由**没有**峰谷与历史档概念（它们的价是平坦的、也就没有"哪一档"），
+     * 所以那里直接给 `{peak: false, era: ''}` —— 否则界面会多出两行假的"高峰用量"。
      */
-    const peakAt = (ms: number): boolean => isPeakAt(new Date(Number.isFinite(ms) ? ms : Date.now()))
+    const tierAt = (ms: number, provider: string, model: string): UsageTier => {
+      const at = Number.isFinite(ms) ? ms : Date.now()
+      if (!isDeepSeekRoute(provider, model)) return { peak: false, era: '' }
+      return { peak: isPeakAt(at, { holidays: moneyRules.holidays }), era: eraIdAt(at, moneyRules.eras) }
+    }
+
+    readMoneySettings()
 
     /**
      * 每个被问过的会话一个**增量**折叠缓存（`createUsageCache`，纯逻辑在 `usage-fold.ts`）。
@@ -950,7 +1099,7 @@ export function apply(ctx: Context, config?: unknown): void {
      *   · `sync()` 里的 `seq` 落后检测 —— 首次（或发现落后）时完整读一次播种，
      *     播种期间订阅来的事件由缓存内部攒着、读完按 seq 补上（细节见 `usage-fold.ts`）。
      */
-    const usageCache = createUsageCache(peakAt)
+    const usageCache = createUsageCache(tierAt)
     usageCtx.on?.('session/event', ((session: unknown, event: unknown) => {
       try {
         const id = (session as { id?: unknown } | null)?.id
@@ -962,12 +1111,28 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }) as never)
 
+    /**
+     * 金额设置一变：重读规则 + **把折叠缓存整份作废**。
+     *
+     * 为什么必须作废而不是"下次自然会重折"：折叠的水位是按 `seq` 去重的，改规则不会让旧事件
+     * 重折一遍 —— 金额会一直停在旧规则上，而且界面上完全看不出来（2026-09-29 设计时明确
+     * 记下这条）。同步按钮写完价目后也会走这里（它写的是同一个命名空间）。
+     */
+    const onMoneySettingsUpdated = (ns: unknown): void => {
+      if (ns !== NAMESPACE) return
+      readMoneySettings()
+      invalidateProviderPrices()
+      usageCache.clear()
+    }
+    for (const event of ['settings/updated', 'settings/document-updated']) {
+      usageCtx.on?.(event as never, onMoneySettingsUpdated as never)
+    }
+
     /** 当前生效的用户覆盖价（读不到就当没填：一次设置读失败不该把金额算成全 0）。 */
     const readOverrides = (): PriceOverrideTable | undefined => {
       try {
-        const service = usageCtx.get('settings') as { get?: (ns: string) => unknown } | undefined
-        const row = service?.get?.(NAMESPACE)
-        return parsePriceOverrides((row as Record<string, unknown> | undefined)?.[PRICE_OVERRIDES_FIELD])
+        const row = readOwn(NAMESPACE)
+        return parsePriceOverrides(row?.[PRICE_OVERRIDES_FIELD])
       } catch {
         return undefined
       }
@@ -982,6 +1147,8 @@ export function apply(ctx: Context, config?: unknown): void {
         sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
         return
       }
+      // 官方信任关卡（见 rejectUntrustedRequest）：会话用量也是数据，同样不许裸奔。
+      if (rejectUntrustedRequest(usageCtx as never, req, res)) return
       const url = typeof req.url === 'string' ? req.url : ''
       const queryAt = url.indexOf('?')
       const params = new URLSearchParams(queryAt < 0 ? '' : url.slice(queryAt + 1))
@@ -1009,16 +1176,33 @@ export function apply(ctx: Context, config?: unknown): void {
         })
 
         // ── 2) 逐 route 计价 ────────────────────────────────────────────────────
-        // 档位来自折叠结果（**每条用量事件自己的时间**），单价来自用户覆盖价 + 内置刊例价。
+        // 档位来自折叠结果（**每条用量事件自己的时间**，含价格历史档），单价来自
+        // 用户覆盖价 > 官方刊例价（历史档）/ 同步来的第三方价目，认不出就是"未定价"。
         // 计价放在宿主半是刻意的：这样"折叠规则 → 分档 → 单价"只有一处，胶囊与面板
         // （以及 `test/*.mjs`）看到的是同一份数字，不会各算各的。
         const overrides = readOverrides()
+        await loadProviders()
         const routes = fold.routes.map(item => {
-          const parts = costPartsOf(
-            costBucketsOf(item.usage),
-            resolvePrice(item.model, { peak: item.peak, overrides }).prices,
-          )
-          return { ...item, cost: parts.total, parts }
+          const resolved = resolvePrice(item.model, {
+            provider: item.provider,
+            peak: item.peak,
+            era: item.era,
+            overrides,
+            providers: moneyRules.providers,
+          })
+          const parts = costPartsOf(costBucketsOf(item.usage), resolved.prices)
+          return {
+            ...item,
+            cost: parts.total,
+            parts,
+            /** 这一条实际用的单价（界面要原样显示"按什么价算的"）。 */
+            price: resolved.prices,
+            priceCurrency: resolved.currency,
+            priceSource: resolved.source,
+            priceEra: resolved.era,
+            overridden: resolved.overridden,
+            unpriced: resolved.unpriced,
+          }
         })
         const cost = routes.reduce(
           (sum, item) => ({
@@ -1041,6 +1225,12 @@ export function apply(ctx: Context, config?: unknown): void {
           tiers: fold.tiers,
           routes,
           cost,
+          /**
+           * 生效的节假日表（北京日期）。客户端算"下一次峰谷切换"用的是**同一份**规则
+           * —— 两边各拿一份自己的表就会出现"胶囊说还有 3 分钟进峰、面板说不是"这种
+           * 无法解释的分歧，所以由宿主半回给客户端。
+           */
+          holidays: moneyRules.holidays,
         })
       })()
     }
@@ -1050,6 +1240,299 @@ export function apply(ctx: Context, config?: unknown): void {
       path: USAGE_API_PATH,
       handler: handle as never,
     }), 'composer-ux: usage route')
+  })
+
+  // ── 金额：官方价同步 + 第三方价目（models.dev）（0.10.0）────────────────────
+  //
+  // 两条**独立**的同步路径，因为代价差两个数量级：
+  //   · `official`：官方价格页两页各约 24 KB，秒级；同步到的数若与当前档不同，
+  //     **新增一个从"这次同步时刻"起生效的价格档**（绝不改编译进去的那三档 ——
+  //     改它等于把历史账重算）。
+  //   · `modelsDev`：models.dev 的 `api.json` 5.2 MB，压成 450 KB 落盘
+  //     （`$DSH_HOME/storages/composer-ux/prices.json`），设置里只记"什么时候同步的、多少条"。
+  //
+  // 两条路都遵守同一条纪律：**失败绝不覆盖本地价**（见 price-sync.ts 文件头）。
+  ctx.inject(['webServer', 'settings'], (syncCtx) => {
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+    const readBody = async (req: AsyncIterable<unknown>): Promise<string> => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of req) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+        total += buffer.length
+        if (total > 64_000) break
+        chunks.push(buffer)
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    }
+    const settingsService = (): {
+      mutate?: (ns: string, ops: readonly unknown[]) => Promise<unknown>
+    } | undefined => syncCtx.get('settings') as never
+
+    /** 读本插件那一行：走 `makeReader`（0.1.7 没有 `get`，见用量路由里那段说明）。 */
+    const readOwn = makeReader(syncCtx.get('settings') as unknown as SettingsLike, config)
+
+    /** 读当前同步元信息（认不出就是空对象）。 */
+    const readSynced = (): Record<string, unknown> => {
+      try {
+        const synced = readOwn(NAMESPACE)?.[SYNCED_PRICES_FIELD]
+        return typeof synced === 'object' && synced !== null ? { ...(synced as Record<string, unknown>) } : {}
+      } catch {
+        return {}
+      }
+    }
+
+    /** 把同步元信息写回设置（写不进去就如实回报 —— 界面上的"已同步"不能是假的）。 */
+    const writeSynced = async (next: Record<string, unknown>): Promise<boolean> => {
+      const service = settingsService()
+      if (typeof service?.mutate !== 'function') return false
+      try {
+        await service.mutate(NAMESPACE, [{ op: 'set', path: [SYNCED_PRICES_FIELD], value: next }])
+        return true
+      } catch (error: unknown) {
+        console.warn('[composer-ux] 价目同步元信息写入失败', error)
+        return false
+      }
+    }
+
+    const handle = (
+      req: { method?: string; url?: string } & AsyncIterable<unknown>,
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): void => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'POST' && method !== 'GET') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+      // 官方信任关卡（见 rejectUntrustedRequest）：这条会出网、会写设置，必须挡在最前面。
+      if (rejectUntrustedRequest(syncCtx as never, req, res)) return
+      void (async (): Promise<void> => {
+        let target = ''
+        try {
+          const url = typeof req.url === 'string' ? req.url : ''
+          const queryAt = url.indexOf('?')
+          const params = new URLSearchParams(queryAt < 0 ? '' : url.slice(queryAt + 1))
+          target = params.get('target') ?? ''
+          if (method === 'POST') {
+            const body = await readBody(req)
+            if (body.length > 0) {
+              const parsed: unknown = JSON.parse(body)
+              const wanted = (parsed as { target?: unknown } | null)?.target
+              if (typeof wanted === 'string' && wanted.length > 0) target = wanted
+            }
+          }
+        } catch {
+          /* 请求体不是 JSON：按 target 为空处理，下面如实报错 */
+        }
+        if (target !== 'official' && target !== 'modelsDev') {
+          sendJson(res, 400, { ok: false, error: 'target 必须是 official 或 modelsDev' })
+          return
+        }
+
+        if (target === 'modelsDev') {
+          const providers = await fetchModelsDevPrices()
+          if (providers === undefined) {
+            // 纪律 1：抓不到就是抓不到，磁盘上那份原样不动。
+            sendJson(res, 200, { ok: false, error: '抓取 models.dev 失败（网络不可达或响应异常），本地第三方价目未改动' })
+            return
+          }
+          const fetchedAt = Date.now()
+          let models = 0
+          for (const table of Object.values(providers)) models += Object.keys(table).length
+          try {
+            await writePriceFile({ fetchedAt, providers })
+          } catch (error: unknown) {
+            sendJson(res, 200, { ok: false, error: `价目写盘失败：${error instanceof Error ? error.message : String(error)}` })
+            return
+          }
+          invalidateProviderPrices()
+          const written = await writeSynced({ ...readSynced(), modelsDevAt: fetchedAt, modelsDevCount: models })
+          sendJson(res, 200, {
+            ok: true,
+            target,
+            providers: Object.keys(providers).length,
+            models,
+            fetchedAt,
+            saved: written,
+            message: `已同步 ${Object.keys(providers).length} 个 provider / ${models} 个模型的价目${written ? '' : '（设置里没记下时间戳：设置服务不可写）'}`,
+          })
+          return
+        }
+
+        const pages = await fetchOfficialPages()
+        if (pages === undefined) {
+          sendJson(res, 200, { ok: false, error: '抓取官方价格页失败（网络不可达或页面改版），本地价目未改动' })
+          return
+        }
+        const fetchedAt = Date.now()
+        const era = eraFromOfficial(pages.cny, pages.usd, fetchedAt, '一键同步：https://api-docs.deepseek.com/zh-cn/quick_start/pricing')
+        if (era === undefined) {
+          sendJson(res, 200, { ok: false, error: '官方价格页解析不出价格（页面结构可能变了），本地价目未改动' })
+          return
+        }
+        const synced = readSynced()
+        const existing = parsePriceEras(synced.eras) ?? []
+        const currentTable = eraAt(fetchedAt, existing).table
+        if (samePriceTable(currentTable, era.table)) {
+          const written = await writeSynced({ ...synced, fetchedAt })
+          sendJson(res, 200, {
+            ok: true, target, changed: false, fetchedAt, saved: written,
+            message: '官方价与当前生效的档位一致，没有新增价格档',
+          })
+          return
+        }
+        // 新档只保留最近 20 个：设置文档不该无限长，而"比 20 次调价还早"的档
+        // 早就在编译进去的三档里了。
+        const eras = [...existing, era].slice(-20)
+        const written = await writeSynced({ ...synced, fetchedAt, eras })
+        if (!written) {
+          sendJson(res, 200, { ok: false, error: '设置服务不可写，新价格档没有保存（本地价目未改动）' })
+          return
+        }
+        sendJson(res, 200, {
+          ok: true,
+          target,
+          changed: true,
+          fetchedAt,
+          era: { id: era.id, label: era.label, models: Object.keys(era.table) },
+          message: `官方价有变化，已新增价格档「${era.label}」（${Object.keys(era.table).join('、')}）；历史用量仍按发生时刻的旧档结算`,
+        })
+      })()
+    }
+
+    syncCtx.effect(() => syncCtx.webServer.register({
+      kind: 'exact',
+      path: SYNC_API_PATH,
+      handler: handle as never,
+    }), 'composer-ux: price sync route')
+  })
+
+  // ── 金额：DeepSeek 账号余额（0.10.0）─────────────────────────────────────
+  //
+  // 为什么必须在宿主半：官方 `GET /user/balance` 要带 `Authorization: Bearer <Key>`，
+  // 而 Key 只该活在宿主侧。客户端只收到**解析好的数字**（见 `balance.ts`）。
+  //
+  // 三条纪律（都在这里落地）：
+  //   1. **端点白名单**：baseURL 不是 `api.deepseek.com` 就**不发请求**（用户把 baseURL
+  //      指向第三方时，照它拼 URL 再把 Bearer 发出去等于把 Key 交出去）；
+  //   2. **Key 从凭据服务按引用解析**：`llm-deepseek` 那一行的 `apiKeyEnv`
+  //      （默认 `DEEPSEEK_API_KEY`）→ `credentials.resolve(ref)`，与官方适配器同一条路；
+  //   3. **失败如实回报**：Key 没配、凭据服务缺席、网络失败 —— 各回各的话，
+  //      绝不用 0 或旧值冒充余额（`parseBalancePayload` 也是这个态度）。
+  ctx.inject(['webServer', 'settings'], (balanceCtx) => {
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+    const read = makeReader(balanceCtx.get('settings') as unknown as SettingsLike, config)
+
+    /** 取 DeepSeek 的 API Key；任何一步不成立都回一句人话（不抛给路由）。 */
+    const resolveKey = async (): Promise<{ readonly key: string } | { readonly error: string }> => {
+      const row = read(LLM_DEEPSEEK_NAMESPACE) ?? {}
+      const baseUrl = typeof row.baseURL === 'string' && row.baseURL.length > 0 ? row.baseURL : DEEPSEEK_BALANCE_URL
+      if (!balanceEndpointAllowed(baseUrl)) {
+        // ⚠️ 只回 hostname，不回 baseURL 原文：用户可能在那里塞了 query/userinfo 之类的东西，
+        // 把它原样送到浏览器等于多开一条泄露面（2026-09-29 采纳的评审意见）。
+        let hostname = '(解析不出主机名)'
+        try {
+          hostname = new URL(baseUrl).hostname
+        } catch {
+          /* 解析不出就保持占位文案 */
+        }
+        return { error: `llm-deepseek 的 baseURL 主机是 ${hostname}，不是官方 api.deepseek.com，拒绝把 API Key 发出去；请改回官方端点再查余额` }
+      }
+      const ref = typeof row.apiKeyEnv === 'string' && row.apiKeyEnv.length > 0 ? row.apiKeyEnv : 'DEEPSEEK_API_KEY'
+      // 凭据引用必须是合法环境变量名，否则 `credentials.resolve` 内部会抛 TypeError
+      // （`credentials/src/index.ts` 的 `credentialRef`）—— 先自己挡住，回一句人话。
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)) {
+        return { error: `llm-deepseek 的 apiKeyEnv「${ref}」不是合法的环境变量名，改成一个合法名字（例如 DEEPSEEK_API_KEY）` }
+      }
+      const credentials = balanceCtx.get('credentials') as
+        { resolve?: (name: string) => Promise<{ readonly value?: unknown } | undefined> } | undefined
+      if (typeof credentials?.resolve !== 'function') {
+        return { error: '宿主没有凭据服务，读不到 API Key（把 DEEPSEEK_API_KEY 放进环境变量也不行：没有服务就没人去读它）' }
+      }
+      try {
+        const resolved = await credentials.resolve(ref)
+        const key = typeof resolved?.value === 'string' ? resolved.value : ''
+        if (key === '') return { error: `凭据 ${ref} 没有配置，先在设置页把 DeepSeek 的 API Key 填上` }
+        return { key }
+      } catch (error: unknown) {
+        return { error: `解析凭据 ${ref} 失败：${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
+
+    const handle = (
+      req: { method?: string },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): void => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+      // 官方信任关卡（见 rejectUntrustedRequest）：余额是账号级数据，**这条最不能漏**。
+      if (rejectUntrustedRequest(balanceCtx as never, req, res)) return
+      void (async (): Promise<void> => {
+        // 开关关掉时连凭据都不去读（宿主侧也拦一道，别只靠界面）。
+        const own = read(NAMESPACE) ?? {}
+        if (own[BALANCE_ENABLED_FIELD] === false) {
+          sendJson(res, 200, { ok: false, error: '余额查询已在设置里关闭' })
+          return
+        }
+        const key = await resolveKey()
+        if ('error' in key) {
+          sendJson(res, 200, { ok: false, error: key.error })
+          return
+        }
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 10_000)
+        try {
+          // 白名单已保证主机是官方的，所以这里直接用常量端点（不按 baseURL 拼路径 ——
+          // 官方的 baseURL 可能带 `/anthropic` 这类前缀，拼出来就不是余额接口了）。
+          const response = await fetch(DEEPSEEK_BALANCE_URL, {
+            headers: { accept: 'application/json', authorization: `Bearer ${key.key}` },
+            signal: controller.signal,
+          })
+          if (response.ok !== true) {
+            sendJson(res, 200, { ok: false, error: `官方余额接口返回 ${response.status}` })
+            return
+          }
+          const payload: unknown = await response.json()
+          const snapshot = parseBalancePayload(payload)
+          if (snapshot === undefined) {
+            sendJson(res, 200, { ok: false, error: '官方余额响应形状不对（解析不出余额，绝不用 0 冒充）' })
+            return
+          }
+          sendJson(res, 200, { ok: true, available: snapshot.available, entries: snapshot.entries })
+        } catch (error: unknown) {
+          // 细节只写日志、不送到浏览器：这条请求带着 `Bearer`，虽然 Key 在请求头里、
+          // 正常不会出现在 message 里，但"凭据相关的东西一个字都不出宿主"这条纪律
+          // 值得用最保守的写法（评审意见，2026-09-29）。
+          console.warn('[composer-ux] 查余额失败', error)
+          sendJson(res, 200, { ok: false, error: '查余额失败（网络不可达或超时）；详情见 DSH 日志' })
+        } finally {
+          clearTimeout(timer)
+        }
+      })()
+    }
+
+    balanceCtx.effect(() => balanceCtx.webServer.register({
+      kind: 'exact',
+      path: BALANCE_API_PATH,
+      handler: handle as never,
+    }), 'composer-ux: balance route')
   })
 
   // ── 默认终端（Windows：把终端的 pwsh 换成 Git Bash）────────────────────────

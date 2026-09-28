@@ -60,12 +60,13 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-store'
 import {
-  PRICE_VERIFIED_AT, costBucketsOf, costPartsOf, formatMoney, formatTokens, isKnownModel,
-  overrideTierOf, resolvePrice,
+  DEFAULT_PEAK_HOLIDAYS, PRICE_VERIFIED_AT, costBucketsOf, costPartsOf, eraById, formatMoney,
+  formatTokens, isDeepSeekRoute, overrideTierOf, resolvePrice,
 } from '../pricing.ts'
 import type { ComposerUxSettings } from '../settings-contract.ts'
 import { UNKNOWN_ROUTE, agreesWithProjection, type UsageBuckets } from '../usage-fold.ts'
 import { billedInputTokens, cacheHitText } from './stats-line.ts'
+import { usePeakAlert } from './peak-alert.ts'
 import { useSessionCost, type SessionCostBuckets, type SessionCostRoute } from './session-cost.ts'
 
 /** 位置夹紧：与官方 `useStatDialog` 同值（视口两边各留 12px）。 */
@@ -163,10 +164,16 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   const fingerprint = `${buckets.miss}|${buckets.hit}|${write}|${buckets.out}`
   const { data, loading } = useSessionCost(sessionId, fingerprint, open)
 
-  // 本地估值（兜底口径）：按**当前**时刻判峰谷，所以对跨峰谷的会话必然有偏差 ——
-  // 面板里那两条说明会把"这个数字是哪一种"讲清楚。
-  const estimate = resolvePrice(model, { overrides })
+  // 本地估值（兜底口径）：按**当前**时刻判峰谷（价格档也取当前档），所以对跨峰谷/跨调价的
+  // 会话必然有偏差 —— 面板里那几条说明会把"这个数字是哪一种"讲清楚。
+  const lastProvider = selection?.lastUsed?.provider
+  // `eras` 要一起传：官方价同步可能新增了一个价格档，客户端本地估值也得按同一批档算。
+  const eras = settings.syncedPrices?.eras
+  const estimate = resolvePrice(model, { overrides, ...(lastProvider === undefined ? {} : { provider: lastProvider }), ...(eras === undefined ? {} : { eras }) })
   const estimateParts = costPartsOf(buckets, estimate.prices)
+
+  // ── 峰谷提醒（0.10.0）：相位规则与宿主半同源（节假日表由宿主回，取不到就用设置里的/内置的）
+  const { text: peakText } = usePeakAlert(settings, data?.holidays ?? settings.peakHolidays ?? DEFAULT_PEAK_HOLIDAYS)
 
   const close = React.useCallback((): void => { setOpen(false); setAnchor(null) }, [])
   const toggle = (): void => {
@@ -232,11 +239,19 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         cacheReadTokens: num(route.usage?.cacheReadTokens),
         cacheWriteTokens: num(route.usage?.cacheWriteTokens),
       }
+      const rowProvider = route.provider === undefined || route.provider === '' ? UNKNOWN_ROUTE : route.provider
+      const rowModel = route.model === undefined || route.model === '' ? UNKNOWN_ROUTE : route.model
       return {
-        provider: route.provider === undefined || route.provider === '' ? UNKNOWN_ROUTE : route.provider,
-        model: route.model === undefined || route.model === '' ? UNKNOWN_ROUTE : route.model,
+        provider: rowProvider,
+        model: rowModel,
         peak: route.peak === true,
-        unknownModel: isKnownModel(route.model) === false,
+        era: typeof route.era === 'string' ? route.era : '',
+        /** DeepSeek 路由才有峰谷两档与价格历史档（见 `pricing.ts` 的 isDeepSeekRoute）。 */
+        deepseek: isDeepSeekRoute(rowProvider, rowModel),
+        /** 认不出价：金额是 0，界面必须写"未定价"而不是 ¥0.00。 */
+        unpriced: route.unpriced === true,
+        priceSource: typeof route.priceSource === 'string' ? route.priceSource : '',
+        overridden: route.overridden === true,
         tokens: tokenTotal(row),
         cost: num(route.cost),
         parts: { miss: num(route.parts?.miss), hit: num(route.parts?.hit), out: num(route.parts?.out) },
@@ -244,10 +259,18 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
     })
   /** 两档各自的小计：这正是"逐笔准时"看得见的地方（同一模型在两档里的用量分别列出来）。 */
   const tierOf = (peak: boolean): { readonly tokens: number; readonly cost: number } => routeRows
-    .filter(route => route.peak === peak)
+    .filter(route => route.deepseek && route.peak === peak)
     .reduce((sum, route) => ({ tokens: sum.tokens + route.tokens, cost: sum.cost + route.cost }), { tokens: 0, cost: 0 })
   const peakTier = tierOf(true)
   const offTier = tierOf(false)
+  /** 第三方路由的小计（它们没有峰谷，单列一行"其他路由"）。 */
+  const otherTier = routeRows
+    .filter(route => !route.deepseek)
+    .reduce((sum, route) => ({ tokens: sum.tokens + route.tokens, cost: sum.cost + route.cost }), { tokens: 0, cost: 0 })
+  /** 未定价的行数（有几行就少算几行的钱，必须写在脸上）。 */
+  const unpricedCount = routeRows.filter(route => route.unpriced).length
+  /** 本次用量涉及的价格历史档（同一会话跨调价时会有多个）。 */
+  const erasUsed = [...new Set(routeRows.filter(route => route.deepseek && route.era !== '').map(route => route.era))]
   // 分列里三个分项的**加和**：这样"未缓存输入 + 缓存命中 + 输出"三行加起来**恰好**是合计，
   // 即使两条 route 的模型单价不同也不会出现"分项之和对不上总数"。
   const routeParts = routeRows.reduce(
@@ -287,12 +310,17 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   })
   // 与输入框下面那一行（本插件的三位小数改写）**同一套函数、同一位数**，两处数字必然一致。
   const viewHitRate = cacheHitText(view.hit, viewBilledInput)
-  const headline = formatMoney(view.total)
+  /**
+   * 兜底口径下认不出价（第三方模型且同步价目里没有它）时**不许显示 ¥0.00**：
+   * 那会让人以为"这个模型不要钱"。显示"未定价"并说清怎么补价（0.10.0 新增）。
+   */
+  const viewUnpriced = !useBreakdown && estimate.unpriced
+  const headline = viewUnpriced ? '未定价' : formatMoney(view.total)
   const expanded = hover || open
 
   // 两档生效单价（用户覆盖价 > 刊例价）：面板里显式列出来，改价之后一眼能核对。
-  const peakPrice = resolvePrice(model, { peak: true, overrides })
-  const offPrice = resolvePrice(model, { peak: false, overrides })
+  const peakPrice = resolvePrice(model, { peak: true, overrides, ...(lastProvider === undefined ? {} : { provider: lastProvider }), ...(eras === undefined ? {} : { eras }) })
+  const offPrice = resolvePrice(model, { peak: false, overrides, ...(lastProvider === undefined ? {} : { provider: lastProvider }), ...(eras === undefined ? {} : { eras }) })
   const overridden = peakPrice.overridden || offPrice.overridden
     || overrideTierOf(overrides, model, true) !== undefined || overrideTierOf(overrides, model, false) !== undefined
 
@@ -303,9 +331,9 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         type="button"
         data-composer-ux-cost=""
         aria-expanded={open}
-        title={useBreakdown
+        title={(useBreakdown
           ? '本会话费用（按每笔用量发生的时间计价）'
-          : '本会话费用（估算）'}
+          : '本会话费用（估算）') + ` · ${peakText}`}
         onClick={toggle}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
@@ -384,9 +412,10 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             {useBreakdown ? (
               <>
                 {routeRows.map(route => detail(
-                  `${route.provider} · ${route.model}${route.peak ? '（高峰）' : '（空闲）'}`,
-                  `${formatTokens(route.tokens)} · ${formatMoney(route.cost)}`,
-                  `${route.provider}|${route.model}|${String(route.peak)}`,
+                  `${route.provider} · ${route.model}`
+                  + (route.deepseek ? (route.peak ? '（高峰）' : '（空闲）') : '（平坦价）'),
+                  `${formatTokens(route.tokens)} · ${route.unpriced ? '未定价' : formatMoney(route.cost)}`,
+                  `${route.provider}|${route.model}|${String(route.peak)}|${route.era}`,
                 ))}
                 {detail('合计', `${formatTokens(view.miss + view.hit + view.write + view.out)} · ${formatMoney(view.total)}`, '__total__')}
                 {peakTier.tokens > 0
@@ -395,11 +424,15 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
                 {offTier.tokens > 0
                   ? detail('空闲档', `${formatTokens(offTier.tokens)} · ${formatMoney(offTier.cost)}`, '__off__')
                   : null}
+                {otherTier.tokens > 0
+                  ? detail('其他路由（无峰谷）', `${formatTokens(otherTier.tokens)} · ${formatMoney(otherTier.cost)}`, '__other__')
+                  : null}
                 {detail('未缓存输入', `${formatTokens(view.miss)} · ${formatMoney(view.parts.miss)}`, '__miss__')}
                 {detail('缓存命中', `${formatTokens(view.hit)} · ${formatMoney(view.parts.hit)}`, '__hit__')}
                 {detail('输出', `${formatTokens(view.out)} · ${formatMoney(view.parts.out)}`, '__out__')}
-                {routeRows.some(route => route.unknownModel)
-                  ? note('有一行的模型不在官方价目表里，那一行按 deepseek-flash 估价', '__unknown__')
+                {unpricedCount > 0
+                  ? note(`有 ${unpricedCount} 行**未定价**：那是非 DeepSeek 模型，同步价目里没有它，`
+                    + '所以那部分按 0 计。去设置页「金额」刷新一次「同步第三方价目」，或给那行直接填个价。', '__unpriced__')
                   : null}
               </>
             ) : (
@@ -420,12 +453,23 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
               </>
             )}
             {detail('缓存命中率', viewHitRate === null ? '—' : `${viewHitRate}%`)}
-            {detail('高峰单价（每 1M）', priceText(peakPrice.prices))}
-            {detail('空闲单价（每 1M）', priceText(offPrice.prices))}
+            {detail('峰谷', peakText)}
+            {detail('高峰单价（每 1M）', peakPrice.unpriced ? '未定价' : priceText(peakPrice.prices))}
+            {detail('空闲单价（每 1M）', offPrice.unpriced ? '未定价' : priceText(offPrice.prices))}
             {note((model === undefined || model === '' ? '未知模型（按默认模型计价）' : model)
               + ` · 刊例价快照 ${PRICE_VERIFIED_AT}`
               + (overridden ? ' · 已用你在设置页「金额」里填的价' : ''))}
-            {note('峰谷按每笔用量发生的时间判定；各 route 都按 DeepSeek 官方价估算，'
+            {viewUnpriced
+              ? note('这个模型不是 DeepSeek 系、同步来的第三方价目里也没有它，所以金额给不出来。'
+                + '去设置页「金额」点一次「同步第三方价目」，或给这个模型直接填一行单价。', '__unpriced__')
+              : null}
+            {erasUsed.length === 0
+              ? null
+              : note('这批用量按各自发生时刻的价格档结算：'
+                + erasUsed.map(id => eraById(id, eras).label).join(' · ')
+                + '（官方调价不会改动历史金额）', '__eras__')}
+            {note('峰谷按每笔用量发生的时间判定（工作日 09:00–12:00、14:00–18:00 为高峰，'
+              + '法定节假日与周末全天谷价）；非 DeepSeek 路由按同步来的第三方价目算，'
               + '未含中转加价，实际扣费以各家账单为准。')}
           </div>
         </div>,

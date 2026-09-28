@@ -146,12 +146,40 @@ export {
  * `lib/client.js`）的那几个函数原样抄进去当基准，逐样本对拍。
  */
 export {
-  BUILTIN_PRICING_MODELS, CNY_PER_USD, DEFAULT_PRICING_MODEL, MODEL_ALIASES, PEAK_UTC_RANGES,
-  PRICE_FIELDS, PRICE_TABLE, PRICE_VERIFIED_AT,
-  costBucketsOf, costOf, costPartsOf, customPricingModels, formatMoney, formatTokens,
-  isKnownModel, isPeakAt, normalizeModel, officialTripleOf, overrideTierOf, overrideValueOf,
-  parsePriceOverrides, parsePriceText, resolvePrice, withOverrideValue, withoutPricingModel,
+  BUILTIN_PRICING_MODELS, CNY_PER_USD, CURRENT_ERA_ID, DEFAULT_PEAK_HOLIDAYS, DEFAULT_PRICING_MODEL,
+  MODEL_ALIASES, PEAK_RULE_AT_MS, PEAK_UTC_RANGES, PRICE_ERAS, PRICE_FIELDS, PRICE_TABLE,
+  PRICE_VERIFIED_AT, PROVIDER_ALIASES, WEEKEND_OFFPEAK_AT_MS, ZERO_TRIPLE,
+  allEras, beijingDayKey, beijingWeekday, costBucketsOf, costOf, costPartsOf, customPricingModels,
+  eraAt, eraById, eraIdAt, formatCountdown, formatMoney, formatTokens, isDayKey, isDeepSeekRoute,
+  isKnownModel, isPeakAt, normalizeModel, officialTripleOf, overrideEntryOf, overrideTierOf,
+  overrideValueOf, parseHolidays, parsePriceEras, parsePriceOverrides, parsePriceText,
+  parseProviderPrices, peakPhaseAt, providerRateOf, resolvePrice, withOverrideValue,
+  withoutPricingModel,
 } from '../src/pricing.ts'
+/**
+ * 「余额」（0.10.0）的纯逻辑：官方余额响应的消毒与查询端点白名单。
+ *
+ * 这两件事都必须单独钉住：余额是**账号事实**（拿不准时正确表现是"不显示"，不是 0），
+ * 白名单是**安全底线**（baseURL 被指向第三方时绝不发 Key）。
+ */
+export {
+  BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
+} from '../src/balance.ts'
+/**
+ * 「价目同步」（0.10.0）的纯逻辑：官方页 / models.dev 响应 → 我们形状的价目表与价格档。
+ *
+ * 最关键的一条纪律在这里：**抓不到就不覆盖本地价**（`compactModelsDev` 只收形状对的条目、
+ * `eraFromOfficial` 两页缺一不可、`samePriceTable` 决定"要不要建新档"）。
+ */
+export {
+  MODELS_DEV_URL, OFFICIAL_PRICING_URLS, compactModelsDev, eraFromOfficial, samePriceTable,
+  fetchModelsDevPrices, fetchOfficialPages, fetchText, priceStorePath, readPriceFile, writePriceFile,
+} from '../src/price-sync.ts'
+/**
+ * 「官方价格页解析」（0.10.0）：真页面快照 → 人民币/美元两列价格。
+ * 夹具是 2026-09-29 抓的真实页面（`test/fixtures/official-pricing.{zh,en}.html`）。
+ */
+export { parseOfficialPricingPage } from '../src/official-pricing.ts'
 /**
  * 「金额」的**按 route 归因**（0.8.0，0.9.1 起按事件时间分峰谷档）：会话事件折叠、桶运算、
  * 与官方投影的一致性判据、以及宿主半要用的**增量**折叠器。

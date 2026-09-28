@@ -6,7 +6,10 @@
  * `./terminal/` 下那几个（「默认终端」的字段与判定）与 `./pricing.ts`（金额的刊例价与覆盖价
  * 语义）。两者都满足"两半共用同一份规则"的要求，且不引入任何运行时身份。
  */
-import { parsePriceOverrides, type PriceOverrideTable } from './pricing.ts'
+import {
+  parseHolidays, parsePriceEras, parsePriceOverrides,
+  type PriceEra, type PriceOverrideTable,
+} from './pricing.ts'
 import {
   DEFAULT_TERMINAL_MODE, TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD,
   TERMINAL_EFFECTIVE_FIELD, TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -43,6 +46,15 @@ export const RESTART_API_PATH = '/composer-ux/restart'
  * 折叠规则与出处见 `src/usage-fold.ts` 文件头。
  */
 export const USAGE_API_PATH = '/composer-ux/usage'
+
+/**
+ * 「金额」栏（0.10.0）：价目同步接口。
+ *
+ * 出网必须在宿主半：浏览器侧发不出跨域请求，也不该让 API Key/页面内容经过前端逻辑。
+ * 请求体是一个 `{ target: 'official' | 'modelsDev' }`，两条路分别对应"官方价格页"
+ * （两页约 24 KB）与"models.dev 注册表"（5.2 MB，故意做成独立按钮）。
+ */
+export const SYNC_API_PATH = '/composer-ux/sync-prices'
 
 /** 全局总开关字段名。 */
 export const ENABLED_FIELD = 'enabled'
@@ -100,6 +112,69 @@ export const STATS_ENABLED_FIELD = 'statsEnabled'
  * 一个手抖的逗号不该把整页设置打成默认。
  */
 export const PRICE_OVERRIDES_FIELD = 'priceOverrides'
+
+/**
+ * 「金额」栏（0.10.0）：节假日表 —— **北京日历日**的 `YYYY-MM-DD` 数组，命中的一天全天按谷价。
+ *
+ * `undefined` = 用内置那份（`pricing.ts` 的 `DEFAULT_PEAK_HOLIDAYS`，来源是国务院办公厅
+ * 2026 年安排）。为什么要让用户能改：国务院每年底才公布次年安排，而内置表只跟我们的发版走；
+ * 官方临时调整放假安排、或到了下一年而我们还没发版时，他不该干等。
+ *
+ * 与 `priceOverrides` 不同，这一项是**普通数组字段**（键固定，不是动态键），所以声明得出来，
+ * 官方设置页的表单也能直接读写它。
+ */
+export const PEAK_HOLIDAYS_FIELD = 'peakHolidays'
+
+/** 「金额」栏（0.10.0）：峰谷提醒的开关与提前量。 */
+export const PEAK_ALERT_FIELD = 'peakAlert'
+
+/** 「金额」栏（0.10.0）：余额查询开关（关掉就不显示余额行、也不发任何出网请求）。 */
+export const BALANCE_ENABLED_FIELD = 'balanceEnabled'
+
+/**
+ * 「金额」栏（0.10.0）：**同步来的价目**（官方价历史档 + 第三方价目的元信息）。
+ *
+ * 为什么用 `z.any()`：`eras` 里的键是官方后来才出现的模型名（动态键），与 `priceOverrides`
+ * 同一个理由。第三方价目本身（models.dev 那份，可能几百 KB）**不放在这里**：它落在插件自己的
+ * storages 目录（`prices.json`），设置文档里只留"什么时候同步的、有多少条"，
+ * 免得把 settings.yaml 撑大、也免得每次设置读写都拖着几百 KB 走。
+ */
+export const SYNCED_PRICES_FIELD = 'syncedPrices'
+
+/** 峰谷提醒设置。 */
+export interface PeakAlertSettings {
+  /** 总开关。默认**开**。 */
+  readonly enabled: boolean
+  /** 提前多少分钟提醒（1–60，默认 5）。 */
+  readonly aheadMinutes: number
+  /** 进入高峰前提醒。 */
+  readonly onPeak: boolean
+  /** 离开高峰（进入空闲档）前提醒。 */
+  readonly onOffPeak: boolean
+  /** 除了胶囊里那行提示，再发一条浏览器系统通知（需用户授权）。默认**关**。 */
+  readonly webNotify: boolean
+}
+
+/** 峰谷提醒的默认值（提前 5 分钟、两个方向都提醒、不发系统通知）。 */
+export const DEFAULT_PEAK_ALERT: PeakAlertSettings = {
+  enabled: true,
+  aheadMinutes: 5,
+  onPeak: true,
+  onOffPeak: true,
+  webNotify: false,
+}
+
+/** 同步来的价目元信息（真正的第三方价目在宿主半的 `prices.json` 里）。 */
+export interface SyncedPrices {
+  /** 最近一次同步官方价的时刻（毫秒）。 */
+  readonly fetchedAt?: number
+  /** 同步到的官方价历史档（比内置的更新时才有）。 */
+  readonly eras?: readonly PriceEra[]
+  /** 最近一次从 models.dev 同步第三方价的时刻（毫秒）。 */
+  readonly modelsDevAt?: number
+  /** 那次同步拿到多少条第三方模型价。 */
+  readonly modelsDevCount?: number
+}
 
 /** 键位字段名。 */
 export const SEND_KEY_FIELD = 'sendKey'
@@ -608,6 +683,8 @@ export const HOST_OWNED_FIELDS = [
   TERMINAL_CANDIDATES_FIELD,
   TERMINAL_STATUS_FIELD,
   TERMINAL_EFFECTIVE_FIELD,
+  // 「金额」（0.10.0）：同步来的价目元信息由宿主半在"一键同步"里写（界面只读展示）。
+  SYNCED_PRICES_FIELD,
 ] as const
 
 /** 请求头最终落地的设置命名空间（由 llm-pi-ai 注册）。 */
@@ -662,6 +739,10 @@ export type SettingsField =
   | typeof TERMINAL_BASH_PATH_FIELD
   | typeof STATS_ENABLED_FIELD
   | typeof PRICE_OVERRIDES_FIELD
+  | typeof PEAK_HOLIDAYS_FIELD
+  | typeof PEAK_ALERT_FIELD
+  | typeof BALANCE_ENABLED_FIELD
+  | typeof SYNCED_PRICES_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -764,6 +845,14 @@ export interface ComposerUxSettings {
    * 不覆盖就只能按 `deepseek-flash` 估价）。
    */
   priceOverrides?: PriceOverrideTable
+  /** 「金额」（0.10.0）：节假日表；`undefined` = 用内置那份（`DEFAULT_PEAK_HOLIDAYS`）。 */
+  peakHolidays?: readonly string[]
+  /** 「金额」（0.10.0）：峰谷提醒的开关与提前量。 */
+  peakAlert: PeakAlertSettings
+  /** 「金额」（0.10.0）：是否查询并显示余额（默认开；关掉就不发出网请求）。 */
+  balanceEnabled: boolean
+  /** 「金额」（0.10.0）：同步来的价目元信息（宿主半写、界面只读展示）。 */
+  syncedPrices?: SyncedPrices
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -810,6 +899,12 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   statsEnabled: true,
   // 「金额」（0.9.1）：默认没有覆盖价 = 全部按内置刊例价估算（与 0.8.0 的行为一致）。
   priceOverrides: undefined,
+  // 「金额」（0.10.0）：节假日表留空 = 用内置（国务院 2026 年安排那份）。
+  peakHolidays: undefined,
+  peakAlert: DEFAULT_PEAK_ALERT,
+  // 余额默认开：它是"看一眼就知道还能不能跑"的东西；关掉是给不想出网的人留的开关。
+  balanceEnabled: true,
+  syncedPrices: undefined,
 }
 
 /**
@@ -939,6 +1034,54 @@ export function sectionEnabledOf(field: string, source: Record<string, unknown>)
   return signal === undefined ? false : signal(source)
 }
 
+/**
+ * 峰谷提醒净化：逐项收窄，坏值退回默认（**不整份丢** —— 用户只是把提前量填歪了，
+ * 不该顺手把他关掉的系统通知又打开）。
+ */
+export function sanitizePeakAlert(raw: unknown): PeakAlertSettings {
+  const row = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const bool = (key: keyof PeakAlertSettings, fallback: boolean): boolean =>
+    typeof row[key] === 'boolean' ? (row[key] as boolean) : fallback
+  const ahead = typeof row.aheadMinutes === 'number' && Number.isFinite(row.aheadMinutes)
+    ? Math.min(60, Math.max(1, Math.round(row.aheadMinutes)))
+    : DEFAULT_PEAK_ALERT.aheadMinutes
+  return {
+    enabled: bool('enabled', DEFAULT_PEAK_ALERT.enabled),
+    aheadMinutes: ahead,
+    onPeak: bool('onPeak', DEFAULT_PEAK_ALERT.onPeak),
+    onOffPeak: bool('onOffPeak', DEFAULT_PEAK_ALERT.onOffPeak),
+    webNotify: bool('webNotify', DEFAULT_PEAK_ALERT.webNotify),
+  }
+}
+
+/**
+ * 同步元信息净化：时间戳只认正的有限数、计数只认非负有限数，价档交给 `parsePriceEras`
+ * （那个会逐条消毒，坏档丢掉）。整份什么都没有就是 `undefined`（= 从没同步过）。
+ */
+export function parseSyncedPrices(raw: unknown): SyncedPrices | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const row = raw as Record<string, unknown>
+  const stamp = (key: string): number | undefined => {
+    const value = row[key]
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
+  }
+  const count = (key: string): number | undefined => {
+    const value = row[key]
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined
+  }
+  const fetchedAt = stamp('fetchedAt')
+  const modelsDevAt = stamp('modelsDevAt')
+  const modelsDevCount = count('modelsDevCount')
+  const eras = parsePriceEras(row.eras)
+  const out: SyncedPrices = {
+    ...(fetchedAt === undefined ? {} : { fetchedAt }),
+    ...(eras === undefined ? {} : { eras }),
+    ...(modelsDevAt === undefined ? {} : { modelsDevAt }),
+    ...(modelsDevCount === undefined ? {} : { modelsDevCount }),
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /** 设置数据净化：把线上值收窄为安全形状（防脏数据）。 */
 export function sanitizeSettings(value: unknown): ComposerUxSettings {
   const source = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
@@ -1051,5 +1194,10 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     statsEnabled: asBool(STATS_ENABLED_FIELD),
     // 「金额」（0.9.1）：整张覆盖价表，形状不对的项由 parsePriceOverrides 逐项丢掉。
     priceOverrides: parsePriceOverrides(source[PRICE_OVERRIDES_FIELD]),
+    // 「金额」（0.10.0）：节假日表（坏日期逐条丢）、峰谷提醒、余额开关、同步元信息。
+    peakHolidays: parseHolidays(source[PEAK_HOLIDAYS_FIELD]),
+    peakAlert: sanitizePeakAlert(source[PEAK_ALERT_FIELD]),
+    balanceEnabled: asBool(BALANCE_ENABLED_FIELD),
+    syncedPrices: parseSyncedPrices(source[SYNCED_PRICES_FIELD]),
   }
 }

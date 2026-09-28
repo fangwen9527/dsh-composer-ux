@@ -623,7 +623,10 @@ async function bootHost(options = {}) {
     },
     ...(options.model === undefined ? {} : { agentDefaultModel: options.model }),
     // 重启路由的第一道关卡是官方 connection.requestRejection：用它验证"先问官方那道"。
+    // 0.10.0 起另三条金额路由（用量 / 价目同步 / 余额）走的是同一个关卡：用量那条还要
+    // `sessions` 才会注册，所以这里让它也能按需注入（不传 ⇒ 与过去完全一样）。
     ...(options.connection === undefined ? {} : { connection: options.connection }),
+    ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
@@ -644,7 +647,7 @@ async function bootHost(options = {}) {
 }
 
 /**
- * 宿主半现在注册三条 exact 路由（提示词优化 + 快捷指令存储 + 终端状态），
+ * 宿主半现在注册**六条** exact 路由（提示词优化 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启），
  * 所以按**路径**取用，不要再按下标——加一条路由不该让别的用例集体改下标。
  */
 const optimizerRoute = host => host.routes.find(route => route.path === pure.OPTIMIZER_API_PATH)
@@ -688,14 +691,45 @@ const json = res => JSON.parse(res.captured.body)
 
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
-  check('注册了四条 exact 路由（优化 + 快捷指令存储 + 终端状态 + 重启）',
-    host.routes.length === 4
+  // 0.10.0 起是六条（多了「价目同步」与「余额」）。这条断言的价值就是
+  // **新增路由必须在测试里登记**：所以既数总条数（多一条就红），又逐条比对契约里的路径常量
+  // （路径改名也红）。绝不放宽成"至少 N 条"——那等于把这道登记关卡拆掉。
+  const contract = readFileSync('src/settings-contract.ts', 'utf8')
+  const syncPath = /SYNC_API_PATH = '([^']+)'/.exec(contract)?.[1]
+  const expectedPaths = [
+    pure.OPTIMIZER_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
+    pure.BALANCE_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH,
+  ]
+  check('注册了六条 exact 路由（优化 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启）',
+    host.routes.length === 6
     && host.routes.every(route => route.kind === 'exact')
-    && [pure.OPTIMIZER_API_PATH, pure.QUICK_PROMPTS_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH]
-      .every(path => host.routes.some(route => route.path === path)),
+    && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
+  check('六条路由的路径两两不同（没有两条抢同一个 path）',
+    new Set(host.routes.map(route => route.path)).size === host.routes.length,
+    JSON.stringify(host.routes.map(route => route.path)))
   check('优化路由路径与客户端约定一致', optimizerRoute(host)?.path === pure.OPTIMIZER_API_PATH, optimizerRoute(host)?.path)
   check('存储路由路径与客户端约定一致', storeRoute(host)?.path === pure.QUICK_PROMPTS_API_PATH, storeRoute(host)?.path)
+  check('价目同步路由用的就是契约里的 SYNC_API_PATH',
+    syncPath !== undefined && host.routes.some(route => route.path === syncPath), String(syncPath))
+  check('余额路由用的就是 balance.ts 里的 BALANCE_API_PATH',
+    host.routes.some(route => route.path === pure.BALANCE_API_PATH), String(pure.BALANCE_API_PATH))
+
+  // 新路由里"不做出网就能验"的那部分行为：参数校验在任何出网之前，以及拿不准时如实回报。
+  const syncRoute = host.routes.find(route => route.path === syncPath)
+  const badTarget = makeRes()
+  await syncRoute.handler(makeReq('POST', JSON.stringify({ target: 'nonsense' })), badTarget)
+  await new Promise(resolve => { setTimeout(resolve, 20) })
+  check('价目同步：target 不是 official / modelsDev → 400（校验在任何出网之前）',
+    badTarget.captured.status === 400 && json(badTarget).ok === false, badTarget.captured.body)
+
+  const balanceRoute = host.routes.find(route => route.path === pure.BALANCE_API_PATH)
+  const noCred = makeRes()
+  await balanceRoute.handler(makeReq('GET'), noCred)
+  await new Promise(resolve => { setTimeout(resolve, 20) })
+  check('余额：宿主没有凭据服务时如实回报，绝不用 0 冒充余额',
+    noCred.captured.status === 200 && json(noCred).ok === false && /凭据服务/.test(json(noCred).error),
+    noCred.captured.body)
 
   const handler = optimizerRoute(host).handler
   const res = makeRes()
@@ -1390,6 +1424,37 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     await rejectedRoute.handler(makeReq('GET'), r1)
     check('官方 connection.requestRejection 在第一位，被拒就直接结束',
       r1.captured.status === 403 && !r1.captured.body, `${String(r1.captured.status)} ${String(r1.captured.body)}`)
+
+    // 0.10.0 新增的三条金额路由（用量 / 价目同步 / 余额）走的是**同一个**官方信任关卡
+    // （见 host.ts 的 rejectUntrustedRequest）。这里照重启路由那条的做法逐条验：
+    // 被拒就结束响应，且绝不让请求走到业务逻辑（用假 webServer 就够，不需要真起会话）。
+    const guardedHost = await bootHost({
+      sessions: { list: () => [] },
+      connection: { requestRejection: () => 403 },
+    })
+    const guardedReq = makeReq('GET')
+    // `syncPath` 是上面那节的块内常量，这里从契约里重读一次（路径改名这条也会跟着红）。
+    const guardedSyncPath = /SYNC_API_PATH = '([^']+)'/.exec(readFileSync('src/settings-contract.ts', 'utf8'))?.[1]
+    const rejectedOf = (path) => {
+      const route = guardedHost.routes.find(item => item.path === path)
+      check(`信任关卡：${path} 这条路由挂上了`, route !== undefined, JSON.stringify(guardedHost.routes.map(r => r.path)))
+      return route
+    }
+    const usageRejected = makeRes()
+    await rejectedOf(pure.USAGE_API_PATH).handler(guardedReq, usageRejected)
+    check('官方信任关卡：/composer-ux/usage 也走官方信任关卡（被拒就直接结束、不读会话）',
+      usageRejected.captured.status === 403 && !usageRejected.captured.body,
+      `${String(usageRejected.captured.status)} ${String(usageRejected.captured.body)}`)
+    const syncRejected = makeRes()
+    await rejectedOf(guardedSyncPath).handler(guardedReq, syncRejected)
+    check('官方信任关卡：/composer-ux/sync-prices 也走官方信任关卡（被拒就直接结束、不出网）',
+      syncRejected.captured.status === 403 && !syncRejected.captured.body,
+      `${String(syncRejected.captured.status)} ${String(syncRejected.captured.body)}`)
+    const balanceRejected = makeRes()
+    await rejectedOf(pure.BALANCE_API_PATH).handler(guardedReq, balanceRejected)
+    check('官方信任关卡：/composer-ux/balance 也走官方信任关卡（被拒就直接结束、不读凭据）',
+      balanceRejected.captured.status === 403 && !balanceRejected.captured.body,
+      `${String(balanceRejected.captured.status)} ${String(balanceRejected.captured.body)}`)
 
     // 第二道关卡：本机同源。被拒的 POST **不会**走到 spawn（否则这个测试会真的重启自己）。
     const r2 = makeRes()

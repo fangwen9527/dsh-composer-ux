@@ -1042,11 +1042,18 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         : (settings.terminalEffective === 'bash' ? '当前：Git Bash' : '当前：PowerShell（未接管）')
   // 统计行卡片的概览。这一栏只有一个开关（是否三位小数），所以概览就是它的状态。
   const statsSummary = `${HIT_DIGITS} 位小数`
-  // 金额卡片的概览：改了价就说改了几个模型，没改就说按官方刊例价（这一栏没有开关，
-  // 概览就是它唯一的状态展示 —— 用户扫一眼就知道"我到底有没有覆盖过价"）。
+  // 金额卡片的概览：这一栏没有开关，概览就是它唯一的状态展示 —— 用户扫一眼就知道
+  // "我到底有没有覆盖过价、节假日改没改、价目同步过没有"。三件事都摆在这一行里。
   const costSummary = (() => {
     const models = settings.priceOverrides === undefined ? [] : Object.keys(settings.priceOverrides)
-    return models.length === 0 ? '按官方刊例价估算' : `已覆盖 ${models.length} 个模型的单价`
+    const price = models.length === 0 ? '按官方刊例价估算' : `已覆盖 ${models.length} 个模型的单价`
+    const holidays = settings.peakHolidays === undefined ? '' : ` · 自定义节假日 ${settings.peakHolidays.length} 天`
+    const synced = settings.syncedPrices
+    const count = synced?.modelsDevCount
+    const sync = count === undefined
+      ? (synced?.eras === undefined || synced.eras.length === 0 ? '' : ` · 已同步 ${synced.eras.length} 个价格档`)
+      : ` · 第三方价目 ${count} 个模型`
+    return `${price}${holidays}${sync}`
   })()
 
   return (

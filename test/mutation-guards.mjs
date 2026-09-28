@@ -522,16 +522,16 @@ const cases = [
   {
     name: 'BI `resolvePrice` 忽略显式档位（面板两档单价与分档金额全按"现在"算）',
     file: 'src/pricing.ts',
-    from: '  const peak = options.peak ?? isPeakAt(options.at ?? new Date())',
-    to: '  const peak = isPeakAt(options.at ?? new Date())',
+    from: '  const peak = options.peak ?? isPeakAt(atMs, { holidays: options.holidays })',
+    to: '  const peak = isPeakAt(atMs, { holidays: options.holidays })',
     test: 'test/pricing.mjs',
     expect: '`peak` 参数直接指定档位',
   },
   {
     name: 'BJ 同一步的替换增量重新判档（一次跨 09:00 的请求被拆成两档，凭空多出高峰用量）',
     file: 'src/usage-fold.ts',
-    from: '        const slotPeak = previous?.peak\n          ?? peakAt(',
-    to: '        const slotPeak = peakAt(',
+    from: '        const tier = previous?.tier ?? tierAt(Number.isFinite(headerTime) ? headerTime : timeOf(event), provider, model)',
+    to: '        const tier = tierAt(Number.isFinite(headerTime) ? headerTime : timeOf(event), provider, model)',
     test: 'test/usage-fold.mjs',
     expect: '同一步的替换增量仍算第一次那档',
   },
@@ -554,10 +554,89 @@ const cases = [
   {
     name: 'BM 金额卡片的空框写成 0（留空不再等于"沿用官方价"，而是一键把所有价改成 0）',
     file: 'src/client/CostCard.tsx',
-    from: "                            placeholder={String(official[field])}\n                            value={valueOf(model, peak, field)}",
-    to: "                            placeholder={String(official[field])}\n                            value={valueOf(model, peak, field) === '' ? '0' : valueOf(model, peak, field)}",
+    from: '                            value={valueOf(key, peak, field)}',
+    to: "                            value={valueOf(key, peak, field) === '' ? '0' : valueOf(key, peak, field)}",
     test: 'test/settings-render.mjs',
-    expect: '空值的格子 value 是空串',
+    expect: '单价格子 value 是空串',
+  },
+  // ── 0.10.0 新增：峰谷三边界 + 价格档 era + 未定价 + 余额白名单 + 同步保险 ──────
+  // 这一组是 0.9.1 大改后补的：每条都对应一处"拆掉之后金额会算错 / 钥匙会交出去"。
+  {
+    name: 'BN 法定节假日不再全天谷价（十一那天上午被按高峰价计费）',
+    file: 'src/pricing.ts',
+    from: '  if (ms >= WEEKEND_OFFPEAK_AT_MS && holidays.includes(beijingDayKey(ms))) return false',
+    to: '  if (false && holidays.includes(beijingDayKey(ms))) return false',
+    test: 'test/pricing.mjs',
+    expect: '2026-10-01（周四）09:00–12:00 是谷价',
+  },
+  {
+    name: 'BO 周末全谷丢掉生效时刻（08-22 那个周六也被当成谷价，历史金额被重算）',
+    file: 'src/pricing.ts',
+    from: '  if (ms >= WEEKEND_OFFPEAK_AT_MS && (weekday === 0 || weekday === 6)) return false',
+    to: '  if (weekday === 0 || weekday === 6) return false',
+    test: 'test/pricing.mjs',
+    expect: '2026-08-22（周六）北京 09:00–12:00 是峰价',
+  },
+  {
+    name: 'BP 峰谷制之前不再判"没有高峰"（08-16 那天凭空多出高峰用量）',
+    file: 'src/pricing.ts',
+    from: '  if (ms < PEAK_RULE_AT_MS) return false',
+    to: '  if (false) return false',
+    test: 'test/pricing.mjs',
+    expect: '2026-08-16（周日）任何时段都不是峰',
+  },
+  {
+    name: 'BQ 价格档不进 route key（同一模型调价前后的用量被合并，历史金额跟着现在变）',
+    file: 'src/usage-fold.ts',
+    from: "        const key = `${provider}\\u0000${model}\\u0000${tier.peak ? 'peak' : 'offPeak'}\\u0000${tier.era}`",
+    to: "        const key = `${provider}\\u0000${model}\\u0000${tier.peak ? 'peak' : 'offPeak'}`",
+    test: 'test/usage-fold.mjs',
+    expect: '不同 era → 两条 route',
+  },
+  {
+    name: 'BR 未定价被说成"已定价"（第三方模型显示 0 元/1M 而不是未定价）',
+    file: 'src/pricing.ts',
+    from: "        prices: ZERO_TRIPLE, overridden: false, unpriced: true, source: 'none',",
+    to: "        prices: ZERO_TRIPLE, overridden: false, unpriced: false, source: 'none',",
+    test: 'test/pricing.mjs',
+    expect: '第三方模型没有价目 → unpriced / source = none / 单价全 0',
+  },
+  {
+    name: 'BS 余额端点白名单拆掉（被改成 evil.com 的 baseURL 能收走 API Key）',
+    file: 'src/balance.ts',
+    from: "  if (parsed.hostname !== 'api.deepseek.com') return false",
+    to: '  if (false) return false',
+    test: 'test/balance.mjs',
+    expect: '子域名伪装',
+  },
+  // BT 曾经"没有条目"：`fetchText` 的长度保险在**集成路径上观察不到**（`fetchOfficialPages`
+  // 的 minLength 500 与 `fetchModelsDevPrices` 的 1000 之后都还有解析关卡，短正文本来也过不了
+  // 解析）。**2026-09-30 已补**：把 `fetchText` 从 `test/pure-entry.ts` 出口，并在
+  // `test/price-sync.mjs` 里直接断言"短于 minLength 一律 undefined（哪怕它是完整合法的 JSON）"，
+  // 于是这条保险现在咬得住了。这条护栏防的是"CDN/改版返回一页错误 HTML 被当成新价目写进档"。
+  {
+    name: 'BT 抓取不再做"正文太短就算失败"的保险（一页错误 HTML 会被当成新价目写进档）',
+    file: 'src/price-sync.ts',
+    from: '    if (options.minLength !== undefined && text.length < options.minLength) return undefined',
+    to: '    if (false) return undefined',
+    test: 'test/price-sync.mjs',
+    expect: '正文短于 minLength 一律当失败',
+  },
+  {
+    name: 'BU models.dev 的 deepseek 整块不再丢掉（留着迟早被误用成 DeepSeek 单价）',
+    file: 'src/price-sync.ts',
+    from: "    if (id === '' || id === 'deepseek') continue",
+    to: "    if (id === '') continue",
+    test: 'test/price-sync.mjs',
+    expect: 'deepseek 整块被丢掉',
+  },
+  {
+    name: 'BV 用量路由不再问官方信任关卡（任何能访问该端口的人都能读会话用量）',
+    file: 'src/host.ts',
+    from: '      if (rejectUntrustedRequest(usageCtx as never, req, res)) return',
+    to: '      if (false && rejectUntrustedRequest(usageCtx as never, req, res)) return',
+    test: 'test/quick-commands.mjs',
+    expect: '/composer-ux/usage 也走官方信任关卡',
   },
 ]
 

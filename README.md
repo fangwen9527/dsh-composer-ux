@@ -14,8 +14,8 @@
 > at the panel), plus a **one-click "restart DSH"** button
 > in the settings-card header (market-proven self-restart: detached node helper, port-release wait,
 > hidden-console relaunch, same-origin fence, boot-id reload).
-> Install with `dsh plugin --profile <name> add github:fangwen9527/dsh-composer-ux` — the built `lib/`
-> ships in this repository, so there is **no build step and no build authorization**. License: MIT.
+> Install with `dsh plugin --profile <name> add dsh-composer-ux` (npm) — the built `lib/`
+> ships in the package **and** in this repository, so there is **no build step and no build authorization**. License: MIT.
 
 DeepSeek Harness Web 输入体验增强插件：
 

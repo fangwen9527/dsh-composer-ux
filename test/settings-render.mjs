@@ -389,5 +389,56 @@ console.log('\n7.2 「金额」卡：自定义节假日 + 同步过第三方价�
     text.includes('（123 个模型）') && !text.includes('第三方价目上次同步：从没同步过'))
 }
 
+console.log('\n7.3 「金额」卡：一个"长期用下来"的非默认设置（覆盖价 + 自定义节假日 + 自动同步开着）')
+{
+  // 为什么单开一节：前面几节要么用默认值、要么只改一两个字段。真实用户是"一堆字段都被改过"，
+  // 而这正是最容易画出问题的地方（某个分支把别人的文案顶掉、或者开关状态没跟设置走）。
+  const custom = render('custom', '', {
+    'opencode-go:gpt-5.6-luna': { offPeak: { miss: 3, hit: 0.3, out: 12 } },
+    'deepseek-flash': { peak: { miss: 9, hit: 0.9, out: 27 } },
+    'my-relay': { peak: { miss: 1, hit: 0.1, out: 2 } },
+  }, {
+    panelWidth: 872,
+    panelHeight: 774,
+    panelScroll: true,
+    panelResize: false,
+    menuNative: false,
+    terminalMode: 'custom',
+    terminalBashPath: 'D:\\Git\\bin\\bash.exe',
+    headerEnabled: true,
+    headerRoutes: 'opencode\nother',
+    statsEnabled: true,
+    peakHolidays: ['2026-10-01', '2026-10-02', '2026-10-03'],
+    peakAlert: { enabled: true, aheadMinutes: 15, onPeak: true, onOffPeak: false, webNotify: false },
+    balanceEnabled: false,
+    priceAutoSync: true,
+    syncedPrices: { fetchedAt: Date.parse('2026-10-01T00:00:00Z'), eras: [] },
+  })
+  const card = cardOf(custom, '金额')
+  const body = bodyOf(card)
+  const text = textOf(body)
+  const inputs = body.match(/<input[^>]*>/g) ?? []
+  const boxes = inputs.filter(input => input.includes('type="checkbox"'))
+
+  check('卡还在、五块的关键文案都在',
+    text.includes('高峰（元 / 1M）') && text.includes('法定节假日（北京日期，一行一个）')
+    && text.includes('峰谷提醒') && text.includes('余额') && text.includes('同步价目'))
+  check('自定义节假日带出三行（不再显示"内置 10 天"）',
+    text.includes('当前生效：3 个日期（自定义）') && body.includes('2026-10-03'))
+  check('自动同步开着时复选框是勾上的（默认那条只验了"默认关"）',
+    boxes.some(box => box.includes('aria-label="自动同步官方价"') && box.includes('checked')))
+  check('余额关着时复选框不勾 + 「刷新」按钮禁用',
+    boxes.some(box => box.includes('aria-label="启用余额查询"') && !box.includes('checked'))
+    && /<button[^>]*disabled[^>]*>刷新<\/button>/.test(body))
+  check('提前量跟着设置走（15 分钟，不是默认 5）',
+    /aria-label="提前多少分钟提醒"[^>]*value="15"/.test(body))
+  check('覆盖价写出的行出现在卡里（含 provider:model 那种键）',
+    text.includes('opencode-go:gpt-5.6-luna') && text.includes('my-relay'))
+  check('第三方覆盖价那一行是「平坦价」一档（不是峰/谷两档）',
+    text.includes('平坦价（元 / 1M）'))
+  check('内置行仍然是峰/谷两档', (body.match(/高峰（元 \/ 1M）/g) ?? []).length >= 1)
+  check('渲染文本里没有 markdown 记号（沿用浮层那条纪律）', !text.includes('**'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

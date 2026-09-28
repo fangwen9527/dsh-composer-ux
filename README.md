@@ -268,7 +268,9 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 - **一键同步价目（0.10.0）**：卡里两个按钮，代价差两个数量级所以分开：
   - **同步官方价**：抓官方中英文两页（各约 24 KB）解析成人民币/美元两列，**只有和当前档不同才新增一个价格档**（原地改档 = 把历史账重算）。解析器对着真页面夹具逐项钉住（`test/official-pricing.mjs`，45 条）。
   - **同步第三方价目**：抓 [models.dev](https://models.dev) 的 `api.json`（**5.2 MB**、215 个 provider、7831 个模型），压成约 **450 KB** 落 `$DSH_HOME/storages/composer-ux/prices.json`（设置文档里只留"什么时候同步的、多少条"，不然 settings.yaml 要被撑大）。models.dev 里的 DeepSeek 行**整块丢掉** —— 它只有平坦的谷价、没有峰谷与历史档语义，留着迟早被谁误用成"DeepSeek 单价"，结果是所有峰价被静默算成谷价。
+  - **自动同步官方价**（默认**关**）：勾上后宿主半每天最多自动抓一次官方价格页（进程启动先查一次 + 每 30 分钟查一次"距上次成功是否够 24 小时"）。"该不该出网"由纯函数 `autoSyncDue` 判定：开关不是真 `true`、时间读不到、距上次成功不到一天 —— 都不发请求。失败只写日志，界面仍显示上次成功的时间。
   - 两条都守同一条纪律：**抓失败绝不覆盖本地价**（网络抛错 / 非 2xx / 正文过短 / 只有一页成功，四种情形都有断言）。
+- **内置第三方价目快照（0.10.0）**：`src/provider-prices.ts`（**生成**的，别手改：`node scripts/gen-provider-prices.mjs <models.dev-api.json>`）收了 **11 个 provider / 346 个模型**，快照日期写在文件头。**没点过同步时**就是非 DeepSeek 模型的兜底价；点过一次「同步第三方价目」后最新数据会盖住同名条目，界面分别标明"内置快照价"还是已同步。查价优先级：**用户覆盖价 > 已同步价目 > 内置快照 > 未定价**。
 - **非 DeepSeek 模型定价（0.10.0）**：按 `(provider, model)` 查价 —— 精确 provider → `PROVIDER_ALIASES` 别名（`deepseek-official`→`deepseek`、`kimi-coding`→`moonshotai`…）→ **按模型 id 全局唯一匹配**（`glm-5` 在两家都有的价时**拒绝猜**）。**认不出价就说"未定价"**（单价全 0，明细页写明"去同步第三方价目或给这行填个价"），**不再把 DeepSeek 的 flash 价静默套到第三方模型头上** —— 编一个看着合理的假数字，比承认不知道更糟。
 - **为什么金额必须自己算**：DSH 送到浏览器的 `tokenUsage` 投影**只有 token 桶**，全库没有一处把"钱"送到客户端；`llm-pi-ai` 里那个 `cost` 只活在 provider 内部，而且用户自定义的路由（profile 里手写的 provider）拿到的是 `NO_COST`（全 0）。所以费用只能由本插件按刊例价算。
 - **数据全部来自官方、不新增采集**：token 桶读 `tokenUsage` 投影（与官方统计行**同一份**），模型读 `modelSelection` 投影（来自 `request/header` 事件）。会话中途换过模型时按**最后一次请求**的模型计价（近似，浮层里写明）。
@@ -313,6 +315,8 @@ dsh-composer-ux/
 ├── cordis.dev.patch.yml          # 本地开发覆盖层（file:/// 绝对路径，已 gitignore，不随包发布）
 ├── CHANGELOG.md                  # 版本更新日志
 ├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器），并做发行后处理
+├── scripts/
+│   └── gen-provider-prices.mjs   # 从 models.dev 的 api.json 生成 src/provider-prices.ts（内置第三方价目快照）
 ├── src/
 │   ├── host.ts                    # Host 半：settings namespace + 请求头镜像 + 「默认终端」+ 金额三条路由（用量/价目同步/余额）+ 「重启 DSH」
 │   ├── settings-contract.ts       # 字段/默认值/菜单元数据 + 栏开关的迁移判据（零依赖共享）
@@ -320,7 +324,8 @@ dsh-composer-ux/
 │   ├── pricing.ts                 # 金额：历史价档 / 节假日与峰谷判定 / provider 感知定价 / 覆盖价 / 费用与格式（零 import，两半共用）
 │   ├── usage-fold.ts              # 金额：会话事件按 (provider, model, 峰谷档, 价格档) 归因折叠 + 增量缓存（零 import，宿主半用）
 │   ├── official-pricing.ts        # 金额：官方价格页 HTML → 人民币/美元两列价（真页面夹具逐项钉住，零 import）
-│   ├── price-sync.ts              # 金额：抓官方两页合成价格档 + models.dev 压成第三方价目 + 落盘（宿主半，允许 node API）
+│   ├── price-sync.ts              # 金额：抓官方两页合成价格档 + models.dev 压成第三方价目 + 落盘 + autoSyncDue（宿主半，允许 node API）
+│   ├── provider-prices.ts         # 金额：内置第三方价目**快照**（生成物，11 provider / 346 模型；由 scripts/gen-provider-prices.mjs 生成）
 │   ├── balance.ts                 # 金额：官方余额响应消毒 + 查询端点白名单（零 import，两半共用）
 │   ├── client.tsx                 # Browser 半：设置页 + 菜单浮层 + 拦截器
 │   ├── terminal/                  # 「默认终端」（Windows：pwsh → Git Bash），全部零官方运行时依赖
@@ -373,8 +378,8 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-npm test                          # 16 个套件；当前 1539 passed, 0 failed（2026-09-29 实测）
-node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（73 条，须单独跑）
+npm test                          # 16 个套件；当前 1574 passed, 0 failed（2026-09-29 实测）
+node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（75 条，须单独跑）
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示（67 条）
 node test/check-sections.mjs      # 只读：升级前看七栏会变成什么
 node test/host-header-mirror.mjs  # 只跑宿主半的请求头测试（写入/撤销/改名/幂等/不误删）

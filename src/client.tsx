@@ -315,7 +315,7 @@ export function apply(ctx: any): void {
         // **但 `SYNCED_PRICES_FIELD` 故意不清**：那是一份"同步来的价格历史档 + 第三方价目元信息"，
         // 清掉等于让 9-10 之前那些会话按今天的价重算 —— "恢复默认"恢复的是**偏好**，
         // 不该动历史账单（与下面那句"宿主半记账字段不清"同一个道理）。
-        PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD,
+        PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD, PRICE_AUTO_SYNC_FIELD,
         // 0.5.0 里那个「可选重启命令」字段已经删掉，但老文档里可能还留着值：
         // 顺手清掉，免得它永远躺在设置文件里没人认识。
         'restartCommand',

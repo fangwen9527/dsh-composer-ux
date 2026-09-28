@@ -444,7 +444,9 @@ console.log('4. 非 DeepSeek 定价（provider 感知 / 未定价就说未定价
     && ours.isDeepSeekRoute(null, undefined) === false)
 
   // ── 未定价 ──
-  const unpriced = ours.resolvePrice('gpt-5.6-luna', { provider: 'opencode' })
+  // ⚠️ 必须用一个**内置快照里也没有**的名字：0.10.0 起 `gpt-5.6-luna` 之类的常见模型
+  // 已由内置快照兜底（见第 12 节），拿它测"未定价"会变成空跑。
+  const unpriced = ours.resolvePrice('my-relay-v1', { provider: 'opencode' })
   check('第三方模型没有价目 → unpriced / source = none / 单价全 0',
     unpriced.unpriced === true && unpriced.source === 'none'
     && sameTriple(unpriced.prices, ours.ZERO_TRIPLE))
@@ -963,6 +965,54 @@ console.log('11. 节假日对金额的影响（国庆 10-01 vs 普通周二 10-1
     && Math.abs(ours.costOf(usage, ours.resolvePrice('deepseek-flash', { at: holidayAt, holidays: [] }).prices) - 2) < 1e-12)
   check('清空节假日表不影响普通工作日（10-13 仍是峰价）',
     ours.resolvePrice('deepseek-flash', { at: workdayAt, holidays: [] }).peak === true)
+}
+
+console.log('12. 内置第三方价目快照（0.10.0：没点过同步时的兜底）')
+{
+  const snap = ours.BUILTIN_PROVIDER_PRICES
+  check('快照不是空的，并带快照日期', snap !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(ours.PROVIDER_PRICES_SNAPSHOT_AT),
+    ours.PROVIDER_PRICES_SNAPSHOT_AT)
+  check('收了 11 个 provider', Object.keys(snap).length === 11, String(Object.keys(snap).length))
+  check('每个 provider 都有模型，且单价都是有限非负数',
+    Object.values(snap).every(rows => Object.keys(rows).length > 0
+      && Object.values(rows).every(rate => Number.isFinite(rate.miss) && Number.isFinite(rate.hit)
+        && Number.isFinite(rate.out) && rate.miss >= 0 && rate.hit >= 0 && rate.out >= 0)))
+  check('快照里没有 deepseek（models.dev 那边只有平坦谷价，会误导成"DeepSeek 单价"）',
+    snap.deepseek === undefined)
+  check('模型 id 都是小写（查价前统一归一）',
+    Object.values(snap).every(rows => Object.keys(rows).every(id => id === id.toLowerCase())))
+
+  // 精确 provider 命中：gpt-3.5-turbo 只在 openai 下
+  const solo = ours.resolvePrice('gpt-3.5-turbo', { provider: 'openai', currency: 'USD' })
+  check('没同步过时也能查内置快照（精确 provider）',
+    solo.unpriced === false && solo.source === 'provider' && solo.builtin === true
+    && solo.prices.miss === 0.5 && solo.prices.out === 1.5, JSON.stringify(solo.prices))
+  check('内置快照价也按同一个汇率折人民币',
+    ours.resolvePrice('gpt-3.5-turbo', { provider: 'openai' }).prices.miss === 0.5 * ours.CNY_PER_USD)
+  check('第三方路由仍然没有峰谷与价格档', solo.peak === false && solo.era === '')
+
+  // provider 别名也要能命中快照（kimi-coding → moonshotai）
+  check('provider 别名能命中快照（kimi-coding → moonshotai）',
+    ours.providerRateOf(snap, 'kimi-coding', Object.keys(snap.moonshotai)[0]) !== undefined)
+
+  // 已同步的价目**盖住**快照（同一模型、不同价）
+  const synced = { openai: { 'gpt-3.5-turbo': { miss: 9, hit: 1, out: 99 } } }
+  const over = ours.resolvePrice('gpt-3.5-turbo', { provider: 'openai', currency: 'USD', providers: synced })
+  check('已同步的价目优先于内置快照（并把 builtin 置回 false）',
+    over.builtin === false && over.prices.miss === 9 && over.prices.out === 99, JSON.stringify(over.prices))
+
+  // 跨 provider 同名 → 拒绝猜（快照把这种歧义放大了，所以规则必须还在）
+  const dupIds = Object.keys(ours.BUILTIN_PROVIDER_PRICES.openai)
+    .filter(id => ours.providerRateOf(snap, 'no-such-provider', id) === undefined)
+  check('确实存在跨 provider 同名的模型（否则下面那条断言是空跑）', dupIds.length > 0, String(dupIds.length))
+  const ambiguous = ours.resolvePrice(dupIds[0], { provider: 'no-such-provider' })
+  check('认不出的 provider + 多家同名 → 未定价（绝不猜一家）',
+    ambiguous.unpriced === true && ambiguous.source === 'none', dupIds[0])
+  check('但用户自己填一行 provider:model 就能定价（诚实出口）',
+    ours.resolvePrice('gpt-3.5-turbo', {
+      provider: 'my-relay',
+      overrides: { 'my-relay:gpt-3.5-turbo': { offPeak: { miss: 3, hit: 0.3, out: 6 } } },
+    }).prices.miss === 3)
 }
 
 console.log(`\n${passes} passed / ${failures} failed`)

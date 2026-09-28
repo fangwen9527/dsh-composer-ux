@@ -659,6 +659,7 @@ console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价�
 {
   const card = readFileSync('src/client/CostCard.tsx', 'utf8')
   const admin = readFileSync('src/client/money-admin.ts', 'utf8')
+  const chip = readFileSync('src/client/CostChipEntry.tsx', 'utf8')
   const balancePath = /BALANCE_API_PATH = '([^']+)'/.exec(readFileSync('src/balance.ts', 'utf8'))?.[1]
 
   check('节假日表：一个 textarea + 保存 / 恢复内置 两个按钮',
@@ -710,6 +711,17 @@ console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价�
     String(balancePath))
   check('余额与同步都不往设置里写值（余额是账户事实，不进设置文档）',
     !admin.includes('setField'))
+  // 0.10.0 后补：自动同步开关（默认关）与"内置快照价"的如实标注
+  check('自动同步官方价：卡里一个复选框，写的是 PRICE_AUTO_SYNC_FIELD',
+    card.includes('aria-label="自动同步官方价"')
+    && card.includes('setField(PRICE_AUTO_SYNC_FIELD, event.target.checked)')
+    && card.includes('checked={settings.priceAutoSync}'))
+  check('自动同步说清"每天一次"，不是含糊的"自动更新"',
+    card.includes('自动同步官方价（每天一次）'))
+  check('说清没同步过时用内置快照价，并把快照日期写出来（不假装是实时价）',
+    card.includes('内置快照价') && card.includes('PROVIDER_PRICES_SNAPSHOT_AT'))
+  check('明细页也标明"有 N 行用的是内置快照价"（并指向同步按钮）',
+    chip.includes("'__builtin__'") && chip.includes('内置快照价') && chip.includes('同步第三方价目'))
 }
 
 console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻那三步校验）')

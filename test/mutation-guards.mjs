@@ -596,8 +596,8 @@ const cases = [
   {
     name: 'BR 未定价被说成"已定价"（第三方模型显示 0 元/1M 而不是未定价）',
     file: 'src/pricing.ts',
-    from: "        prices: ZERO_TRIPLE, overridden: false, unpriced: true, source: 'none',",
-    to: "        prices: ZERO_TRIPLE, overridden: false, unpriced: false, source: 'none',",
+    from: "        prices: ZERO_TRIPLE, overridden: false, unpriced: true, builtin: false, source: 'none',",
+    to: "        prices: ZERO_TRIPLE, overridden: false, unpriced: false, builtin: false, source: 'none',",
     test: 'test/pricing.mjs',
     expect: '第三方模型没有价目 → unpriced / source = none / 单价全 0',
   },
@@ -637,6 +637,22 @@ const cases = [
     to: '      if (false && rejectUntrustedRequest(usageCtx as never, req, res)) return',
     test: 'test/quick-commands.mjs',
     expect: '/composer-ux/usage 也走官方信任关卡',
+  },
+  {
+    name: 'BW 不再用内置第三方价目快照兜底（没点过同步时所有第三方模型都变"未定价"）',
+    file: 'src/pricing.ts',
+    from: '    const snapshot = synced === undefined ? providerRateOf(BUILTIN_PROVIDER_PRICES, provider, raw) : undefined',
+    to: '    const snapshot = undefined',
+    test: 'test/pricing.mjs',
+    expect: '没同步过时也能查内置快照（精确 provider）',
+  },
+  {
+    name: 'BY 自动同步不再看开关（用户没同意也自己联网抓官方价）',
+    file: 'src/price-sync.ts',
+    from: '  if (options.enabled !== true) return false\n  if (!Number.isFinite(options.nowMs)) return false',
+    to: '  if (false) return false\n  if (!Number.isFinite(options.nowMs)) return false',
+    test: 'test/price-sync.mjs',
+    expect: '开关没开（undefined / false / 字符串 / 1）一律不跑',
   },
 ]
 

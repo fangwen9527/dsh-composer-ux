@@ -984,6 +984,30 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
   check('用户写过的 false 原样解析回来（不会被默认值顶掉）',
     plain(schema({ menuEnabled: false })).menuEnabled === false
     && plain(schema({ panelEnabled: false, panelScroll: true })).panelEnabled === false)
+  // 0.10.0 新增的三个字段：节假日表 / 峰谷提醒 / 自动同步价目。
+  // 「自动同步」是**会自己出网**的开关，所以它必须"默认关 + 用户写 true 才生效"，
+  // 且两条路径（schema 解析 / sanitizeSettings）必须给同一个默认值。
+  check('金额 0.10.0 字段在 schema 里（节假日 / 峰谷提醒 / 自动同步）',
+    'peakHolidays' in empty && 'peakAlert' in empty && 'priceAutoSync' in empty,
+    JSON.stringify(Object.keys(empty).filter(key => key.startsWith('peak') || key.startsWith('price'))))
+  check('自动同步默认关（schema 与净化结果一致）',
+    empty.priceAutoSync === false && pure.DEFAULT_SETTINGS.priceAutoSync === false
+    && pure.sanitizeSettings({}).priceAutoSync === false)
+  check('自动同步：用户写了 true 就照收（不会被默认值顶掉）',
+    pure.sanitizeSettings({ priceAutoSync: true }).priceAutoSync === true
+    && plain(schema({ priceAutoSync: true })).priceAutoSync === true)
+  check('自动同步：脏值（字符串 / 数字）落回关',
+    pure.sanitizeSettings({ priceAutoSync: 'yes' }).priceAutoSync === false
+    && pure.sanitizeSettings({ priceAutoSync: 1 }).priceAutoSync === false)
+  check('节假日表：坏日期丢掉、好的留下、空数组 = 明确"没有节假日"（不是内置）',
+    JSON.stringify(pure.sanitizeSettings({ peakHolidays: ['2026-10-01', 'bad', '2026-13-01'] }).peakHolidays)
+      === JSON.stringify(['2026-10-01'])
+    && pure.sanitizeSettings({ peakHolidays: [] }).peakHolidays === undefined)
+  check('峰谷提醒：坏值逐项退回默认（提前量被钳在 1–60）',
+    (() => {
+      const alert = pure.sanitizeSettings({ peakAlert: { aheadMinutes: 999, enabled: 'x' } }).peakAlert
+      return alert.aheadMinutes === 60 && alert.enabled === true && alert.webNotify === false
+    })())
 }
 
 // ══════════════ 7. 样式：实色按钮的「填充 + 前景」必须成对 ═══════════════════

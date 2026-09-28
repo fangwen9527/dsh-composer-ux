@@ -36,7 +36,7 @@ import {
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
   SYNC_API_PATH,
-  BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
+  BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD, PRICE_AUTO_SYNC_FIELD,
   SYNCED_PRICES_FIELD,
   type QuickPromptBook,
 } from './settings-contract.ts'
@@ -46,7 +46,8 @@ import {
   type PriceEra, type PriceOverrideTable, type ProviderPriceTable,
 } from './pricing.ts'
 import {
-  eraFromOfficial, fetchModelsDevPrices, fetchOfficialPages, readPriceFile, samePriceTable, writePriceFile,
+  AUTO_SYNC_STALE_MS, autoSyncDue, eraFromOfficial, fetchModelsDevPrices, fetchOfficialPages,
+  readPriceFile, samePriceTable, writePriceFile,
 } from './price-sync.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
@@ -467,6 +468,8 @@ function ownSchema(): z {
     // 「金额」（0.10.0）同步来的价目元信息：`eras` 的键是官方后来才出现的模型名（动态键），
     // 与 priceOverrides 同一个理由用 `z.any()`。第三方价目本体不进设置（见 price-sync.ts）。
     [SYNCED_PRICES_FIELD]: z.any().required(false),
+    // 「金额」（0.10.0）自动同步官方价：默认关（会自动出网的开关不默认开）。
+    [PRICE_AUTO_SYNC_FIELD]: z.boolean().default(DEFAULT_SETTINGS.priceAutoSync),
   })
 }
 
@@ -1202,6 +1205,8 @@ export function apply(ctx: Context, config?: unknown): void {
             priceEra: resolved.era,
             overridden: resolved.overridden,
             unpriced: resolved.unpriced,
+            /** 单价来自**内置快照**（没点过同步时的兜底）：界面会如实标明。 */
+            priceBuiltin: resolved.builtin,
           }
         })
         const cost = routes.reduce(
@@ -1302,6 +1307,130 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }
 
+    /**
+     * 同步一次**官方价**（路由与自动同步共用同一份逻辑 —— 两处各写一遍迟早分叉）。
+     *
+     * 纪律（与 `price-sync.ts` 文件头一致）：抓不到、解析不出都**什么都不改**；
+     * 数与当前生效档不同就**新增一个档**（绝不原地改档，那等于把历史账重算）。
+     * @returns 直接可以回给界面的结果对象（`message` 是给用户看的一句话）。
+     */
+    const syncOfficial = async (): Promise<{
+      ok: boolean
+      changed?: boolean
+      fetchedAt?: number
+      era?: { readonly id: string; readonly label: string; readonly models: readonly string[] }
+      saved?: boolean
+      message: string
+      error?: string
+    }> => {
+      const pages = await fetchOfficialPages()
+      if (pages === undefined) {
+        return { ok: false, message: '抓官方价格页失败', error: '抓取官方价格页失败（网络不可达或页面改版），本地价目未改动' }
+      }
+      const fetchedAt = Date.now()
+      const era = eraFromOfficial(pages.cny, pages.usd, fetchedAt, '一键同步：https://api-docs.deepseek.com/zh-cn/quick_start/pricing')
+      if (era === undefined) {
+        return { ok: false, message: '官方页解析不出价格', error: '官方价格页解析不出价格（页面结构可能变了），本地价目未改动' }
+      }
+      const synced = readSynced()
+      const existing = parsePriceEras(synced.eras) ?? []
+      const currentTable = eraAt(fetchedAt, existing).table
+      if (samePriceTable(currentTable, era.table)) {
+        const saved = await writeSynced({ ...synced, fetchedAt })
+        return { ok: true, changed: false, fetchedAt, saved, message: '官方价与当前生效的档位一致，没有新增价格档' }
+      }
+      // 新档只保留最近 20 个：设置文档不该无限长，而"比 20 次调价还早"的档
+      // 早就在编译进去的三档里了。
+      const eras = [...existing, era].slice(-20)
+      const saved = await writeSynced({ ...synced, fetchedAt, eras })
+      if (!saved) {
+        return { ok: false, message: '设置服务不可写', error: '设置服务不可写，新价格档没有保存（本地价目未改动）' }
+      }
+      return {
+        ok: true,
+        changed: true,
+        fetchedAt,
+        era: { id: era.id, label: era.label, models: Object.keys(era.table) },
+        saved,
+        message: `官方价有变化，已新增价格档「${era.label}」（${Object.keys(era.table).join('、')}）；历史用量仍按发生时刻的旧档结算`,
+      }
+    }
+
+    /** 同步一次**第三方价目**（models.dev，约 5.2 MB → 压缩后 450 KB 落盘）。 */
+    const syncModelsDev = async (): Promise<{
+      ok: boolean
+      providers?: number
+      models?: number
+      fetchedAt?: number
+      saved?: boolean
+      message: string
+      error?: string
+    }> => {
+      const providers = await fetchModelsDevPrices()
+      if (providers === undefined) {
+        // 纪律 1：抓不到就是抓不到，磁盘上那份原样不动。
+        return { ok: false, message: '抓取 models.dev 失败', error: '抓取 models.dev 失败（网络不可达或响应异常），本地第三方价目未改动' }
+      }
+      const fetchedAt = Date.now()
+      let models = 0
+      for (const table of Object.values(providers)) models += Object.keys(table).length
+      try {
+        await writePriceFile({ fetchedAt, providers })
+      } catch (error: unknown) {
+        return {
+          ok: false,
+          message: '价目写盘失败',
+          error: `价目写盘失败：${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+      invalidateProviderPrices()
+      const saved = await writeSynced({ ...readSynced(), modelsDevAt: fetchedAt, modelsDevCount: models })
+      return {
+        ok: true,
+        providers: Object.keys(providers).length,
+        models,
+        fetchedAt,
+        saved,
+        message: `已同步 ${Object.keys(providers).length} 个 provider / ${models} 个模型的价目${saved ? '' : '（设置里没记下时间戳：设置服务不可写）'}`,
+      }
+    }
+
+    /**
+     * **自动同步官方价**（0.10.0，默认关）：每天最多一次。
+     *
+     * 节奏：进程启动时先查一次，之后每 {@link AUTO_SYNC_CHECK_MS} 分钟查一次
+     * "距上次成功同步是否够 {@link AUTO_SYNC_STALE_MS}"。为什么不是"设一个 24 小时的定时器"：
+     * 桌面版随时可能被关掉/重启，定时器会永远等不到点火；按"到期就补"的写法，
+     * 无论进程活了多久，只要开了开关且距上次同步超过一天，下一次检查就会补上。
+     *
+     * 失败只写日志：界面上仍显示"上次成功同步的时间"，不会因为一次网络抖动假装同步过。
+     */
+    const AUTO_SYNC_CHECK_MS = 30 * 60_000
+    const autoSyncIfDue = async (): Promise<void> => {
+      try {
+        const own = readOwn(NAMESPACE) ?? {}
+        // 该不该出网由纯函数判定（见 price-sync.ts 的 autoSyncDue）：只有开关真开着、
+        // 且距上次成功同步够久才会发请求。
+        const due = autoSyncDue({
+          enabled: own[PRICE_AUTO_SYNC_FIELD],
+          fetchedAt: readSynced().fetchedAt,
+          nowMs: Date.now(),
+          staleMs: AUTO_SYNC_STALE_MS,
+        })
+        if (!due) return
+        const result = await syncOfficial()
+        console.log(`[composer-ux] 自动同步官方价${result.ok ? '成功' : '失败'}：${result.message}`)
+      } catch (error: unknown) {
+        // 自动同步绝不能让插件炸掉：这一轮失败，下一轮（30 分钟后）再来。
+        console.warn('[composer-ux] 自动同步官方价异常', error)
+      }
+    }
+    syncCtx.effect(() => {
+      const timer = setInterval(() => { void autoSyncIfDue() }, AUTO_SYNC_CHECK_MS)
+      void autoSyncIfDue()
+      return () => { clearInterval(timer) }
+    }, 'composer-ux: 官方价自动同步（默认关）')
+
     const handle = (
       req: { method?: string; url?: string } & AsyncIterable<unknown>,
       res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
@@ -1335,75 +1464,9 @@ export function apply(ctx: Context, config?: unknown): void {
           sendJson(res, 400, { ok: false, error: 'target 必须是 official 或 modelsDev' })
           return
         }
-
-        if (target === 'modelsDev') {
-          const providers = await fetchModelsDevPrices()
-          if (providers === undefined) {
-            // 纪律 1：抓不到就是抓不到，磁盘上那份原样不动。
-            sendJson(res, 200, { ok: false, error: '抓取 models.dev 失败（网络不可达或响应异常），本地第三方价目未改动' })
-            return
-          }
-          const fetchedAt = Date.now()
-          let models = 0
-          for (const table of Object.values(providers)) models += Object.keys(table).length
-          try {
-            await writePriceFile({ fetchedAt, providers })
-          } catch (error: unknown) {
-            sendJson(res, 200, { ok: false, error: `价目写盘失败：${error instanceof Error ? error.message : String(error)}` })
-            return
-          }
-          invalidateProviderPrices()
-          const written = await writeSynced({ ...readSynced(), modelsDevAt: fetchedAt, modelsDevCount: models })
-          sendJson(res, 200, {
-            ok: true,
-            target,
-            providers: Object.keys(providers).length,
-            models,
-            fetchedAt,
-            saved: written,
-            message: `已同步 ${Object.keys(providers).length} 个 provider / ${models} 个模型的价目${written ? '' : '（设置里没记下时间戳：设置服务不可写）'}`,
-          })
-          return
-        }
-
-        const pages = await fetchOfficialPages()
-        if (pages === undefined) {
-          sendJson(res, 200, { ok: false, error: '抓取官方价格页失败（网络不可达或页面改版），本地价目未改动' })
-          return
-        }
-        const fetchedAt = Date.now()
-        const era = eraFromOfficial(pages.cny, pages.usd, fetchedAt, '一键同步：https://api-docs.deepseek.com/zh-cn/quick_start/pricing')
-        if (era === undefined) {
-          sendJson(res, 200, { ok: false, error: '官方价格页解析不出价格（页面结构可能变了），本地价目未改动' })
-          return
-        }
-        const synced = readSynced()
-        const existing = parsePriceEras(synced.eras) ?? []
-        const currentTable = eraAt(fetchedAt, existing).table
-        if (samePriceTable(currentTable, era.table)) {
-          const written = await writeSynced({ ...synced, fetchedAt })
-          sendJson(res, 200, {
-            ok: true, target, changed: false, fetchedAt, saved: written,
-            message: '官方价与当前生效的档位一致，没有新增价格档',
-          })
-          return
-        }
-        // 新档只保留最近 20 个：设置文档不该无限长，而"比 20 次调价还早"的档
-        // 早就在编译进去的三档里了。
-        const eras = [...existing, era].slice(-20)
-        const written = await writeSynced({ ...synced, fetchedAt, eras })
-        if (!written) {
-          sendJson(res, 200, { ok: false, error: '设置服务不可写，新价格档没有保存（本地价目未改动）' })
-          return
-        }
-        sendJson(res, 200, {
-          ok: true,
-          target,
-          changed: true,
-          fetchedAt,
-          era: { id: era.id, label: era.label, models: Object.keys(era.table) },
-          message: `官方价有变化，已新增价格档「${era.label}」（${Object.keys(era.table).join('、')}）；历史用量仍按发生时刻的旧档结算`,
-        })
+        // 两条路各一个函数（自动同步走的是同一个 `syncOfficial`），这里只负责回话。
+        const result = target === 'modelsDev' ? await syncModelsDev() : await syncOfficial()
+        sendJson(res, 200, { target, ...result })
       })()
     }
 

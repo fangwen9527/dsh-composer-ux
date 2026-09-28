@@ -128,6 +128,16 @@ export const PEAK_HOLIDAYS_FIELD = 'peakHolidays'
 /** 「金额」栏（0.10.0）：峰谷提醒的开关与提前量。 */
 export const PEAK_ALERT_FIELD = 'peakAlert'
 
+/**
+ * 「金额」栏（0.10.0）：**自动同步官方价**（默认**关**）。
+ *
+ * 打开后宿主半每天最多自动抓一次官方价格页：进程启动时先查一次，之后每 30 分钟查一次
+ * "距上次同步是否够 24 小时"。默认关的理由：这是个会**自己出网**的开关，不该由插件替用户
+ * 决定；而"抓失败绝不覆盖本地价"那条纪律对自动同步同样成立（失败只写日志，界面上仍显示
+ * 上次成功的时间）。
+ */
+export const PRICE_AUTO_SYNC_FIELD = 'priceAutoSync'
+
 /** 「金额」栏（0.10.0）：余额查询开关（关掉就不显示余额行、也不发任何出网请求）。 */
 export const BALANCE_ENABLED_FIELD = 'balanceEnabled'
 
@@ -743,6 +753,7 @@ export type SettingsField =
   | typeof PEAK_ALERT_FIELD
   | typeof BALANCE_ENABLED_FIELD
   | typeof SYNCED_PRICES_FIELD
+  | typeof PRICE_AUTO_SYNC_FIELD
   | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
@@ -853,6 +864,8 @@ export interface ComposerUxSettings {
   balanceEnabled: boolean
   /** 「金额」（0.10.0）：同步来的价目元信息（宿主半写、界面只读展示）。 */
   syncedPrices?: SyncedPrices
+  /** 「金额」（0.10.0）：自动同步官方价（每天最多一次）。默认**关** —— 会自己出网的开关不该默认开。 */
+  priceAutoSync: boolean
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -905,6 +918,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   // 余额默认开：它是"看一眼就知道还能不能跑"的东西；关掉是给不想出网的人留的开关。
   balanceEnabled: true,
   syncedPrices: undefined,
+  // 自动同步默认**关**：用户没点过就不该有定时出网。
+  priceAutoSync: false,
 }
 
 /**
@@ -1199,5 +1214,6 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     peakAlert: sanitizePeakAlert(source[PEAK_ALERT_FIELD]),
     balanceEnabled: asBool(BALANCE_ENABLED_FIELD),
     syncedPrices: parseSyncedPrices(source[SYNCED_PRICES_FIELD]),
+    priceAutoSync: asBool(PRICE_AUTO_SYNC_FIELD),
   }
 }

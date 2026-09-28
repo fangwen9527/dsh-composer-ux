@@ -291,10 +291,10 @@ console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六�
   check('说清峰谷按"每笔用量发生的时间"判定（不是看面板的时刻）',
     text.includes('每笔用量真正发生的时间') && text.includes('北京时间'))
   // 0.10.0 的 PRICE_TABLE 只剩两个内置模型（flash / v4-pro），每个两档六格：
-  // 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个控件 + 余额开关 1 个 = 19。
+  // 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个控件 + 余额开关 1 个 + 自动同步 1 个 = 20。
   check('单价框数 = 2 个内置模型 × 6 格（峰谷两档）', priceInputs.length === 2 * 6, String(priceInputs.length))
-  check('输入框总数 = 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个 + 余额开关 1 个',
-    inputs.length === 2 * 6 + 1 + 5 + 1, String(inputs.length))
+  check('输入框总数 = 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个 + 余额开关 1 个 + 自动同步 1 个',
+    inputs.length === 2 * 6 + 1 + 5 + 1 + 1, String(inputs.length))
   check('两个内置行都是峰谷两档（各一个「高峰（元 / 1M）」+ 一个「空闲（元 / 1M）」）',
     (body.match(/高峰（元 \/ 1M）/g) ?? []).length === 2
     && (body.match(/空闲（元 \/ 1M）/g) ?? []).length === 2
@@ -326,12 +326,18 @@ console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六�
     && text.includes('当前生效：10 个日期（内置）'))
   const boxes = inputs.filter(input => input.includes('type="checkbox"'))
   check('峰谷提醒：4 个复选框（默认 启用/进峰前/离峰前 开、系统通知关）+ 提前量默认 5 分钟',
-    boxes.length === 5
+    boxes.length === 6
     && boxes.some(box => box.includes('aria-label="启用峰谷提醒"') && box.includes('checked'))
     && boxes.some(box => box.includes('aria-label="进入高峰前提醒"') && box.includes('checked'))
     && boxes.some(box => box.includes('aria-label="离开高峰前提醒"') && box.includes('checked'))
     && boxes.some(box => box.includes('aria-label="额外发浏览器通知"') && !box.includes('checked'))
     && /aria-label="提前多少分钟提醒"[^>]*value="5"/.test(body))
+  // 0.10.0 后补：自动同步官方价（默认**关** —— 会自己出网的开关不该默认开）
+  check('价目同步区：自动同步复选框默认关 + 说清每天一次',
+    boxes.some(box => box.includes('aria-label="自动同步官方价"') && !box.includes('checked'))
+    && text.includes('自动同步官方价（每天一次）'))
+  check('说清"没同步过时用内置快照价"（并带快照日期，免得看着像实时价）',
+    text.includes('内置快照价') && /models\.dev 快照 20\d\d-\d\d-\d\d/.test(text))
   check('余额：复选框默认开 + 「刷新」按钮（关掉时禁用）+ 说清 Key 只在宿主半读',
     boxes.some(box => box.includes('aria-label="启用余额查询"') && box.includes('checked'))
     && text.includes('刷新') && text.includes('API Key 只在宿主半读取'))

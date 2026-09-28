@@ -38,9 +38,11 @@ import {
   type PriceField, type PriceOverrideTable,
 } from '../pricing.ts'
 import {
-  BALANCE_ENABLED_FIELD, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD, PRICE_OVERRIDES_FIELD,
+  BALANCE_ENABLED_FIELD, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD, PRICE_AUTO_SYNC_FIELD,
+  PRICE_OVERRIDES_FIELD,
   type ComposerUxSettings, type SettingsField,
 } from '../settings-contract.ts'
+import { PROVIDER_PRICES_SNAPSHOT_AT } from '../provider-prices.ts'
 import { useBalance, usePriceSync } from './money-admin.ts'
 import { hintError, hintInfo, pill, row, rowDesc, rowText, rowTitle, textInput } from './styles.ts'
 
@@ -537,6 +539,10 @@ export function CostCardBody(props: {
             「官方价」抓官方价格页两页（约 24 KB）：<strong>有变化才新增一个价格档</strong>，
             历史用量仍按发生时刻的旧档结算。「第三方价目」抓 models.dev（约 5 MB，
             压缩后约 450 KB 落盘），给非 DeepSeek 模型用。<strong>抓失败不会覆盖本地价。</strong>
+            <br />
+            没点过「同步第三方价目」时，非 DeepSeek 模型会用<strong>内置快照价</strong>
+            （models.dev 快照 {PROVIDER_PRICES_SNAPSHOT_AT}，11 个 provider / 346 个模型，
+            可能已过时；点一次同步就会被最新数据盖住）。
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -546,6 +552,17 @@ export function CostCardBody(props: {
           <button type="button" style={pill} disabled={sync.busy !== null} onClick={() => sync.sync('modelsDev')}>
             {sync.busy === 'modelsDev' ? '同步中…' : '同步第三方价目'}
           </button>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={settings.priceAutoSync}
+              aria-label="自动同步官方价"
+              onChange={event => setField(PRICE_AUTO_SYNC_FIELD, event.target.checked)}
+            />
+            <span title="打开后宿主半每天最多自动抓一次官方价格页；抓失败只写日志，不会改本地价">
+              自动同步官方价（每天一次）
+            </span>
+          </label>
         </div>
         <div style={{ ...rowDesc, flexBasis: '100%' }}>
           官方价上次同步：{stampText(synced?.fetchedAt)}；

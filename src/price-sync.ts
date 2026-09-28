@@ -45,6 +45,34 @@ export const MODELS_DEV_URL = 'https://models.dev/api.json'
 export const PAGE_TIMEOUT_MS = 15_000
 export const REGISTRY_TIMEOUT_MS = 60_000
 
+/** 自动同步的默认最小间隔：一天。 */
+export const AUTO_SYNC_STALE_MS = 24 * 3_600_000
+
+/**
+ * **自动同步该不该跑**（纯函数，宿主半的定时器只调它）。
+ *
+ * 条件两条：开关**真**开着，且距上次成功同步够久（从没成功过就是 0 → 判定为"该跑"）。
+ * 抽成纯函数而不是写在定时器里，是因为"该不该出网"这件事必须能单独钉住 ——
+ * 它一旦写错（比如把开关看漏），插件就会**在用户没同意的情况下自己联网**。
+ *
+ * @param options.enabled 设置里的开关（未知值一律当没开：只有真 `true` 才算开）。
+ * @param options.fetchedAt 上次成功同步的时刻（毫秒；未知/非有限数当"从没同步过"）。
+ * @param options.nowMs 现在（毫秒）。
+ * @param options.staleMs 最小间隔，默认 {@link AUTO_SYNC_STALE_MS}。
+ * @returns 该不该现在同步一次。
+ */
+export function autoSyncDue(options: {
+  readonly enabled: unknown
+  readonly fetchedAt: unknown
+  readonly nowMs: number
+  readonly staleMs?: number
+}): boolean {
+  if (options.enabled !== true) return false
+  if (!Number.isFinite(options.nowMs)) return false
+  const last = typeof options.fetchedAt === 'number' && Number.isFinite(options.fetchedAt) ? options.fetchedAt : 0
+  return options.nowMs - last >= (options.staleMs ?? AUTO_SYNC_STALE_MS)
+}
+
 /** 磁盘上的第三方价目文件（`$DSH_HOME/storages/...`）。 */
 export const PRICE_STORE_FILE = 'prices.json'
 

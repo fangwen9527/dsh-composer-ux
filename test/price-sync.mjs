@@ -212,5 +212,27 @@ const dirty = await ours.readPriceFile(file)
 check('坏字段被消毒掉', dirty.fetchedAt === undefined && dirty.providers === undefined)
 rmSync(dir, { recursive: true, force: true })
 
+console.log('7. autoSyncDue：该不该自己出网（默认关，纯函数）')
+const DAY = ours.AUTO_SYNC_STALE_MS
+check('默认最小间隔是一天', DAY === 24 * 3_600_000)
+check('开关没开（undefined / false / 字符串 / 1）一律不跑',
+  ours.autoSyncDue({ enabled: undefined, fetchedAt: 0, nowMs: 1e12 }) === false
+  && ours.autoSyncDue({ enabled: false, fetchedAt: 0, nowMs: 1e12 }) === false
+  && ours.autoSyncDue({ enabled: 'true', fetchedAt: 0, nowMs: 1e12 }) === false
+  && ours.autoSyncDue({ enabled: 1, fetchedAt: 0, nowMs: 1e12 }) === false)
+check('开关开着 + 从没同步过 → 该跑', ours.autoSyncDue({ enabled: true, fetchedAt: 0, nowMs: 1e12 }) === true)
+check('开关开着 + fetchedAt 认不出（脏数据）→ 当从没同步过 → 该跑',
+  ours.autoSyncDue({ enabled: true, fetchedAt: 'x', nowMs: 1e12 }) === true
+  && ours.autoSyncDue({ enabled: true, fetchedAt: Number.NaN, nowMs: 1e12 }) === true)
+check('刚同步过 → 不跑', ours.autoSyncDue({ enabled: true, fetchedAt: 1e12, nowMs: 1e12 }) === false)
+check('差 1 毫秒不到一天 → 不跑', ours.autoSyncDue({ enabled: true, fetchedAt: 1e12 - DAY + 1, nowMs: 1e12 }) === false)
+check('正好满一天 → 跑（边界含等号）', ours.autoSyncDue({ enabled: true, fetchedAt: 1e12 - DAY, nowMs: 1e12 }) === true)
+check('超过一天 → 跑', ours.autoSyncDue({ enabled: true, fetchedAt: 1e12 - DAY * 3, nowMs: 1e12 }) === true)
+check('nowMs 不是有限数 → 不跑（绝不因为时钟读不到就出网）',
+  ours.autoSyncDue({ enabled: true, fetchedAt: 0, nowMs: Number.NaN }) === false)
+check('staleMs 可覆盖（测试与将来"改频率"都靠它）',
+  ours.autoSyncDue({ enabled: true, fetchedAt: 1e12 - 60_000, nowMs: 1e12, staleMs: 60_000 }) === true
+  && ours.autoSyncDue({ enabled: true, fetchedAt: 1e12 - 59_999, nowMs: 1e12, staleMs: 60_000 }) === false)
+
 console.log(`\n${passes} passed / ${failures} failed`)
 if (failures > 0) process.exitCode = 1

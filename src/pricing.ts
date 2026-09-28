@@ -53,7 +53,17 @@
  * `formatMoney` 的尾部去零：原文用 `toFixed(4).replace(/0+$/,'')`，遇到 `0` 会输出 `¥0.`
  * （把小数点后的零全删光）。本文件改成"至少保留两位小数"，`0` 输出 `¥0.00`。
  * 测试里对这一条是**断言我们的行为**，其余样本才与原文对拍。
+ *
+ * ## 关于唯一的那一个 import
+ *
+ * 本模块一直自称"零 import、零 DOM、零 node API"，0.10.0 起多了下面这一行 —— 那是**生成出来的
+ * 纯数据**（models.dev 快照，同样零依赖、零副作用），不值得为它把 346 条价目手抄进来。
+ * 除此之外仍然零依赖。
  */
+import { BUILTIN_PROVIDER_PRICES, PROVIDER_PRICES_SNAPSHOT_AT } from './provider-prices.ts'
+
+/** 把快照的两个常量原样再导出：界面要显示快照日期，测试要直接断言快照内容。 */
+export { BUILTIN_PROVIDER_PRICES, PROVIDER_PRICES_SNAPSHOT_AT }
 
 /** 一档单价：每 1M tokens 的价格（miss = 未缓存输入，hit = 缓存命中，out = 输出）。 */
 export interface PriceTriple {
@@ -684,8 +694,13 @@ export interface ResolvedPrice {
   readonly prices: PriceTriple
   /** 单价是否被用户覆盖价改过。 */
   readonly overridden: boolean
-  /** 认不出价（第三方路由且同步价目里没有它）。 */
+  /** 认不出价（第三方路由且**同步价目与内置快照里都没有它**）。 */
   readonly unpriced: boolean
+  /**
+   * 单价来自**内置快照**（而不是用户点过一次的「同步第三方价目」）。
+   * 界面据此如实标明"这是内置快照价（可能过时）"。
+   */
+  readonly builtin: boolean
   /** 单价来源。 */
   readonly source: PriceSource
 }
@@ -741,15 +756,19 @@ export function resolvePrice(model: unknown, options: ResolveOptions = {}): Reso
   const deepseek = isDeepSeekRoute(provider, model)
 
   if (!deepseek) {
-    // 第三方：平坦价（没有峰谷概念），单价来自同步价目；认不出就是未定价。
+    // 第三方：平坦价（没有峰谷概念）。查价顺序：**已同步的 models.dev 价目 → 内置快照**；
+    // 两边都没有才是"未定价"（单价全 0 + 界面写明怎么补），绝不套 DeepSeek 的价。
     const raw = typeof model === 'string' ? model.trim() : ''
-    const found = providerRateOf(options.providers, provider, raw)
+    const synced = providerRateOf(options.providers, provider, raw)
+    const snapshot = synced === undefined ? providerRateOf(BUILTIN_PROVIDER_PRICES, provider, raw) : undefined
+    const found = synced ?? snapshot
     if (found === undefined) {
       return {
         model: raw, provider, peak: false, era: '', currency,
-        prices: ZERO_TRIPLE, overridden: false, unpriced: true, source: 'none',
+        prices: ZERO_TRIPLE, overridden: false, unpriced: true, builtin: false, source: 'none',
       }
     }
+    const fromSnapshot = synced === undefined
     const usd: PriceTriple = { miss: found.rate.miss, hit: found.rate.hit, out: found.rate.out }
     const cny: PriceTriple = {
       miss: usd.miss * CNY_PER_USD,
@@ -761,7 +780,8 @@ export function resolvePrice(model: unknown, options: ResolveOptions = {}): Reso
     if (overrideTier === undefined) {
       return {
         model: raw, provider, peak: false, era: '', currency,
-        prices: currency === 'USD' ? usd : cny, overridden: false, unpriced: false, source: 'provider',
+        prices: currency === 'USD' ? usd : cny, overridden: false, unpriced: false,
+        builtin: fromSnapshot, source: 'provider',
       }
     }
     const applied = applyTier(cny, overrideTier)
@@ -770,7 +790,7 @@ export function resolvePrice(model: unknown, options: ResolveOptions = {}): Reso
       : applied.prices
     return {
       model: raw, provider, peak: false, era: '', currency,
-      prices, overridden: applied.touched, unpriced: false, source: 'override',
+      prices, overridden: applied.touched, unpriced: false, builtin: fromSnapshot, source: 'override',
     }
   }
 
@@ -788,7 +808,7 @@ export function resolvePrice(model: unknown, options: ResolveOptions = {}): Reso
     return {
       model: normalized, provider, peak, era: era.id, currency,
       prices: currency === 'USD' ? tier.usd : tier.cny,
-      overridden: false, unpriced: false, source: 'official',
+      overridden: false, unpriced: false, builtin: false, source: 'official',
     }
   }
   const applied = applyTier(tier.cny, overrideTier)
@@ -798,7 +818,7 @@ export function resolvePrice(model: unknown, options: ResolveOptions = {}): Reso
     : cny
   return {
     model: normalized, provider, peak, era: era.id, currency,
-    prices, overridden: applied.touched, unpriced: false, source: 'override',
+    prices, overridden: applied.touched, unpriced: false, builtin: false, source: 'override',
   }
 }
 

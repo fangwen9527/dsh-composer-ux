@@ -51,8 +51,10 @@ export interface SessionCostRoute {
   readonly priceSource?: string
   /** 单价被你的覆盖价改过。 */
   readonly overridden?: boolean
-  /** **认不出价**（第三方路由且同步价目里没有它）：金额是 0，界面要写"未定价"而不是 ¥0.00。 */
+  /** **认不出价**（第三方路由且同步价目与内置快照里都没有它）：金额是 0，界面要写"未定价"而不是 ¥0.00。 */
   readonly unpriced?: boolean
+  /** 单价来自**内置快照**（不是用户点过一次的同步价目）——界面据此标明可能过时。 */
+  readonly priceBuiltin?: boolean
 }
 
 /** `/composer-ux/usage` 的响应（0.9.1 起多带回 `tiers` 与算好的 `cost`；0.10.0 加价格档与节假日）。 */

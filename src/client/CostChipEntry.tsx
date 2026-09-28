@@ -67,6 +67,7 @@ import type { ComposerUxSettings } from '../settings-contract.ts'
 import { UNKNOWN_ROUTE, agreesWithProjection, type UsageBuckets } from '../usage-fold.ts'
 import { billedInputTokens, cacheHitText } from './stats-line.ts'
 import { usePeakAlert } from './peak-alert.ts'
+import { PROVIDER_PRICES_SNAPSHOT_AT } from '../provider-prices.ts'
 import { useSessionCost, type SessionCostBuckets, type SessionCostRoute } from './session-cost.ts'
 
 /** 位置夹紧：与官方 `useStatDialog` 同值（视口两边各留 12px）。 */
@@ -250,6 +251,8 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         deepseek: isDeepSeekRoute(rowProvider, rowModel),
         /** 认不出价：金额是 0，界面必须写"未定价"而不是 ¥0.00。 */
         unpriced: route.unpriced === true,
+        /** 单价来自内置快照（没点过「同步第三方价目」时的兜底）。 */
+        builtin: route.priceBuiltin === true,
         priceSource: typeof route.priceSource === 'string' ? route.priceSource : '',
         overridden: route.overridden === true,
         tokens: tokenTotal(row),
@@ -267,6 +270,8 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
   const otherTier = routeRows
     .filter(route => !route.deepseek)
     .reduce((sum, route) => ({ tokens: sum.tokens + route.tokens, cost: sum.cost + route.cost }), { tokens: 0, cost: 0 })
+  /** 有几行的单价来自**内置快照**（不是用户同步来的那份）：界面要标明"可能过时"。 */
+  const builtinCount = routeRows.filter(route => route.builtin && !route.unpriced).length
   /** 未定价的行数（有几行就少算几行的钱，必须写在脸上）。 */
   const unpricedCount = routeRows.filter(route => route.unpriced).length
   /** 本次用量涉及的价格历史档（同一会话跨调价时会有多个）。 */
@@ -430,8 +435,12 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
                 {detail('未缓存输入', `${formatTokens(view.miss)} · ${formatMoney(view.parts.miss)}`, '__miss__')}
                 {detail('缓存命中', `${formatTokens(view.hit)} · ${formatMoney(view.parts.hit)}`, '__hit__')}
                 {detail('输出', `${formatTokens(view.out)} · ${formatMoney(view.parts.out)}`, '__out__')}
+                {builtinCount > 0
+                  ? note(`有 ${builtinCount} 行用的是内置快照价（models.dev 快照 ${PROVIDER_PRICES_SNAPSHOT_AT}）——`
+                    + '想换成最新价，去设置页「金额」点一次「同步第三方价目」。', '__builtin__')
+                  : null}
                 {unpricedCount > 0
-                  ? note(`有 ${unpricedCount} 行**未定价**：那是非 DeepSeek 模型，同步价目里没有它，`
+                  ? note(`有 ${unpricedCount} 行**未定价**：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`
                     + '所以那部分按 0 计。去设置页「金额」刷新一次「同步第三方价目」，或给那行直接填个价。', '__unpriced__')
                   : null}
               </>

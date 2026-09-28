@@ -146,9 +146,10 @@ export {
  * `lib/client.js`）的那几个函数原样抄进去当基准，逐样本对拍。
  */
 export {
-  BUILTIN_PRICING_MODELS, CNY_PER_USD, CURRENT_ERA_ID, DEFAULT_PEAK_HOLIDAYS, DEFAULT_PRICING_MODEL,
-  MODEL_ALIASES, PEAK_RULE_AT_MS, PEAK_UTC_RANGES, PRICE_ERAS, PRICE_FIELDS, PRICE_TABLE,
-  PRICE_VERIFIED_AT, PROVIDER_ALIASES, WEEKEND_OFFPEAK_AT_MS, ZERO_TRIPLE,
+  BUILTIN_PRICING_MODELS, BUILTIN_PROVIDER_PRICES, CNY_PER_USD, CURRENT_ERA_ID, DEFAULT_PEAK_HOLIDAYS,
+  DEFAULT_PRICING_MODEL, MODEL_ALIASES, PEAK_RULE_AT_MS, PEAK_UTC_RANGES, PRICE_ERAS, PRICE_FIELDS,
+  PRICE_TABLE, PRICE_VERIFIED_AT, PROVIDER_ALIASES, PROVIDER_PRICES_SNAPSHOT_AT,
+  WEEKEND_OFFPEAK_AT_MS, ZERO_TRIPLE,
   allEras, beijingDayKey, beijingWeekday, costBucketsOf, costOf, costPartsOf, customPricingModels,
   eraAt, eraById, eraIdAt, formatCountdown, formatMoney, formatTokens, isDayKey, isDeepSeekRoute,
   isKnownModel, isPeakAt, normalizeModel, officialTripleOf, overrideEntryOf, overrideTierOf,
@@ -172,7 +173,8 @@ export {
  * `eraFromOfficial` 两页缺一不可、`samePriceTable` 决定"要不要建新档"）。
  */
 export {
-  MODELS_DEV_URL, OFFICIAL_PRICING_URLS, compactModelsDev, eraFromOfficial, samePriceTable,
+  AUTO_SYNC_STALE_MS, MODELS_DEV_URL, OFFICIAL_PRICING_URLS, autoSyncDue, compactModelsDev,
+  eraFromOfficial, samePriceTable,
   fetchModelsDevPrices, fetchOfficialPages, fetchText, priceStorePath, readPriceFile, writePriceFile,
 } from '../src/price-sync.ts'
 /**
@@ -195,4 +197,6 @@ export {
   createUsageFolder, emptyFold, foldSessionUsage, subBuckets, zeroBuckets,
 } from '../src/usage-fold.ts'
 /** 「按 route 分列」接口路径（宿主半注册、客户端半调用）。 */
-export { PRICE_OVERRIDES_FIELD, USAGE_API_PATH } from '../src/settings-contract.ts'
+export {
+  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
+} from '../src/settings-contract.ts'

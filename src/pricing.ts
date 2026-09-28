@@ -266,7 +266,9 @@ const ERA_LEGACY: PriceEra = {
   id: 'legacy',
   fromMs: 0,
   label: '峰谷制之前（单一档价）',
-  source: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing（2026-08-16 改版前的价目）',
+  source: 'https://api-docs.deepseek.com/zh-cn/updates（2026-07-31 V4-Flash-0731 上线时的价目；'
+    + '2026-08-13 涨价公告的"涨前价"逐项对上：Flash 命中 0.02 / 未命中 1 / 输出 2，'
+    + 'Pro 命中 0.025 / 未命中 3 / 输出 6）',
   table: {
     'deepseek-flash': {
       peak: { cny: { miss: 1, hit: 0.02, out: 2 }, usd: { miss: 0.14, hit: 0.0028, out: 0.28 } },
@@ -340,9 +342,13 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = {
   'deepseek-v4-flash': 'deepseek-flash',
   'deepseek-v4-flash-vision-exp': 'deepseek-flash',
   'deepseek-v4.1-flash': 'deepseek-flash',
-  // 更早的两代名（V3 时代）：只作历史日志的兜底映射。
+  // 更早的两代名（V4 首发时的兼容名），只作历史日志的兜底映射。
+  // ⚠️ 官方更新日志（2026-04-24，中英两版都写了）：`deepseek-chat` 与 `deepseek-reasoner`
+  // **都指向 `deepseek-v4-flash`** —— 前者是非思考模式、后者是思考模式，
+  // 与 `deepseek-v4-pro` **没有**对应关系，且这两个名字已于 2026-07-24 停用。
+  // （0.10.0 一度把 reasoner 映到 Pro，那会把 flash 的用量按 Pro 价算，约 3 倍；已修。）
   'deepseek-chat': 'deepseek-flash',
-  'deepseek-reasoner': 'deepseek-v4-pro',
+  'deepseek-reasoner': 'deepseek-flash',
 }
 
 /** 认不出模型时按谁计价（**仅限 DeepSeek 路由**，第三方路由绝不套这个价）。 */

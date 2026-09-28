@@ -80,7 +80,8 @@ const ORACLE_ALIASES = {
   'deepseek-v4-flash-vision-exp': 'deepseek-flash',
   'deepseek-v4.1-flash': 'deepseek-flash',
   'deepseek-chat': 'deepseek-flash',
-  'deepseek-reasoner': 'deepseek-v4-pro',
+  // 官方 2026-04-24 更新日志：chat 与 reasoner **都**指向 v4-flash（非思考/思考两模式）。
+  'deepseek-reasoner': 'deepseek-flash',
 }
 const ORACLE_DEFAULT_MODEL = 'deepseek-flash'
 const ORACLE_CNY_PER_USD = 6.82
@@ -177,7 +178,7 @@ console.log('1. 刊例价表（0.10.0：官方人民币原值，只有两个模�
   }
   check('CNY_PER_USD = 6.82', ours.CNY_PER_USD === ORACLE_CNY_PER_USD, String(ours.CNY_PER_USD))
   check('默认模型 = deepseek-flash', ours.DEFAULT_PRICING_MODEL === ORACLE_DEFAULT_MODEL)
-  check('别名表一致（v4-flash / vision-exp / v4.1-flash / chat → flash，reasoner → v4-pro）',
+  check('别名表一致（v4-flash / vision-exp / v4.1-flash / chat / reasoner → flash）',
     JSON.stringify(ours.MODEL_ALIASES) === JSON.stringify(ORACLE_ALIASES),
     JSON.stringify(ours.MODEL_ALIASES))
   check('PRICE_VERIFIED_AT = 2026-09-29', ours.PRICE_VERIFIED_AT === '2026-09-29', ours.PRICE_VERIFIED_AT)
@@ -405,6 +406,17 @@ console.log('3. DeepSeek 定价解析（模型 × 币种 × 峰谷 × 覆盖）'
   check('isKnownModel 认得出别名、认不出未列名',
     ours.isKnownModel('deepseek-reasoner') && ours.isKnownModel('deepseek-v4-flash')
     && ours.isKnownModel('deepseek-unknown') === false && ours.isKnownModel('ds') === false)
+
+  // 官方 2026-04-24 更新日志（中英两版）：`deepseek-chat` 与 `deepseek-reasoner` **都**指向
+  // `deepseek-v4-flash`（非思考 / 思考两模式），与 v4-pro 没有对应关系；两名字已于 2026-07-24 停用。
+  // 0.10.0 一度把 reasoner 映到 Pro —— 那会把 flash 的用量按 Pro 价算（贵约 3 倍），这是一个真错。
+  check('deepseek-reasoner 按 flash 计价（不是 Pro；两者单价不该相等）',
+    ours.normalizeModel('deepseek-reasoner') === 'deepseek-flash'
+    && JSON.stringify(ours.resolvePrice('deepseek-reasoner', { peak: true }).prices)
+      === JSON.stringify(ours.resolvePrice('deepseek-flash', { peak: true }).prices)
+    && JSON.stringify(ours.resolvePrice('deepseek-reasoner', { peak: true }).prices)
+      !== JSON.stringify(ours.resolvePrice('deepseek-v4-pro', { peak: true }).prices),
+    JSON.stringify(ours.resolvePrice('deepseek-reasoner', { peak: true }).prices))
 
   // ── 覆盖价的币种语义（0.8.0 起防复发的老回归） ──
   // 只覆盖 miss、不碰 hit：美元 hit 必须是「人民币 hit ÷ 6.82」，

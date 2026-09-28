@@ -279,6 +279,7 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 - **折叠态那个数字怎么来的**：客户端投影只有累计 token 桶、**没有任何时间信息**，所以"逐笔准时"的数字只能从宿主半拿（`src/client/session-cost.ts`）：最短 600ms 间隔、期间有变化排一次**尾随**请求（保证流结束后的数字是准的）、同一时刻只有一个请求在飞、旧响应按序号丢弃。宿主半那份还没到手、或会话日志与投影对不上时，退回本地的"按当前档位估算"并在面板里说明是哪种口径 —— 胶囊从不空着。
 - **命中率与旁边那行必然是同一个数**：面板只在"分列与投影**四个桶全等**"（`agreesWithProjection` 是精确比较）时才把分列当权威，此时分列算出的命中率与官方胶囊逐位相同；否则退回投影口径。**两个坑**：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens` —— 第一版在 `billedInputTokens()` 里认对了名字，却在**调用处**传了 `inputTokens`，于是分母丢掉整块未缓存输入、命中率恒 100%（旁边官方胶囊 98.206%）。现在调用处也走官方键名，`test/client-registration.mjs` 同时钉住"调用处键名"与"与输入框下面那一行同一套函数"。
 - **计价按 `(provider, model)`**（0.10.0 起）：DeepSeek 路由（provider 名含 `deepseek` 或模型名以 `deepseek` 开头）走官方价目表与历史档；其它 provider 走同步来的第三方价目，认不出就写"未定价"。所以用 OpenCode（Zen）之类的接口跑 DeepSeek 模型，用量仍按 **DeepSeek 官方价**进这个金额；跑非 DeepSeek 模型则按 models.dev 的价估算。代价如浮层所写：Zen 可能有自己的加价/订阅，这个数字不等于你付给 Zen 的钱。
+- **别名与历史档的出处**：`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` / `deepseek-v4.1-flash` / `deepseek-chat` / `deepseek-reasoner` **全部**按 `deepseek-flash` 计价（前三个是官方脚注里"旧名仍可调用、由 V4.1-Flash 服务并按 Flash 价计费"；后两个是官方 2026-04-24 更新日志写的"分别指向 v4-flash 的非思考 / 思考模式"，**与 v4-pro 无关**，且已于 2026-07-24 停用）。三个历史档的出处逐条写在各档的 `source` 字段：`legacy`（峰谷制之前）的数与 2026-08-13 涨价公告的"涨前价"逐项对上（Flash 命中 0.02 / 未命中 1 / 输出 2，Pro 命中 0.025 / 未命中 3 / 输出 6），`peak-2026-08`（2026-08-17 0 时北京起）与 `flash-2026-09-10`（V4.1-Flash 上线同日降价）对应官方更新日志的两个条目。
 - **出处与对拍**：价目表、模型别名、峰谷规则与格式分档最早来自 [`dsh-plugin-usage-meter`](https://github.com/fancr-code/dsh-plugin-usage-meter) 1.9.1（**MIT**，Copyright (c) 2026 fancr-code）；0.10.0 起**人民币列改用官方人民币页原值**，历史档 / 节假日表 / 周末生效点与 [`dsh-cost-meter`](https://github.com/Han-1413141/dsh-cost-meter) 1.7.44 交叉核对过。`node test/pricing.mjs` 把那份实现的几个函数**原样抄进来当基准**逐样本对拍：刊例价表逐项、峰谷判定（含节假日与周末边界）、定价解析（模型 × 币种 × 时段 × 覆盖价）、费用、金额、Token 格式，外加历史档与"节假日对金额的影响"两节（同一笔用量在国庆当天与普通工作日相差恰好 2 倍）。
 - **新增的三条宿主路由都过了官方那道关卡**：`connection.requestRejection(request)`（Host/Origin 围栏 + 浏览器登录令牌）。`webServer` 是可以绑 `0.0.0.0` 的，漏掉它等于把会话用量、设置写入与**账号余额**摊给同网段任何一台机器 —— 2026-09-29 评审时发现并补上（此前只有重启路由挂了这道关卡）。
 - **与出处有意不同的两处**（都钉在测试里）：① 金额**至少保留两位小数**（出处会把 `0.1` 显示成 `¥0.1`、把 `0` 显示成 `¥0.`）；② **覆盖价的币种语义**——出处是"有覆盖价时先整体重建人民币档、美元再从人民币折算"，写成"在美元列上套覆盖价再折算"会差一个汇率（≈15 倍）而屏幕上只是个数字，所以专门有一条断言守着。
@@ -380,8 +381,8 @@ dsh-composer-ux/
 
 ```sh
 node build.mjs                    # 产出 lib/index.js + lib/client.js
-npm test                          # 16 个套件；当前 1581 passed, 0 failed（2026-09-29 实测）
-node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（76 条，须单独跑）
+npm test                          # 16 个套件；当前 1586 passed, 0 failed（2026-09-29 实测）
+node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（78 条，须单独跑）
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示（69 条）
 node scripts/live-smoke.mjs       # 手动跑：**联网复核**（官方页 vs 写死的价目表逐格对比 / models.dev vs 内置快照逐条对比 / 余额端点白名单与状态码）；只读，不写任何文件
 node test/check-sections.mjs      # 只读：升级前看七栏会变成什么

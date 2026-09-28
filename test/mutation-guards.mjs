@@ -670,6 +670,14 @@ const cases = [
     test: 'test/client-registration.mjs',
     expect: '每个 alive ref 都有对应的重置',
   },
+  {
+    name: 'CB reasoner 别名映回 Pro（flash 的用量被按 Pro 价算，贵约 3 倍）',
+    file: 'src/pricing.ts',
+    from: "  'deepseek-reasoner': 'deepseek-flash',",
+    to: "  'deepseek-reasoner': 'deepseek-v4-pro',",
+    test: 'test/pricing.mjs',
+    expect: 'deepseek-reasoner 按 flash 计价',
+  },
 ]
 
 let allBit = true

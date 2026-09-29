@@ -812,18 +812,20 @@ const cases = [
     expect: '钳到路由最省的推理档',
   },
   {
-    name: 'CS 去掉写回前的草稿比对（飞行期间用户新写的内容被整体吃掉）',
+    // 0.11.1 那条"写回前比对草稿"在 0.12.0 换了落点：判定搬进了 optimize-dock.ts 的
+    // insertDecision（那条由 CX 守着），这里守**接线** —— 别把它短路成"永远直接插入"。
+    name: 'CS 插入的判定被短路（不再调用 insertDecision，直接覆盖）',
     file: 'src/client.tsx',
-    from: '        if (!sameDraft(draft, currentDraft())) {',
-    to: '        if (false) {',
+    from: '      const decision = insertDecision(state, currentDraft(), insertConfirmed)',
+    to: "      const decision = 'insert' as const",
     test: 'test/client-registration.mjs',
-    expect: '写回前比对草稿',
+    expect: '插入前比对草稿',
   },
   {
     name: 'CT 写回时不再拼回斜杠命令前缀（命令被优化稿顶掉）',
     file: 'src/client.tsx',
-    from: "        replaceDraft(composeOptimizedDraft(slash.prefix, result.text ?? ''))",
-    to: "        replaceDraft(result.text ?? '')",
+    from: '      if (!replaceDraft(composeOptimizedDraft(state.slashPrefix, state.text))) {',
+    to: '      if (!replaceDraft(state.text)) {',
     test: 'test/client-registration.mjs',
     expect: '写回时把斜杠命令前缀拼回',
   },

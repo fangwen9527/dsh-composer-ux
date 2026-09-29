@@ -26,6 +26,7 @@ const RUN_KEYS = [
   'kind', 'at', 'sessionId', 'tier', 'provider', 'model', 'draftChars', 'contextTurns', 'contextChars',
   'hadPrevious', 'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
   'promptSource', 'ms', 'ok', 'failure',
+  'toolRounds', 'toolCalls', 'toolNames', 'toolCapped', 'toolFallback', 'toolRejected', 'toolError',
 ]
 
 const argv = process.argv.slice(2)
@@ -110,10 +111,11 @@ console.log(`  ${pad('时间', 12)}${pad('档位', 8)}${pad('草稿', 7)}${pad('
 console.log(`  ${'-'.repeat(86)}`)
 for (const record of shown) {
   const context = `${record.contextTurns ?? 0}轮/${record.contextChars ?? 0}字`
-  const tools = record.toolCalls ? `${record.toolCalls}次` : '—'
+  const tools = record.toolCalls ? `${record.toolRounds ?? 0}轮/${record.toolCalls}次` : '—'
   const result = record.ok ? '成功' : `失败`
   const note = record.ok
     ? (record.fallback ? '（整段照收）' : record.retried ? '（重试过）' : '')
+      + (record.toolFallback ? '（查证后回落）' : record.toolCapped ? '（查证触顶）' : '')
     : ` ${String(record.failure ?? '').slice(0, 40)}`
   console.log(`  ${pad(clock(record.at), 12)}${pad(record.tier ?? '-', 8)}${pad(record.draftChars ?? 0, 7)}${pad(context, 12)}${pad(record.items ?? 0, 7)}${pad(record.dropped ?? 0, 7)}${pad(tools, 7)}${pad(`${record.ms ?? 0}ms`, 9)}${pad(result, 6)}${record.provider ?? ''}/${record.model ?? ''}${note}`)
   if (Array.isArray(record.droppedReasons) && record.droppedReasons.length > 0) {

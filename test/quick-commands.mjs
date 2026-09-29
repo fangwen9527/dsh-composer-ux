@@ -1914,6 +1914,90 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
   }
 }
 
+// ══════════════ 5g. 只读查证工具（0.13.0 ⑤）：开关、真派工具、查完不是 JSON 就回落 ══════════════
+console.log('5g. 只读查证工具：默认关、开了才派、查完不是条目 JSON 就回落')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'composer-ux-tools-host-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dir
+  try {
+    writeFileSync(join(dir, 'README.md'), '项目说明：这一行是文件内容，不该出现在台账里\n')
+    const sessionQuery = { readSession: async () => ({ header: { cwd: dir } }) }
+    const selection = { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) }
+    const draft = '把那个页面弄好看点'
+    const finalJson = JSON.stringify({ items: [{ kind: 'rewrite', quote: '弄好看点', text: '把这一页做得好看点' }] })
+    const readCall = [
+      { type: 'text-delta', index: 0, text: '我先看一眼。' },
+      { type: 'tool-call-delta', index: 1, id: 'call-1', name: 'read', argumentsDelta: '{"path":"README.md"}' },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const ledgerFile = join(dir, 'composer-ux', 'optimize-log.jsonl')
+
+    // ① 默认关：一次调用，调用里没有 tools
+    const off = await bootHost({ model: selection, sessionQuery })
+    await handler0(off, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-1' })), makeRes())
+    check('默认关：只调一次模型', off.llmCalls.length === 1, String(off.llmCalls.length))
+    check('默认关：调用里不带 tools', off.llmCalls[0].tools === undefined)
+
+    // ② 开着：第 1 轮请求读文件，第 2 轮给条目 JSON
+    const host = await bootHost({
+      model: selection,
+      sessionQuery,
+      settings: { optimizeReadTools: true },
+      chunksSeq: [readCall, [{ type: 'text-delta', index: 0, text: finalJson }, { type: 'finish', reason: { kind: 'stop' } }]],
+    })
+    const res = makeRes()
+    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-1' })), res)
+    check('开着：调了两次模型（查证 + 收尾）', host.llmCalls.length === 2, String(host.llmCalls.length))
+    check('开着：第一次调用带三个只读工具', host.llmCalls[0].tools?.length === 3, String(host.llmCalls[0].tools?.length))
+    check('开着：系统提示里带了只读查证说明', String(host.llmCalls[0].system).includes('只读查证'))
+    check('开着：第二轮带上了 role:tool 的结果消息（含工具真读到的内容）',
+      host.llmCalls[1].messages.some(m => m.role === 'tool' && String(m.content?.[0]?.text).includes('这一行是文件内容')))
+    check('开着：这一轮成功（工具路径的产出被认可）', json(res).ok === true, JSON.stringify(json(res)).slice(0, 80))
+    check('开着：结果里报出工具轮次/次数，并说明没有回落',
+      json(res).toolRounds === 2 && json(res).toolCalls === 1 && json(res).toolFallback === false,
+      JSON.stringify({ r: json(res).toolRounds, c: json(res).toolCalls, f: json(res).toolFallback }))
+    const ledgerText = existsSync(ledgerFile) ? readFileSync(ledgerFile, 'utf8') : ''
+    const ledgerRow = ledgerText.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.kind === 'run').at(-1)
+    check('台账记了工具轮次与次数', ledgerRow?.toolRounds === 2 && ledgerRow?.toolCalls === 1, JSON.stringify(ledgerRow?.toolNames))
+    check('❗台账里没有工具读到的文件内容（只记数字与工具名）', !ledgerText.includes('这一行是文件内容'))
+    check('❗工具名进台账但只有名字', JSON.stringify(ledgerRow?.toolNames) === '["read"]', JSON.stringify(ledgerRow?.toolNames))
+
+    // ③ 工具路径查完却吐散文（不是那份 JSON）⇒ 必须回落成不带工具的单次调用
+    const prose = await bootHost({
+      model: selection,
+      sessionQuery,
+      settings: { optimizeReadTools: true },
+      chunksSeq: [
+        readCall,
+        [{ type: 'text-delta', index: 0, text: '我看过 README，所以建议你把这一页做得好看点。' }, { type: 'finish', reason: { kind: 'stop' } }],
+        [{ type: 'text-delta', index: 0, text: finalJson }, { type: 'finish', reason: { kind: 'stop' } }],
+      ],
+    })
+    const res3 = makeRes()
+    await handler0(prose, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-2' })), res3)
+    check('回落：那次不带工具的调用确实发生了（第 3 次）', prose.llmCalls.length === 3, String(prose.llmCalls.length))
+    check('回落：不带工具那次**换掉了系统提示**（否则模型还在等工具）',
+      !String(prose.llmCalls[2].system).includes('只读查证') && prose.llmCalls[2].tools === undefined)
+    check('回落：结果如实标注「查证后回落」，并保留真实的轮次',
+      json(res3).toolFallback === true && json(res3).toolRounds === 2 && json(res3).ok === true,
+      JSON.stringify({ f: json(res3).toolFallback, r: json(res3).toolRounds, ok: json(res3).ok }))
+
+    // ④ 拿不到会话工作目录 ⇒ 一个工具都不派（没有围栏的根就不猜路径）
+    const noCwd = await bootHost({
+      model: selection,
+      sessionQuery: { readSession: async () => ({ header: {} }) },
+      settings: { optimizeReadTools: true },
+    })
+    await handler0(noCwd, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-3' })), makeRes())
+    check('拿不到工作目录就不派工具', noCwd.llmCalls.length === 1 && noCwd.llmCalls[0].tools === undefined)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ══════════════ 6. 宿主半真实注册的 settings schema ═════════════════════════
 console.log('6. settings schema（宿主半真实注册的那一个）')
 {

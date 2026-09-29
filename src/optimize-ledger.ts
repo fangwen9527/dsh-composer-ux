@@ -33,6 +33,8 @@ export const LEDGER_RUN_KEYS = [
   'kind', 'at', 'sessionId', 'tier', 'provider', 'model', 'draftChars', 'contextTurns', 'contextChars',
   'hadPrevious', 'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
   'promptSource', 'ms', 'ok', 'failure',
+  // 只读工具（0.13.0 ⑤）：全数字/短串，同样不含任何文件内容。
+  'toolRounds', 'toolCalls', 'toolNames', 'toolCapped', 'toolFallback', 'toolRejected', 'toolError',
 ] as const
 
 /** 一轮优化的元数据。注意：**每个字段都是数字、布尔、枚举或机器短串**，没有文本载体。 */
@@ -58,6 +60,14 @@ export interface LedgerRunInput {
   readonly ok: boolean
   /** 失败时记一句**机器**原因（没有失败就不写这个键）。 */
   readonly failure?: string
+  /** 只读工具这一路：跑了几轮 / 派了几次 / 派了谁（**工具名**，不是文件内容）。 */
+  readonly toolRounds?: number
+  readonly toolCalls?: number
+  readonly toolNames?: readonly string[]
+  readonly toolCapped?: boolean
+  readonly toolFallback?: boolean
+  readonly toolRejected?: number
+  readonly toolError?: string
 }
 
 export interface LedgerRun extends LedgerRunInput {
@@ -141,6 +151,14 @@ export function buildLedgerRun(input: LedgerRunInput, at: string = new Date().to
     ms: Math.max(0, Math.trunc(input.ms)),
     ok: input.ok === true,
     ...(failure === '' ? {} : { failure }),
+    // 工具字段：只收数字/布尔/工具名；`toolError` 同样过消毒（它可能带着模型的原文报错）。
+    ...(input.toolRounds === undefined ? {} : { toolRounds: Math.max(0, Math.trunc(input.toolRounds)) }),
+    ...(input.toolCalls === undefined ? {} : { toolCalls: Math.max(0, Math.trunc(input.toolCalls)) }),
+    ...(input.toolNames === undefined ? {} : { toolNames: [...new Set(input.toolNames.map(name => ledgerSafeReason(String(name), 24)))].filter(name => name !== '').slice(0, 8) }),
+    ...(input.toolCapped === undefined ? {} : { toolCapped: input.toolCapped === true }),
+    ...(input.toolFallback === undefined ? {} : { toolFallback: input.toolFallback === true }),
+    ...(input.toolRejected === undefined ? {} : { toolRejected: Math.max(0, Math.trunc(input.toolRejected)) }),
+    ...((input.toolError ?? '') === '' ? {} : { toolError: ledgerSafeReason(String(input.toolError), 120) }),
   }
 }
 

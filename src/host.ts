@@ -29,7 +29,7 @@ import {
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
-  OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_STATE_API_PATH,
+  OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
@@ -71,6 +71,8 @@ import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optim
 import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts'
 import { appendLedger, buildLedgerRun } from './optimize-ledger.ts'
 import { clearDockState, dockStateBytes, optimizeStatePath, readDockState, writeDockState } from './optimize-state.ts'
+import { runOptimizeToolLoop } from './optimize-tool-loop.ts'
+import { READ_TOOLS_SYSTEM_NOTE } from './optimize-tools.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
@@ -200,6 +202,17 @@ function readOwnSetting(scope: unknown, config: unknown, field: string): string 
  * —— 于是"关掉开关"会被读成"没设置"（0.12.0 的上下文开关就是这么踩的，
  * 是 5d 那组用例逮住的）。认不出类型就回退到给定的默认值。
  */
+/**
+ * 从会话快照里取本会话的工作目录（只读工具围栏的根）。
+ *
+ * 取不到就返回空串 —— 那意味着**一个工具都不派**：没有根就没法判断"在不在工作目录内"，
+ * 与其猜一个路径（可能读到别处的东西），不如让这一轮退化成纯文本优化。
+ */
+function sessionCwdOf(snapshot: unknown): string {
+  const header = objectOf(objectOf(snapshot)?.header)
+  return textOf(header?.cwd)
+}
+
 function readOwnFlag(scope: unknown, config: unknown, field: string, fallback: boolean): boolean {
   try {
     const get = (scope as { get?: (name: string) => unknown } | undefined)?.get
@@ -455,6 +468,8 @@ function ownSchema(): Schema {
     [OPTIMIZER_LEDGER_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerLedger),
     // 重启后保留结果框（0.13.0；默认开）。这份状态文件里**有内容**，见契约里的说明。
     [OPTIMIZE_KEEP_DOCK_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizeKeepDock),
+    // 只读查证工具（0.13.0；默认关）。开了解释层才会派 read/glob/grep。
+    [OPTIMIZE_READ_TOOLS_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizeReadTools),
     // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
     [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
     [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
@@ -917,6 +932,8 @@ export function apply(ctx: Context, config?: unknown): void {
       const contextOn = readOwnFlag(optCtx, config, OPTIMIZER_CONTEXT_FIELD, DEFAULT_SETTINGS.optimizerContext)
       // 台账开关（默认开）：只记元数据，不记原文；关掉就一条都不写。
       const ledgerOn = readOwnFlag(optCtx, config, OPTIMIZER_LEDGER_FIELD, DEFAULT_SETTINGS.optimizerLedger)
+      // 只读查证工具（0.13.0 ⑤；默认**关**）：工具轮次要花时间与 token，不替用户决定放大成本。
+      const readToolsOn = readOwnFlag(optCtx, config, OPTIMIZE_READ_TOOLS_FIELD, DEFAULT_SETTINGS.optimizeReadTools)
       const sessionId = textOf(payload.sessionId)
       const contextTurns = contextOn && sessionId !== ''
         ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId)))
@@ -1045,10 +1062,59 @@ export function apply(ctx: Context, config?: unknown): void {
         return { out, failure }
       }
 
+      /**
+       * 只读工具路径（0.13.0 ⑤）：开关开 ∧ 拿得到本会话工作目录才走。
+       *
+       * 产出还必须过**同一份装配校验** —— 模型查完文件常爱写散文而不是那份 JSON，
+       * 那样就当工具路径没成功，回落成不带工具的单次调用（上游真机实测就是这么翻车的）。
+       * 回落时 `toolFallback` 为真、轮次与次数保留**真实数字**：那几次调用是真花了钱的。
+       */
+      let toolInfo: Record<string, unknown> | null = null
+      let tooledResult: { out: string; failure: string } | null = null
+      const cwd = readToolsOn ? sessionCwdOf(await readSessionSnapshot(sessionId)) : ''
+      if (readToolsOn && cwd !== '') {
+        try {
+          const looped = await runOptimizeToolLoop({
+            llm: optCtx.llm as never,
+            provider: route.provider,
+            model: route.model,
+            system: `${system}${READ_TOOLS_SYSTEM_NOTE}`,
+            userText: buildOptimizeUser(body, { context: contextText, previous }),
+            root: cwd,
+            signal: controller.signal,
+            onDelta: onStreamDelta,
+            maxChars: OPTIMIZE_OUTPUT_MAX * 4,
+            temperature: buildOptimizeTemperature(tier),
+            reasoningEffort: effort,
+          })
+          // ⚠ 判据必须是"**真的解析出了条目**"，不能只看 `ok`：装配层对非 JSON 有"整段照收"兜底
+          //   （`fallback: true`、`itemCount: 0`），只看 ok 的话模型查完文件写的散文会被当成成功产出，
+          //   "查证后回落"就永远不会发生 —— 那正是上游真机翻车过的那条路（开着工具就必定出散文）。
+          const assembledByTool = runOptimizePipeline(looped.out, body, { tier })
+          const accepted = looped.failure === '' && looped.out.trim() !== ''
+            && assembledByTool.ok && assembledByTool.fallback === false
+          toolInfo = {
+            toolRounds: looped.rounds,
+            toolCalls: looped.calls,
+            toolNames: [...new Set(looped.names)],
+            toolCapped: looped.capped,
+            toolRejected: looped.rejected,
+            toolFallback: !accepted,
+          }
+          if (accepted) tooledResult = { out: looped.out, failure: '' }
+        } catch (error: unknown) {
+          // 工具路径绝不该有能力把整轮弄死：任何抛出都只是"这一路失败"，下面照常回落。
+          toolInfo = {
+            toolRounds: 0, toolCalls: 0, toolNames: [], toolCapped: false, toolRejected: 0,
+            toolFallback: true, toolError: errorText(error),
+          }
+        }
+      }
+
       let retried = false
       let result: { out: string; failure: string }
       try {
-        result = await runOnce(buildOptimizeUser(body, { context: contextText, previous }), onStreamDelta)
+        result = tooledResult ?? await runOnce(buildOptimizeUser(body, { context: contextText, previous }), onStreamDelta)
         // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
         // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
         // 只在**没报错**时重试（报错重试一次只是白等一轮）。
@@ -1077,6 +1143,7 @@ export function apply(ctx: Context, config?: unknown): void {
             ok: false,
             error: result.failure === '' ? '模型没有产出任何内容' : `优化失败：${result.failure}`,
             retried,
+            ...(toolInfo === null ? {} : toolInfo),
           }
         }
         // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
@@ -1118,6 +1185,8 @@ export function apply(ctx: Context, config?: unknown): void {
           warnings: assembled.warnings,
           budget: assembled.budget,
           chars: assembled.chars,
+          // 只读查证这一路的记账（没派过工具时就一个键都没有）。
+          ...(toolInfo === null ? {} : toolInfo),
         }
       })()
 
@@ -1138,6 +1207,8 @@ export function apply(ctx: Context, config?: unknown): void {
           droppedReasons: summary.droppedReasons,
           warnings: summary.warnings,
           fallback: summary.fallback,
+          // 工具记账：回落也带上（"确实花了这些次调用又回落了"比抹平成 0 诚实）。
+          ...(toolInfo === null ? {} : toolInfo),
           retried,
           promptSource: optimizePromptSource(customPrompt),
           ms: Date.now() - startedAt,

@@ -334,6 +334,16 @@ export const OPTIMIZER_LEDGER_FIELD = 'optimizerLedger'
  */
 export const OPTIMIZE_KEEP_DOCK_FIELD = 'optimizeKeepDock'
 
+/**
+ * 优化时是否允许解释层用**只读工具**查证项目实际内容（0.13.0 ⑤，默认**关**）。
+ *
+ * 打开后解释层可以调 `read` / `glob` / `grep`：限定在本会话工作目录内、只读、
+ * 有单文件/结果/遍历/命中/深度/轮次/时限一堆上限，越界直接拒绝并记账。
+ * 为什么默认关：工具轮次要花时间与 token，不该替用户决定放大成本（上游 0.5 默认开、0.6 改成默认关，
+ * 理由一样）。另外**工具内容不能当引文**：`rewrite`/`requirement`/`quality` 的 quote 仍必须出自用户原话。
+ */
+export const OPTIMIZE_READ_TOOLS_FIELD = 'optimizeReadTools'
+
 /** 上下文里最多各带几条（你的话 / 助手的话）。 */
 export const OPTIMIZER_CONTEXT_TURNS = 4
 
@@ -846,6 +856,7 @@ export type SettingsField =
   | typeof OPTIMIZER_CONTEXT_FIELD
   | typeof OPTIMIZER_LEDGER_FIELD
   | typeof OPTIMIZE_KEEP_DOCK_FIELD
+  | typeof OPTIMIZE_READ_TOOLS_FIELD
   | typeof OPTIMIZER_PROMPT_FIELDS.basic
   | typeof OPTIMIZER_PROMPT_FIELDS.advanced
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
@@ -929,6 +940,8 @@ export interface ComposerUxSettings {
   optimizerLedger: boolean
   /** 重启后保留结果框（见 OPTIMIZE_KEEP_DOCK_FIELD；这份文件里有内容）。 */
   optimizeKeepDock: boolean
+  /** 允许解释层用只读工具查证项目内容（见 OPTIMIZE_READ_TOOLS_FIELD）。 */
+  optimizeReadTools: boolean
   /**
    * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
    *
@@ -1013,6 +1026,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   optimizerLedger: true,
   // 默认开：重启/刷新后上一轮结果还在框里（关掉就每次都要重跑一遍模型）。
   optimizeKeepDock: true,
+  // 只读工具默认**关**：它会真的多花时间与 token（开了才走工具轮次）。
+  optimizeReadTools: false,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
   optimizerPromptBasic: '',
   optimizerPromptAdvanced: '',
@@ -1335,6 +1350,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     optimizerContext: asBool(OPTIMIZER_CONTEXT_FIELD),
     optimizerLedger: asBool(OPTIMIZER_LEDGER_FIELD),
     optimizeKeepDock: asBool(OPTIMIZE_KEEP_DOCK_FIELD),
+    optimizeReadTools: asBool(OPTIMIZE_READ_TOOLS_FIELD),
     optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
     optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
     optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),

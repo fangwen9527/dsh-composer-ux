@@ -1025,6 +1025,71 @@ const cases = [
     expect: "只在框还空着时恢复",
   },
 
+  {
+    name: "DR 只读工具的围栏失效（能读工作目录之外的文件）",
+    file: "src/optimize-tools.ts",
+    from: "  const inside = final === rootReal || final.startsWith(`${rootReal}${sep}`)",
+    to: "  const inside = true",
+    test: "test/optimize-tools.mjs",
+    expect: "…/.. 逃逸被拒",
+  },
+  {
+    name: "DS 围栏不再走 realpath（符号链接可以把人带出工作目录）",
+    file: "src/optimize-tools.ts",
+    from: "  const probeReal = realOf(probe) ?? probe",
+    to: "  const probeReal = resolve(probe)",
+    test: "test/optimize-tools.mjs",
+    expect: "符号链接指向目录外 → 被识破并拒绝",
+  },
+  {
+    name: "DT 单文件上限被放大（超大文件塞进上下文）",
+    file: "src/optimize-tools.ts",
+    from: "    if (info.size > TOOL_MAX_FILE_BYTES) {",
+    to: "    if (info.size > TOOL_MAX_FILE_BYTES * 100) {",
+    test: "test/optimize-tools.mjs",
+    expect: "超大文件直接拒绝（不读一半）",
+  },
+  {
+    name: "DU 不再识别二进制文件（把二进制喂给模型）",
+    file: "src/optimize-tools.ts",
+    from: "    if (looksBinary(buffer)) {\n      return { text: '拒绝：这是二进制文件'",
+    to: "    if (false) {\n      return { text: '拒绝：这是二进制文件'",
+    test: "test/optimize-tools.mjs",
+    expect: "二进制文件拒绝",
+  },
+  {
+    name: "DV 工具结果消息不带 toolCallId（模型对不上是哪次调用）",
+    file: "src/optimize-tool-loop.ts",
+    from: "        toolCallId: call.id,",
+    to: "        toolCallId: 'x',",
+    test: "test/optimize-tools.mjs",
+    expect: "工具结果是 role:tool 且带 toolCallId",
+  },
+  {
+    name: "DW 一轮里的工具调用不再截断（声明了却不回答，服务端会整轮报错）",
+    file: "src/optimize-tool-loop.ts",
+    from: "    const batch = ordered.slice(0, TOOL_MAX_CALLS_PER_ROUND)",
+    to: "    const batch = ordered",
+    test: "test/optimize-tools.mjs",
+    expect: "第 1 轮只声明并执行前 3 次（不声明没回答的调用）",
+  },
+  {
+    name: "DX 工具循环的异常不再降级（工具路径能把整轮弄死）",
+    file: "src/optimize-tool-loop.ts",
+    from: "    } catch (error: unknown) {\n      // 异常一律降级成\"这一路失败\"，由调用方回落；绝不让工具路径把整轮弄死。\n      return {",
+    to: "    } catch (error: unknown) {\n      throw error\n      // eslint-disable-next-line no-unreachable\n      return {",
+    test: "test/optimize-tools.mjs",
+    expect: "抛出的异常变成 failure，而不是把整轮弄死",
+  },
+  {
+    name: "DY 工具路径的接受判据退回只看 ok（查完文件的散文会被当成成品）",
+    file: "src/host.ts",
+    from: "            && assembledByTool.ok && assembledByTool.fallback === false",
+    to: "            && assembledByTool.ok",
+    test: "test/quick-commands.mjs",
+    expect: "回落：那次不带工具的调用确实发生了（第 3 次）",
+  },
+
 ]
 
 let allBit = true

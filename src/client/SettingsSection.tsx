@@ -13,7 +13,8 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZER_CONTEXT_FIELD,
+  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD,
+  OPTIMIZER_CONTEXT_FIELD,
   OPTIMIZER_LEDGER_FIELD,
   OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
@@ -1347,6 +1348,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           checked={settings.optimizeKeepDock}
           onChange={next => { actions.setField(OPTIMIZE_KEEP_DOCK_FIELD, next) }}
           action={{ label: '清空结果框状态', onClick: actions.clearDockState }}
+        />
+        <ToggleRow
+          label="优化时允许只读查证项目文件"
+          desc="打开后解释层可以调 read / glob / grep 看一眼项目的实际内容（限定本会话工作目录内、只读、单文件 ≤200KB、每轮 ≤3 次调用、总共 ≤3 轮、总时限 20 秒，越界直接拒绝）。默认关：工具轮次要花时间与 token。⚠ 查到的内容**不能当引文**：条目的 quote 仍必须出自你的原话，装配层会逐条校验。"
+          checked={settings.optimizeReadTools}
+          onChange={next => { actions.setField(OPTIMIZE_READ_TOOLS_FIELD, next) }}
         />
         <OptimizerPromptEditor
           tier={settings.optimizerTier}

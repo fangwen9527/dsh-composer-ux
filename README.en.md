@@ -185,10 +185,10 @@ edited in settings; the JSON output contract is always appended and cannot be ov
 | Ledger records metadata only — never your text | `node test/optimize-ledger.mjs` (50 checks) plus the 5e section of `test/quick-commands.mjs`: after a real run, **a unique word from the draft cannot be found in the on-disk ledger** |
 | Ledger reason sanitising (a model-supplied quote can no longer reach disk) | same; mutation DH |
 | Ledger rotation / per-line tolerance / clearing | `node scripts/recap.mjs` in a real process: `--last` / `--session` / `--json` / `--clear` and bad-line counting |
-| Read-only tool fence (including symlinks) / every cap / out-of-bounds rejection | `node test/optimize-tools.mjs` (62 checks against a **real temporary directory**) |
+| Read-only tool fence (including symlinks) / every cap / out-of-bounds rejection | `node test/optimize-tools.mjs` (66 checks against a **real temporary directory**) |
 | Tool-loop message shape / round cap / exceptions must degrade | same file, section 6 (a fake `llm.stream` drives the whole loop; `role:'tool'` and `toolCallId` are asserted) |
 | Tool path: off by default, fires only when enabled, **prose after lookups falls back**, no cwd ⇒ no tool at all | `test/quick-commands.mjs` 5g (13 checks) |
-| Mutation guards really bite, and **the *named* test must be the one going red** | `npm run test:mutations`: **127/127 bite** |
+| Mutation guards really bite, and **the *named* test must be the one going red** | `npm run test:mutations`: **128/128 bite** |
 | Release gates | `npm run gates` (tag target / packed file list / docs drift) |
 | Three-platform CI | GitHub Actions: ubuntu / windows / macos × Node 20 |
 

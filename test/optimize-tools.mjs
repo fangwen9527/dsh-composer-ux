@@ -8,7 +8,7 @@
  *
  *   node test/optimize-tools.mjs
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { build } from 'esbuild'
@@ -39,7 +39,9 @@ const pure = await import(`data:text/javascript;base64,${Buffer.from(bundled.out
 /** 造一个真实的工作目录：根 + 子目录 + 几个文本文件 + 一个二进制 + 一个超大文件。 */
 const roots = []
 function makeRoot() {
-  const root = mkdtempSync(join(tmpdir(), 'composer-ux-tools-'))
+  // 用**真实路径**做根：macOS 上 os.tmpdir() 给的是 /var/folders/...（真实是 /private/var/...），
+  // 不归一的话断言里的相对路径与前缀比对会假失败（CI 的 macOS 那一格就是这么红的）。
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-tools-')))
   roots.push(root)
   mkdirSync(join(root, 'src', 'deep'), { recursive: true })
   mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true })
@@ -57,7 +59,7 @@ function makeRoot() {
 console.log('1. 围栏：只能读工作目录里的东西')
 {
   const root = makeRoot()
-  const outside = mkdtempSync(join(tmpdir(), 'composer-ux-outside-'))
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-outside-')))
   roots.push(outside)
   writeFileSync(join(outside, 'secret.txt'), '不该被读到\n')
 
@@ -88,6 +90,36 @@ console.log('1. 围栏：只能读工作目录里的东西')
     check('符号链接指向目录外 → 被识破并拒绝', viaLink.ok === false && viaLink.reason.includes('越界'), JSON.stringify(viaLink))
   } else {
     console.log('  · 本机建不出符号链接，跳过这一条（不是通过）')
+  }
+}
+
+console.log('1b. 根目录本身是符号链接（macOS 的 /var → /private/var 就是这种）')
+{
+  // 这一条是 CI 教我加的：macOS 上 os.tmpdir() 给的是 /var/folders/...，真实路径是 /private/var/folders/...，
+  // 于是"围栏内部 realpath 出来的绝对路径"与"调用方给的根"前缀不同 —— 相对路径会被切坏、
+  // startsWith 比对会假失败（ubuntu/windows 全绿、只有 macOS 红）。修法是工具入口先把根归一。
+  let pair = null
+  try {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-realroot-')))
+    writeFileSync(join(base, 'note.txt'), 'needle-in-linked-root\n')
+    const alias = join(realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-alias-'))), 'alias')
+    symlinkSync(base, alias, 'junction')
+    pair = { base, alias }
+  } catch {
+    pair = null
+  }
+  if (pair === null) {
+    console.log('  · 本机建不出符号链接，跳过这一节（不是通过）')
+  } else {
+    const read = pure.runReadTool(pair.alias, { path: 'note.txt' })
+    check('根是符号链接时：读得到，且相对路径是 note.txt（没被切坏）',
+      read.isError === false && read.text.includes('【note.txt】'), read.text.slice(0, 60))
+    const fenced = pure.fencePath(pair.alias, 'note.txt')
+    check('根是符号链接时：围栏算出的绝对路径落在真实根上',
+      fenced.ok === true && fenced.path === join(pair.base, 'note.txt'), String(fenced.path))
+    const globbed = pure.runGlobTool(pair.alias, { pattern: '*.txt' })
+    check('根是符号链接时：glob 的相对路径也是干净的', globbed.text.includes('note.txt') && !globbed.text.includes('..'), globbed.text.slice(0, 80))
+    check('根是符号链接时：`..` 仍然出不去', pure.fencePath(pair.alias, '../outside.txt').ok === false)
   }
 }
 

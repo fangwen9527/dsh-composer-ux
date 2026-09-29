@@ -454,11 +454,11 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 | 台账只记元数据、不落原文 | `node test/optimize-ledger.mjs`（50 条）+ `test/quick-commands.mjs` 5e 节：真路由跑一轮后**在磁盘上的台账文件里搜不到草稿里那个独特的词** |
 | 台账的原因消毒（模型给的引文不再被写进磁盘） | 同上；变异 DH（去掉消毒立刻红） |
 | 台账轮转 / 逐行容错 / 清空 | `node scripts/recap.mjs` 真进程跑：`--last` / `--session` / `--json` / `--clear` 与坏行计数都在 `test/optimize-ledger.mjs` 第 6 节 |
-| 只读工具围栏（含符号链接）/ 各类上限 / 越界拒绝 | `node test/optimize-tools.mjs`（62 条，**真实临时目录**；Windows 上用 junction 建真符号链接） |
+| 只读工具围栏（含符号链接）/ 各类上限 / 越界拒绝 | `node test/optimize-tools.mjs`（66 条，**真实临时目录**；含"根目录本身是符号链接"那类 macOS 坑） |
 | 工具循环的消息形状 / 轮次封顶 / 异常必须降级 | 同上第 6 节（假 llm 驱动整条循环，逐条检查 `role:'tool'` 与 `toolCallId`） |
 | 工具路径：默认关、开了才派、**查完吐散文必须回落**、拿不到工作目录就不派 | `test/quick-commands.mjs` 5g 节（13 条，真路由 + 假 llm） |
 | 工具读到的内容不进台账 | 同 5g 节：断言台账里只有工具名与次数、没有读到的文件内容 |
-| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**127 条全部咬住**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
+| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**128 条全部咬住**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
 | 发布门禁三条判据 | `npm run gates` 全过；`check:tag` 实测 `v0.12.0` 的 tag 名与所指提交里的版本一致 |
 | 三平台 CI | GitHub Actions：ubuntu / windows / macos × Node 20（`npm ci → typecheck → build → test → check:pack → check:docs`） |
 
@@ -588,9 +588,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 21 个套件；当前 2156 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
+npm test                          # 21 个套件；当前 2160 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（127 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（128 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

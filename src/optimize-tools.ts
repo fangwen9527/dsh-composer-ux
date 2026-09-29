@@ -148,6 +148,18 @@ export function fencePath(root: string, raw: string): FenceResult {
   return { ok: true, path: final }
 }
 
+/**
+ * 把工作目录归一成**真实路径**。
+ *
+ * 为什么必须做：macOS 上 `os.tmpdir()` 给的是 `/var/folders/...`，而它的真实路径是
+ * `/private/var/folders/...`（`/var` 本身是个符号链接）。`fencePath` 内部会 realpath，
+ * 于是"围栏算出来的绝对路径"与"调用方给的根"不是同一个前缀 —— 相对路径会被切错、
+ * `startsWith` 比对也会假失败。**CI 的 macOS 那一格就是这么红的**（ubuntu/windows 全绿）。
+ */
+export function resolveRoot(root: string): string {
+  return realOf(root) ?? resolve(root)
+}
+
 /** 路径分隔符归一：对外（模型看的结果、模式匹配）一律用 /。 */
 const toSlashes = (path: string): string => path.split(sep).join('/')
 
@@ -241,7 +253,9 @@ function walk(root: string, pattern: RegExp | null, visit: (relative: string, ab
 }
 
 /** 读一个文件（只读；大小/二进制/围栏都在这里把关）。 */
-export function runReadTool(root: string, args: unknown): ToolRunResult {
+export function runReadTool(rootInput: string, args: unknown): ToolRunResult {
+  // 先归一：下面的围栏、相对路径、遍历都基于同一个真实前缀（见 resolveRoot 的说明）。
+  const root = resolveRoot(rootInput)
   const row = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>
   const raw = typeof row.path === 'string' ? row.path : ''
   const fenced = fencePath(root, raw)
@@ -275,7 +289,8 @@ export function runReadTool(root: string, args: unknown): ToolRunResult {
 }
 
 /** 列文件（只读；命中数/文件数/深度都有上限）。 */
-export function runGlobTool(root: string, args: unknown): ToolRunResult {
+export function runGlobTool(rootInput: string, args: unknown): ToolRunResult {
+  const root = resolveRoot(rootInput)
   const row = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>
   const rawPattern = typeof row.pattern === 'string' ? row.pattern.trim() : ''
   if (rawPattern === '') {
@@ -300,7 +315,8 @@ export function runGlobTool(root: string, args: unknown): ToolRunResult {
 }
 
 /** 正则找内容（只读；命中数有上限）。 */
-export function runGrepTool(root: string, args: unknown): ToolRunResult {
+export function runGrepTool(rootInput: string, args: unknown): ToolRunResult {
+  const root = resolveRoot(rootInput)
   const row = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>
   const rawPattern = typeof row.pattern === 'string' ? row.pattern : ''
   if (rawPattern === '') {

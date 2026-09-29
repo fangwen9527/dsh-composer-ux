@@ -1090,6 +1090,15 @@ const cases = [
     expect: "回落：那次不带工具的调用确实发生了（第 3 次）",
   },
 
+  {
+    // macOS 那格 CI 红出来的坑：根目录不归一（/var vs /private/var），相对路径被切坏。
+    name: "DZ 工具根目录不再归一成真实路径（macOS 上相对路径被切坏）",
+    file: "src/optimize-tools.ts",
+    from: "export function resolveRoot(root: string): string {\n  return realOf(root) ?? resolve(root)\n}",
+    to: "export function resolveRoot(root: string): string {\n  return resolve(root)\n}",
+    test: "test/optimize-tools.mjs",
+    expect: "根是符号链接时：读得到，且相对路径是 note.txt（没被切坏）",
+  },
 ]
 
 let allBit = true

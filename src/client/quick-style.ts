@@ -41,6 +41,9 @@ const QUICK_BUTTON_CSS = `
   border-color: rgba(127, 127, 137, .6);
 }
 .${QUICK_BUTTON_CLASS} svg { flex: 0 0 auto; }
+/* 不可点（输入框空 / 正在优化）：压暗并撤掉 hover 反馈，让"点不动"一眼可见。 */
+.${QUICK_BUTTON_CLASS}[disabled] { opacity: .4; cursor: default; }
+.${QUICK_BUTTON_CLASS}[disabled]:hover { opacity: .4; background: transparent; }
 `
 
 /** 注入入口按钮样式表；返回卸载器（随插件 fiber 回收）。 */

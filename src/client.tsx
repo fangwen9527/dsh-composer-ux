@@ -12,7 +12,7 @@ import {
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
   STATS_ENABLED_FIELD, PRICE_OVERRIDES_FIELD,
   PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD,
-  activeSections, sanitizeSettings,
+  activeSections, sanitizeSettings, splitSlashCommand,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
   type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
@@ -34,9 +34,11 @@ import { SettingsSection } from './client/SettingsSection.tsx'
 import { StatsLineEntry } from './client/StatsLineEntry.tsx'
 import { CostChipEntry } from './client/CostChipEntry.tsx'
 import { QuickCommandsButton, type QuickPanelAnchor } from './client/QuickCommandsButton.tsx'
+import { OptimizeButton } from './client/OptimizeButton.tsx'
 import { QuickCommandsPanel } from './client/QuickCommandsPanel.tsx'
 import {
-  focusComposer, insertIntoDraft, optimizeDraft, replaceDraft, currentBlankSession, currentDraft,
+  composeOptimizedDraft, currentBlankSession, currentDraft, elapsedText, focusComposer,
+  insertIntoDraft, optimizeDraft, replaceDraft, sameAnchor, sameDraft,
 } from './client/quick-commands.ts'
 
 export const name = 'composer-ux'
@@ -83,6 +85,8 @@ export function apply(ctx: any): void {
   const menu = createSnapshotStore<MenuState | null>(null)
   const panel = createSnapshotStore<QuickPanelAnchor | null>(null)
   const optimizing = createSnapshotStore<boolean>(false)
+  /** 这次优化的起始时刻（0 = 没在跑）：面板与工具行按钮的秒表读数都由它算。 */
+  const optimizeStartedAt = createSnapshotStore<number>(0)
   const panelNotice = createSnapshotStore<string>('')
   /**
    * 设置写入的说明行；'' = 正常。渲染在设置卡片顶部（与「重启 DSH」横幅同位置）。
@@ -340,9 +344,75 @@ export function apply(ctx: any): void {
     if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   }, 'composer-ux: quick notice timer')
 
+  /**
+   * 跑一次优化：读草稿 → 拆斜杠命令前缀 → 交给宿主 → 写回输入框。
+   *
+   * 三处刻意为之（0.11.1）：
+   *  1. **斜杠命令**：只把命令后面的正文送去模型，写回时把前缀拼回 —— 把 `/goal`
+   *     整段交给模型，它会把命令词一起"优化"掉，那条命令就废了；只有命令没正文时
+   *     直接提示、**不发请求**（省一次调用）。
+   *  2. **写回前比对**：飞行期间用户可能又打了字，整体覆盖会把他新写的内容吃掉，
+   *     所以拿到结果先比一次草稿，不一致就不写回并如实说明。
+   *  3. **秒表**：非流式下唯一能给出的"它还活着"的证据；起点记在信号里，
+   *     面板与工具行那枚按钮共用同一个读数（见 optimize-clock.ts）。
+   */
+  const runOptimize = (): void => {
+    if (optimizing.getSnapshot()) return
+    const draft = currentDraft()
+    if (draft.trim() === '') {
+      note('输入框是空的：先写点什么，再点优化')
+      return
+    }
+    const slash = splitSlashCommand(draft)
+    if (slash.prefix !== '' && slash.body === '') {
+      note(`${slash.prefix} 后面没有正文：命令本身不需要优化`)
+      return
+    }
+    const source = slash.prefix === '' ? draft : slash.body
+    const startedAt = Date.now()
+    optimizing.set(true)
+    optimizeStartedAt.set(startedAt)
+    note('正在优化…（等待模型响应）')
+    void optimizeDraft(source, live.getSnapshot().optimizerTier).then(
+      (result) => {
+        optimizing.set(false)
+        optimizeStartedAt.set(0)
+        const used = elapsedText(startedAt, Date.now())
+        if (!result.ok) {
+          note(`优化失败（用时 ${used} 秒）：${result.error ?? '未知原因'}`)
+          return
+        }
+        // 写回前比对：不一致就不覆盖。宁可这次结果不写回，也不吃掉用户刚写下的内容。
+        if (!sameDraft(draft, currentDraft())) {
+          note(`输入框在优化期间被改过，这次没有写回（用时 ${used} 秒）：再点一次会以当前内容为准`)
+          return
+        }
+        replaceDraft(composeOptimizedDraft(slash.prefix, result.text ?? ''))
+        focusComposer()
+        // 状态行如实交代这一轮到底发生了什么（0.6.0 起宿主会回报记账信息）：
+        // 用了几个条目、丢了几条、走没走降级/重试 —— 用户据此判断这次优化可不可信。
+        const bits: string[] = []
+        if (result.fallback === true) bits.push('模型没按条目契约输出，已整段照收（未校验依据）')
+        else bits.push(`${String(result.itemCount ?? 0)} 条补全`)
+        const lost = result.dropped?.length ?? 0
+        if (lost > 0) bits.push(`丢弃 ${String(lost)} 条`)
+        if (result.promptSource === 'custom') bits.push('自定义提示词')
+        if (result.retried === true) bits.push('重试过一次')
+        if (slash.prefix !== '') bits.push(`保留命令 ${slash.prefix}`)
+        note(`已写回输入框（${result.route}）· ${bits.join(' · ')} · 用时 ${used} 秒 · Ctrl+Z 可还原`)
+      },
+      (error: unknown) => {
+        optimizing.set(false)
+        optimizeStartedAt.set(0)
+        note(`优化失败：${error instanceof Error ? error.message : String(error)}`)
+      },
+    )
+  }
+
   const quickActions = {
     toggle: (anchor: { left: number; bottom: number; width: number }): void => {
-      if (panel.getSnapshot() !== null) {
+      // 同一枚按钮再点一次 = 收起；从另一枚按钮（✨ 优化）点过来 = 换个锚点继续开着。
+      if (sameAnchor(panel.getSnapshot(), anchor)) {
         panel.set(null)
         panelNotice.set('')
         return
@@ -357,40 +427,15 @@ export function apply(ctx: any): void {
     insert: (text: string): void => {
       if (insertIntoDraft(text)) focusComposer()
     },
-    optimize: (): void => {
-      if (optimizing.getSnapshot()) return
-      const draft = currentDraft()
-      if (draft.trim() === '') {
-        note('输入框是空的：先写点什么，再点优化')
-        return
-      }
-      optimizing.set(true)
-      note('正在优化…')
-      void optimizeDraft(draft, live.getSnapshot().optimizerTier).then(
-        (result) => {
-          optimizing.set(false)
-          if (!result.ok) {
-            note(`优化失败：${result.error ?? '未知原因'}`)
-            return
-          }
-          replaceDraft(result.text ?? '')
-          focusComposer()
-          // 状态行如实交代这一轮到底发生了什么（0.6.0 起宿主会回报记账信息）：
-          // 用了几个条目、丢了几条、走没走降级/重试 —— 用户据此判断这次优化可不可信。
-          const bits: string[] = []
-          if (result.fallback === true) bits.push('模型没按条目契约输出，已整段照收（未校验依据）')
-          else bits.push(`${String(result.itemCount ?? 0)} 条补全`)
-          const lost = result.dropped?.length ?? 0
-          if (lost > 0) bits.push(`丢弃 ${String(lost)} 条`)
-          if (result.promptSource === 'custom') bits.push('自定义提示词')
-          if (result.retried === true) bits.push('重试过一次')
-          note(`已写回输入框（${result.route}）· ${bits.join(' · ')} · Ctrl+Z 可还原`)
-        },
-        (error: unknown) => {
-          optimizing.set(false)
-          note(`优化失败：${error instanceof Error ? error.message : String(error)}`)
-        },
-      )
+    optimize: runOptimize,
+    /**
+     * 工具行那枚独立按钮用的入口：先把面板打开（结果与状态行显示在那儿），再立刻开跑。
+     * 两步合成一步是这枚按钮存在的唯一理由（原来是"开面板 → 点面板里的按钮"）。
+     */
+    openAndOptimize: (anchor: QuickPanelAnchor): void => {
+      panelNotice.set('')
+      panel.set(anchor)
+      runOptimize()
     },
     setTier: (tier: OptimizerTier): void => { setField(OPTIMIZER_TIER_FIELD, tier) },
     /**
@@ -447,6 +492,19 @@ export function apply(ctx: any): void {
     inject: () => ({ hooks: { live }, actions: { setField } }),
   }, PanelResizeHandles))
 
+  // 「优化提示词」独立按钮：紧挨「快捷指令」按钮的**左侧**
+  // （order 88 < 快捷指令的 89 < 官方「展开」的 90）。
+  slots.inject('conversation.input.right', () => slots.register({
+    name: 'conversation.input.right',
+    id: 'composer-ux-optimize',
+    order: 88,
+    label: '优化提示词',
+    inject: () => ({
+      hooks: { live, busy: optimizing, startedAt: optimizeStartedAt },
+      actions: { openAndOptimize: quickActions.openAndOptimize },
+    }),
+  }, OptimizeButton))
+
   // 「快捷指令」入口按钮：与官方「展开」按钮同排（order 89 < 展开的 90）。
   slots.inject('conversation.input.right', () => slots.register({
     name: 'conversation.input.right',
@@ -464,7 +522,7 @@ export function apply(ctx: any): void {
     name: 'shell.overlay',
     id: 'composer-ux-quick-panel',
     inject: () => ({
-      hooks: { live, panel, busy: optimizing, notice: panelNotice, book, bookStatus },
+      hooks: { live, panel, busy: optimizing, startedAt: optimizeStartedAt, notice: panelNotice, book, bookStatus },
       actions: {
         toggle: quickActions.toggle,
         close: quickActions.close,

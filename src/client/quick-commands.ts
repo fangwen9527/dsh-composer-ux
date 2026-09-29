@@ -164,6 +164,78 @@ export function replaceDraft(text: string): boolean {
   return true
 }
 
+/**
+ * 优化已用秒数（向下取整）。
+ *
+ * `startedAt <= 0` 表示"没有在跑"，返回 0（调用方据此决定要不要显示秒表）。
+ * 刻意做成纯函数（`now` 由调用方传）：计时器在测试里不可控，而这段算术必须可验证。
+ *
+ * @param startedAt - 这次优化的起始时刻（`Date.now()`，0 = 没在跑）。
+ * @param now - 当前时刻。
+ * @returns 已用整秒数；没在跑时 0。
+ */
+export function elapsedSeconds(startedAt: number, now: number): number {
+  const ms = now - startedAt
+  if (!Number.isFinite(ms) || startedAt <= 0 || ms <= 0) return 0
+  return Math.floor(ms / 1000)
+}
+
+/**
+ * 优化耗时文案（秒，一位小数）。
+ *
+ * 为什么不复用 {@link elapsedSeconds}：一次真实调用可能不到 1 秒（假模型/本地路由），
+ * 取整会显示成「用时 0 秒」——那个读数看起来像出错。
+ */
+export function elapsedText(startedAt: number, now: number): string {
+  const ms = now - startedAt
+  if (!Number.isFinite(ms) || startedAt <= 0 || ms < 0) return '—'
+  return (ms / 1000).toFixed(1)
+}
+
+/**
+ * 写回前的比对：输入框里还是发起时那一份草稿吗。
+ *
+ * 只比 trim 后的结果 —— 用户敲了个空格不该算"改过"（那会让一次真花了钱的优化白跑），
+ * 但任何**实质**改动都必须算改过：否则我们会把他刚打的新内容整段吃掉。
+ *
+ * @param before - 发起优化时抓取的草稿。
+ * @param after - 拿到结果时输入框里的草稿。
+ * @returns 是否可以把结果整体写回去。
+ */
+export function sameDraft(before: string, after: string): boolean {
+  return before.trim() === after.trim()
+}
+
+/**
+ * 把优化结果拼回输入框：命令前缀原样保留，正文用优化稿。
+ *
+ * @param prefix - 斜杠命令前缀（没有就是空串）。
+ * @param optimized - 宿主回来的成品正文。
+ * @returns 准备写进输入框的完整文本。
+ */
+export function composeOptimizedDraft(prefix: string, optimized: string): string {
+  return prefix === '' ? optimized : `${prefix} ${optimized}`
+}
+
+/**
+ * 这次点击是不是落在"面板当前锚着的那枚按钮"上。
+ *
+ * 0.11.1 起工具行有**两枚**按钮（✨ 优化、快捷指令）共用一个面板：从另一枚点过来时
+ * 面板该换个锚点继续开着，而不是关掉（并排两枚按钮，点右边那枚却把面板收起，看起来
+ * 像点错了）。浮点矩形不会完全相等，所以给 1px 容差。
+ *
+ * @param current - 面板当前锚点（null = 面板关着）。
+ * @param next - 这次点击的按钮矩形。
+ * @returns 是否算同一枚按钮。
+ */
+export function sameAnchor(
+  current: { left: number; bottom: number } | null,
+  next: { left: number; bottom: number },
+): boolean {
+  if (current === null) return false
+  return Math.abs(current.left - next.left) < 1 && Math.abs(current.bottom - next.bottom) < 1
+}
+
 /** 把焦点交还输入框（插入/写回之后调用，方便接着打字）。 */
 export function focusComposer(): void {
   const el = document.querySelector(COMPOSER_SELECTOR)

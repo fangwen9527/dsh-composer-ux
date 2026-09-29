@@ -8,6 +8,7 @@
 export {
   DEFAULT_SETTINGS, DEFAULT_QUICK_PROMPTS, OPTIMIZER_API_PATH, OPTIMIZER_TIERS,
   QUICK_LABEL_MAX, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, sanitizeSettings,
+  SLASH_COMMAND_RE, splitSlashCommand,
 } from '../src/settings-contract.ts'
 export {
   DEFAULT_CATEGORY_NAME, OPTIMIZE_TEXT_MAX, QUICK_BOOK_VERSION, QUICK_CATEGORY_MAX,
@@ -24,6 +25,8 @@ export {
  */
 export {
   applyPromptsForSend, publishInputBridge, sendButtonOf, withPromptsAppended,
+  // 0.11.1：秒表读数、写回前比对、斜杠前缀拼回、两枚按钮的锚点判定 —— 全是纯函数。
+  composeOptimizedDraft, elapsedSeconds, elapsedText, sameAnchor, sameDraft,
 } from '../src/client/quick-commands.ts'
 export {
   bookCounts, findPrompt, promptsElsewhere,

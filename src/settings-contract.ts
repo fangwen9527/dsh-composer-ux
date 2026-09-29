@@ -360,6 +360,33 @@ export const OPTIMIZE_OUTPUT_MAX = 12000
 export const OPTIMIZER_API_PATH = '/composer-ux/optimize'
 
 /**
+ * 斜杠命令前缀（`/goal`、`/compact` 这类）。
+ *
+ * 优化只处理命令**后面的正文**，写回时把前缀原样拼回 —— 否则模型会把 `/goal`
+ * 也当成一句话去"优化"，把命令词改坏、这条命令自然就失效了。
+ *
+ * 只认「`/` + 字母开头 + 单词字符」：`/path/to/file` 这种路径不会命中（第二段
+ * 以 `/` 开头，`\s+` 匹配不上），所以不会被误当成命令拆开。
+ * 两端共用这一份判定：客户端拆前缀，宿主侧另有一道「纯命令不收」的防御。
+ */
+export const SLASH_COMMAND_RE = /^(\/[A-Za-z][\w-]*)(?:\s+([\s\S]+))?$/
+
+/**
+ * 拆出斜杠命令前缀与待优化的正文。
+ *
+ * 不是命令时前缀是空串、正文原样返回；是「只有命令、没有正文」时正文是空串
+ * ——调用方据此提示并**不发请求**（送一条命令词给模型没有任何意义）。
+ *
+ * @param text - 输入框里的原文（未 trim）。
+ * @returns 前缀（含 `/`）与正文（已 trim）。
+ */
+export function splitSlashCommand(text: string): { prefix: string; body: string } {
+  const matched = SLASH_COMMAND_RE.exec(text)
+  if (matched === null) return { prefix: '', body: text }
+  return { prefix: matched[1] ?? '', body: (matched[2] ?? '').trim() }
+}
+
+/**
  * 一条快捷指令。
  *
  * `always` 就是界面上的「默认插入」：勾上之后，点发送时这条提示词会被

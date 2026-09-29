@@ -33,6 +33,7 @@ import {
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
+  splitSlashCommand,
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
   SYNC_API_PATH,
@@ -761,14 +762,64 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }
 
+    /**
+     * 该路由能选的最省推理档。
+     *
+     * 为什么需要：优化是"给它一条草稿、让它吐条目"的短任务，而用户当前的默认模型
+     * 可能是推理模型 —— 不指定档位时它按自己的默认档先想很久，首 token 前纯空转
+     * （对方 0.3.17 实测"推理模型首 token 前的空转显著缩短"，做法也是钳最低档）。
+     * 所以这里按路由**真实暴露**的档位选最省的那一档；**查不到就什么都不传**
+     * ——绝不乱造一个适配器不认的值，拿不准时不冒险。
+     */
+    const EFFORT_MIN_RE = /none|minimal|low|低|off/i
+    /** 解析结果缓存（同一个 provider/model 只问一次；失败不缓存，下次再试）。 */
+    const effortCache = new Map<string, { id: string; at: number }>()
+    const EFFORT_CACHE_MS = 10 * 60_000
+
+    const lowestReasoningEffort = async (provider: string, model: string): Promise<string> => {
+      const key = `${provider}\u0000${model}`
+      const hit = effortCache.get(key)
+      if (hit !== undefined && Date.now() - hit.at < EFFORT_CACHE_MS) return hit.id
+      try {
+        const llm = optCtx.llm as unknown as {
+          resolveModelInfo?: (p: string, m: string, signal?: AbortSignal) => Promise<unknown>
+        }
+        const info = objectOf(await llm.resolveModelInfo?.(provider, model))
+        const reasoning = objectOf(info?.reasoning)
+        const raw = Array.isArray(reasoning?.efforts) ? reasoning.efforts : []
+        const rows = raw
+          .map(row => objectOf(row))
+          .filter((row): row is Record<string, unknown> => row !== undefined)
+        if (rows.length === 0) return ''
+        // 名字里带 none/minimal/low/off/低 的就是最省那档；都没有就取适配器展示顺序的首位。
+        const picked = rows.find(row => EFFORT_MIN_RE.test(textOf(row.id)) || EFFORT_MIN_RE.test(textOf(row.name)))
+          ?? rows[0]
+        const id = textOf(picked?.id)
+        if (id === '') return ''
+        effortCache.set(key, { id, at: Date.now() })
+        return id
+      } catch {
+        return ''
+      }
+    }
+
     const handle = async (
       req: { method?: string; [key: string]: unknown },
-      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      res: {
+        writeHead: (code: number, headers: Record<string, string>) => void
+        end: (body: string) => void
+        statusCode?: number
+        on?: (event: string, listener: () => void) => unknown
+      },
     ): Promise<void> => {
       if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
         sendJson(res, 405, { ok: false, error: '只接受 POST' })
         return
       }
+      // 官方信任关卡（见 rejectUntrustedRequest）：这条路由动的是**用户的模型额度**
+      // 和**用户的原话**，是"钱 + 数据"两样都碰的接口，必须挡在最前面 ——
+      // 位置刻意在读请求体之前：被拒的请求连 body 都不读。
+      if (rejectUntrustedRequest(optCtx as never, req, res as never)) return
       let payload: Record<string, unknown>
       try {
         payload = objectOf(JSON.parse(await readBody(req as unknown as AsyncIterable<unknown>)))
@@ -783,7 +834,17 @@ export function apply(ctx: Context, config?: unknown): void {
         sendJson(res, 400, { ok: false, error: '输入框是空的，没有可优化的内容' })
         return
       }
-      if (text.length > TEXT_MAX) {
+      // 斜杠命令（`/goal 帮我写周报`）：只优化命令**后面的正文**，前缀由调用方拼回。
+      // 客户端已经拆过一次，这里是第二道门 —— 真收到"只有命令、没有正文"就如实拒绝，
+      // 别把一条命令词丢给模型去"优化"（那只会把命令词改坏）。
+      const slash = splitSlashCommand(text)
+      if (slash.prefix !== '' && slash.body === '') {
+        sendJson(res, 400, { ok: false, error: `「${slash.prefix}」后面没有正文，没有可优化的内容` })
+        return
+      }
+      /** 真正送去模型的那段正文（命令前缀不进模型）。 */
+      const body = slash.prefix === '' ? text : slash.body
+      if (body.length > TEXT_MAX) {
         sendJson(res, 400, { ok: false, error: `原文过长（上限 ${TEXT_MAX} 字符）` })
         return
       }
@@ -804,6 +865,19 @@ export function apply(ctx: Context, config?: unknown): void {
       const controller = new AbortController()
       const timer = setTimeout(() => { controller.abort() }, LLM_TIMEOUT_MS)
 
+      /**
+       * 客户端断连（关页面/切走）就中止这次调用，不再白烧额度。
+       *
+       * 用 `res` 的 close 而**不是** `req` 的：`req` 的 close 在请求体读完就触发，
+       * 那时客户端还好端端连着（对方 0.3.17 的注释里记着同一个坑）。
+       * `settled` 是必须的：正常回完响应后 close 同样会触发，那时不该再 abort。
+       */
+      let settled = false
+      res.on?.('close', () => { if (!settled) controller.abort() })
+
+      // 钳到该路由最省的推理档（查不到就是空串 = 什么都不传）。
+      const effort = await lowestReasoningEffort(route.provider, route.model)
+
       /** 跑一次模型调用，返回原始正文与失败原因（重试时会被调用第二次）。 */
       const runOnce = async (userText: string): Promise<{ out: string; failure: string }> => {
         let out = ''
@@ -814,6 +888,7 @@ export function apply(ctx: Context, config?: unknown): void {
             model: route.model,
             system,
             temperature: buildOptimizeTemperature(tier),
+            ...(effort === '' ? {} : { reasoningEffort: effort }),
             signal: controller.signal,
             messages: [{
               id: `optimize-${Date.now().toString(36)}`,
@@ -844,17 +919,19 @@ export function apply(ctx: Context, config?: unknown): void {
       let retried = false
       let result: { out: string; failure: string }
       try {
-        result = await runOnce(buildOptimizeUser(text))
+        result = await runOnce(buildOptimizeUser(body))
         // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
         // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
         // 只在**没报错**时重试（报错重试一次只是白等一轮）。
         if (result.out.trim() === '' && result.failure === '') {
           retried = true
-          const second = await runOnce(buildOptimizeUser(text, { retry: true, reason: '宿主没有收到任何条目' }))
+          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目' }))
           if (second.out.trim() !== '') result = second
           else if (result.failure === '') result = second
         }
       } finally {
+        // 模型那一段结束了：此后的装配是本机计算，客户端再断连也没有东西可中止。
+        settled = true
         clearTimeout(timer)
       }
 
@@ -868,7 +945,7 @@ export function apply(ctx: Context, config?: unknown): void {
       }
 
       // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
-      const assembled = runOptimizePipeline(result.out, text, { tier })
+      const assembled = runOptimizePipeline(result.out, body, { tier })
       if (!assembled.ok) {
         sendJson(res, 200, {
           ok: false,
@@ -961,13 +1038,20 @@ export function apply(ctx: Context, config?: unknown): void {
 
     const handle = async (
       req: { method?: string; [key: string]: unknown },
-      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+      res: {
+        writeHead: (code: number, headers: Record<string, string>) => void
+        end: (body: string) => void
+        statusCode?: number
+      },
     ): Promise<void> => {
       const method = (req.method ?? 'GET').toUpperCase()
       if (method !== 'GET' && method !== 'POST') {
         sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
         return
       }
+      // 官方信任关卡（见 rejectUntrustedRequest）：这条路由会**把用户的提示词库写盘**，
+      // POST 就是一次覆盖写 —— 与"金额"那一批同样不许裸奔。
+      if (rejectUntrustedRequest(storeCtx as never, req, res as never)) return
 
       const file = quickStorePath()
       // 每次请求都尝试一次「缺失即迁移」；文件存在时它什么也不做。

@@ -392,6 +392,65 @@ console.log('3. 发送按钮识别（不依赖界面文案）')
     pure.sendButtonOf(card({ stop: true, innerSvg: new FakeSvgNode() }).innerSvg) === null)
 }
 
+// ══════════════ 3b. 斜杠命令 / 秒表 / 写回前比对（0.11.1） ═══════════════════
+console.log('3b. 斜杠命令拆分、秒表读数、写回前比对（纯函数）')
+
+{
+  // 斜杠命令：只把命令**后面的正文**交出去，前缀原样保留。
+  const cases = [
+    ['/goal 帮我写周报', '/goal', '帮我写周报'],
+    ['/goal   帮我写周报  ', '/goal', '帮我写周报'],
+    ['/compact', '/compact', ''],
+    ['帮我写周报', '', '帮我写周报'],
+    // `/path/to/file` 是路径不是命令（第二段以 `/` 开头，`\s+` 匹配不上）——必须整段照旧优化。
+    ['/path/to/file 这个报错怎么修', '', '/path/to/file 这个报错怎么修'],
+    ['//双斜杠 不是命令', '', '//双斜杠 不是命令'],
+    ['/goal\n多行正文', '/goal', '多行正文'],
+  ]
+  for (const [input, prefix, body] of cases) {
+    const got = pure.splitSlashCommand(input)
+    check(`拆分「${input.replace('\n', '\\n')}」→ 前缀 ${prefix === '' ? '(无)' : prefix}`,
+      got.prefix === prefix && got.body === body, JSON.stringify(got))
+  }
+  check('命令后面只有空白 → 正文为空（调用方据此不发请求）',
+    pure.splitSlashCommand('/goal   ').body === '')
+  check('前缀拼回：命令原样保留',
+    pure.composeOptimizedDraft('/goal', '写一份周报') === '/goal 写一份周报')
+  check('没有前缀时拼回就是成品本身',
+    pure.composeOptimizedDraft('', '写一份周报') === '写一份周报')
+}
+
+{
+  // 秒表：读数只依赖起始时刻；"跑没跑"由 startedAt 是否为 0 表示。
+  check('没在跑（startedAt = 0）→ 0 秒', pure.elapsedSeconds(0, 12_345) === 0)
+  check('刚起步不到 1 秒 → 0 秒（不虚报）', pure.elapsedSeconds(1_000, 1_800) === 0)
+  check('3.4 秒 → 3 秒（向下取整）', pure.elapsedSeconds(1_000, 4_400) === 3)
+  check('起始时刻在未来（时钟回拨）→ 0，绝不出现负数读数', pure.elapsedSeconds(9_000, 1_000) === 0)
+  check('耗时文案保留一位小数（0.4 秒不会被显示成 0 秒）', pure.elapsedText(1_000, 1_400) === '0.4')
+  check('耗时文案：没有起点时给一个破折号', pure.elapsedText(0, 1_400) === '—')
+}
+
+{
+  // 写回前比对：只有**实质**改动才算"改过"。
+  check('一字不差 → 可以写回', pure.sameDraft('把页面弄好看点', '把页面弄好看点') === true)
+  check('只差首尾空白 → 仍算没改（不白扔一次花了钱的优化）',
+    pure.sameDraft('把页面弄好看点', '  把页面弄好看点\n') === true)
+  check('用户又打了字 → 算改过（不许覆盖）',
+    pure.sameDraft('把页面弄好看点', '把页面弄好看点，另外加个导出') === false)
+  check('用户清空了输入框 → 算改过（覆盖与否交给调用方决定）',
+    pure.sameDraft('把页面弄好看点', '') === false)
+}
+
+{
+  // 两枚按钮共用一个面板：同一枚再点收起，从另一枚点过来换锚点继续开着。
+  const a = { left: 100, bottom: 200 }
+  const b = { left: 180, bottom: 200 }
+  check('面板关着 → 不算同一枚（这次要打开）', pure.sameAnchor(null, a) === false)
+  check('同一枚按钮（矩形一致）→ 收起', pure.sameAnchor(a, { left: 100, bottom: 200 }) === true)
+  check('同一枚按钮但差 0.4px（浮点矩形）→ 仍算同一枚', pure.sameAnchor(a, { left: 100.4, bottom: 200 }) === true)
+  check('另一枚按钮（并排的 ✨）→ 换锚点，不关面板', pure.sameAnchor(a, b) === false)
+}
+
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
 console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {
@@ -600,8 +659,13 @@ async function bootHost(options = {}) {
   ]
   let callIndex = 0
   const llm = {
+    // `options.resolveModelInfo` 让「钳推理档」的用例能造出路由真实暴露的档位表；
+    // 不传就与过去完全一样（服务上没有这个方法）。
+    ...(options.resolveModelInfo === undefined ? {} : { resolveModelInfo: options.resolveModelInfo }),
     stream: (callOptions) => {
       llmCalls.push(callOptions)
+      // `options.stream` 让"断连中止"这类用例自己控制流的节奏（默认是同步吐完）。
+      if (typeof options.stream === 'function') return options.stream(callOptions)
       const seq = options.chunksSeq
       const chunks = Array.isArray(seq)
         ? (seq[Math.min(callIndex, seq.length - 1)] ?? [])
@@ -945,6 +1009,168 @@ const json = res => JSON.parse(res.captured.body)
   await optimizerRoute(host).handler(makeReq('POST', JSON.stringify({ text: '原文' })), res)
   const body = json(res)
   check('模型零产出 → ok:false 并带原因', body.ok === false && body.error.includes('上游 502'), JSON.stringify(body))
+}
+
+// ══════════════ 5b. 信任关卡 / 斜杠命令 / 推理档 / 断连中止（0.11.1） ═══════
+console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中止')
+
+{
+  // 1) 两条路由都要先问官方那道信任关卡，且**被拒时连请求体都不读**。
+  const readFlag = { consumed: false }
+  const guardReq = () => ({
+    method: 'POST',
+    url: pure.OPTIMIZER_API_PATH,
+    async *[Symbol.asyncIterator]() {
+      readFlag.consumed = true
+      yield Buffer.from('{"text":"x"}', 'utf8')
+    },
+  })
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    connection: { requestRejection: () => 403 },
+  })
+
+  readFlag.consumed = false
+  const rejected = makeRes()
+  await handler0(host, guardReq(), rejected)
+  check('优化路由先问官方信任关卡：被拒就回官方给的状态码',
+    rejected.captured.status === 403, String(rejected.captured.status))
+  check('被拒时连请求体都不读（关卡摆在读 body 之前）', readFlag.consumed === false)
+  check('被拒时不发起任何模型调用', host.llmCalls.length === 0, String(host.llmCalls.length))
+
+  readFlag.consumed = false
+  const storeRejected = makeRes()
+  await storeRoute(host).handler(guardReq(), storeRejected)
+  check('快捷指令存储路由同样先问信任关卡（它会写用户提示词库）',
+    storeRejected.captured.status === 403, String(storeRejected.captured.status))
+  check('存储路由被拒时也不读请求体', readFlag.consumed === false)
+
+  // 宿主没有 connection 服务（老宿主/未注入）时，关卡缺席 ≠ 拒绝：照常工作。
+  const bare = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  const bareRes = makeRes()
+  await handler0(bare, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), bareRes)
+  check('没有 connection 服务时照常优化（缺席不等于拒绝）', json(bareRes).ok === true, bareRes.captured.body)
+}
+
+{
+  // 2) 斜杠命令：只把正文送去模型；前缀由调用方拼回。
+  const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal 把那个页面弄好看点', tier: 'advanced' })), res)
+  const body = json(res)
+  const sent = host.llmCalls[0].messages[0].content[0].text
+  check('斜杠命令：送去模型的是命令后面的正文', sent.includes('把那个页面弄好看点') && sent.includes('【待转达内容】'), sent.slice(0, 60))
+  check('斜杠命令：前缀不进模型（不然命令词会被改坏）', sent.includes('/goal') === false, sent.slice(0, 60))
+  check('斜杠命令：返回的成品不含前缀（拼回由调用方负责）',
+    body.ok === true && body.text.includes('/goal') === false, JSON.stringify(body.text))
+  check('斜杠命令：引文按正文比对，rewrite 正常回填',
+    body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
+
+  const onlyCmd = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal', tier: 'advanced' })), onlyCmd)
+  check('只有命令、没有正文 → 400，并说明原因',
+    onlyCmd.captured.status === 400 && /没有正文/.test(json(onlyCmd).error), onlyCmd.captured.body)
+  check('只有命令时确实没有发起模型调用', host.llmCalls.length === 1, String(host.llmCalls.length))
+
+  const pathLike = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/path/to/file 这个报错怎么修', tier: 'advanced' })), pathLike)
+  check('`/path/...` 不是命令：整段照旧送去优化（不误拆）',
+    host.llmCalls[1].messages[0].content[0].text.includes('/path/to/file 这个报错怎么修'),
+    host.llmCalls[1].messages[0].content[0].text.slice(0, 80))
+}
+
+{
+  // 3) 推理强度：按路由真实暴露的档位钳最低；拿不准就什么都不传。
+  const infoWith = efforts => () => Promise.resolve({ provider: 'go', model: 'm', name: 'm', reasoning: { efforts } })
+  const run = async host => {
+    const res = makeRes()
+    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+    return res
+  }
+
+  const byName = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    resolveModelInfo: infoWith([{ id: 'high', name: '高' }, { id: 'low', name: '低' }]),
+  })
+  await run(byName)
+  check('钳到路由最省的推理档（按 name 里的「低」）',
+    byName.llmCalls[0].reasoningEffort === 'low', String(byName.llmCalls[0].reasoningEffort))
+
+  const byId = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    resolveModelInfo: infoWith([{ id: 'xhigh', name: '最高' }, { id: 'off', name: '关闭' }]),
+  })
+  await run(byId)
+  check('按 id 里的 off 也能认出来最低档',
+    byId.llmCalls[0].reasoningEffort === 'off', String(byId.llmCalls[0].reasoningEffort))
+
+  const fallbackFirst = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    resolveModelInfo: infoWith([{ id: 'xhigh', name: '最高' }, { id: 'mid', name: '中' }]),
+  })
+  await run(fallbackFirst)
+  check('没有像「低」的档 → 取适配器展示顺序首位',
+    fallbackFirst.llmCalls[0].reasoningEffort === 'xhigh', String(fallbackFirst.llmCalls[0].reasoningEffort))
+
+  const none = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  await run(none)
+  check('路由不暴露档位表 → 不传 reasoningEffort（绝不乱造值）',
+    Object.prototype.hasOwnProperty.call(none.llmCalls[0], 'reasoningEffort') === false,
+    JSON.stringify(Object.keys(none.llmCalls[0])))
+
+  const throwing = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    resolveModelInfo: () => { throw new Error('adapter exploded') },
+  })
+  const thrownRes = await run(throwing)
+  check('档位解析抛错也不拖垮这次优化',
+    json(thrownRes).ok === true
+    && Object.prototype.hasOwnProperty.call(throwing.llmCalls[0], 'reasoningEffort') === false,
+    thrownRes.captured.body)
+}
+
+{
+  // 4) 断连即中止：客户端关页面/切走时不再白烧额度。
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    stream: (callOptions) => (async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"items":[' }
+      await gate
+      // 真实适配器 signal 被 abort 后会停止产出、并以 aborted 收尾 —— 这里如实照做，
+      // 于是"断连"这一路走的就是真机的路径（半截 JSON → BAD_JSON → 不写回）。
+      if (callOptions.signal?.aborted === true) {
+        yield { type: 'finish', reason: { kind: 'aborted' } }
+        return
+      }
+      yield { type: 'text-delta', index: 0, text: ']}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })(),
+  })
+  const captured = { status: 0, body: '' }
+  const listeners = []
+  const res = {
+    writeHead(code) { captured.status = code },
+    end(body) { captured.body = body },
+    on(event, listener) { listeners.push([event, listener]); return this },
+    get statusCode() { return captured.status },
+    set statusCode(code) { captured.status = code },
+  }
+
+  const pending = handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await new Promise(resolve => { setTimeout(resolve, 20) })
+  check('优化进行中在 res 上挂了 close 监听（用 res 而不是 req）',
+    listeners.some(([event]) => event === 'close'), JSON.stringify(listeners.map(([event]) => event)))
+  const signal = host.llmCalls[0]?.signal
+  check('模型调用带上了 abort signal（这次调用可被打断）', signal !== undefined && signal.aborted === false)
+
+  for (const [event, listener] of listeners) if (event === 'close') listener()
+  release()
+  await pending
+  check('客户端断连 → 这次模型调用被 abort', signal.aborted === true)
+  check('断连后不假装成功：如实回失败',
+    captured.status === 200 && json({ captured }).ok === false, captured.body)
 }
 
 // ══════════════ 6. 宿主半真实注册的 settings schema ═════════════════════════

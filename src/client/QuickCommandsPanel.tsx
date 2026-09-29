@@ -20,6 +20,7 @@ import {
 import { bookCounts } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
+import { useOptimizeElapsed } from './optimize-clock.ts'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
 import {
   quickAlwaysBox, quickAlwaysLabel, quickCategoryAdd, quickCategoryRow, quickCategoryTab,
@@ -38,6 +39,8 @@ export interface QuickPanelInjected {
     panel: SnapshotStore<QuickPanelAnchor | null>
     /** 是否有一次优化在飞。 */
     busy: SnapshotStore<boolean>
+    /** 这次优化的起始时刻（0 = 没在跑；秒表读数由它算）。 */
+    startedAt: SnapshotStore<number>
     /** 面板状态提示（空串 = 无）。 */
     notice: SnapshotStore<string>
     /** 快捷指令本（真相在磁盘那份 quick-prompts.json）。 */
@@ -78,17 +81,20 @@ const GAP = 8
 
 /** 展开面板。 */
 export function QuickCommandsPanel({
-  useLive, usePanel, useBusy, useNotice, useBook, useBookStatus, actions,
+  useLive, usePanel, useBusy, useStartedAt, useNotice, useBook, useBookStatus, actions,
 }: QuickCommandsPanelProps) {
   const settings = useLive(item => item)
   const anchor = usePanel(item => item)
   const busy = useBusy(item => item)
+  const startedAt = useStartedAt(item => item)
   const notice = useNotice(item => item)
   const book = useBook(item => item)
   const status = useBookStatus(item => item)
   const ref = useRef<HTMLDivElement | null>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const [activeId, setActiveId] = useState('')
+  // 秒表：非流式下能显示的最细阶段就是"等待模型响应"，所以这里只报已等待秒数。
+  const seconds = useOptimizeElapsed(busy ? startedAt : 0)
 
   const counts = bookCounts(book)
   const categories = book.categories
@@ -175,7 +181,7 @@ export function QuickCommandsPanel({
           onClick={() => { actions.optimize() }}
         >
           <span aria-hidden>✨</span>
-          <span>{busy ? '优化中…' : '优化提示词'}</span>
+          <span>{busy ? `优化中…（${String(seconds)}s）` : '优化提示词'}</span>
         </button>
         <div style={quickCategoryRow}>
           {categories.map(category => (

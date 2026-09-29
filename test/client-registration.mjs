@@ -201,10 +201,11 @@ moduleExports.apply(ctx)
 const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
-check('注册了 7 个槽位条目', registrations.length === 7, JSON.stringify(registrations.map(r => r.id)))
+check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
 check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
 check('面板缩放手柄', byId('composer-ux-panel-resize')?.name === 'shell.overlay')
+check('优化按钮（0.11.1 新增，与快捷指令同槽）', byId('composer-ux-optimize')?.name === 'conversation.input.right')
 check('快捷指令按钮', byId('composer-ux-quick')?.name === 'conversation.input.right')
 check('快捷指令面板', byId('composer-ux-quick-panel')?.name === 'shell.overlay')
 check('统计行隐形条目', byId('composer-ux-stats-line')?.name === 'conversation.composer.dock')
@@ -214,6 +215,53 @@ check('每个条目都带组件', registrations.every(entry => typeof entry.comp
 console.log('2. 按钮与「展开」同排（order 89 < 官方的 90）')
 check('按钮 order = 89', byId('composer-ux-quick')?.order === 89, String(byId('composer-ux-quick')?.order))
 check('按钮带标签（便于导航投影）', byId('composer-ux-quick')?.label === '快捷指令')
+
+console.log('2.0 优化按钮：排在快捷指令左侧（88 < 89 < 官方展开的 90）')
+{
+  const optimize = byId('composer-ux-optimize')
+  check('order = 88（在快捷指令按钮左侧）', optimize?.order === 88, String(optimize?.order))
+  check('排在快捷指令之前',
+    (optimize?.order ?? 99) < (byId('composer-ux-quick')?.order ?? -1),
+    `${String(optimize?.order)} vs ${String(byId('composer-ux-quick')?.order)}`)
+  check('标签便于导航投影', optimize?.label === '优化提示词')
+  const injected = optimize?.inject()
+  check('拿到 openAndOptimize 动作', typeof injected?.actions?.openAndOptimize === 'function')
+  check('拿到 busy 与 startedAt（秒表读数）',
+    typeof injected?.hooks?.busy?.getSnapshot === 'function'
+    && typeof injected?.hooks?.startedAt?.getSnapshot === 'function')
+  check('拿到设置快照（跟随「快捷指令」开关）',
+    typeof injected?.hooks?.live?.getSnapshot === 'function')
+}
+
+console.log('2.0b 优化流程的三处护栏（0.11.1）')
+{
+  // 这三条是**行为契约**，而它们在 node 里跑不到（要走真浏览器与真模型），所以按
+  // 源码文本钉住：谁把它们删了，这里就红。注释先剥掉，免得注释里的说明把判据蒙过去。
+  const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const source = strip(readFileSync('src/client.tsx', 'utf8'))
+  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8'))
+  const button = strip(readFileSync('src/client/OptimizeButton.tsx', 'utf8'))
+
+  check('写回前比对草稿（飞行期间用户改了字就不覆盖）',
+    source.includes('sameDraft(draft, currentDraft())'))
+  check('写回时把斜杠命令前缀拼回', source.includes('composeOptimizedDraft(slash.prefix, result.text'))
+  check('斜杠命令：只把正文送去优化',
+    source.includes("const source = slash.prefix === '' ? draft : slash.body"))
+  check('只有命令没正文 → 提示且不发请求', source.includes('后面没有正文'))
+  // 这条曾经写成"数一数 optimizeStartedAt.set( 出现 3 次"——计数对**参数**不敏感，
+  // 变异 CV（把真实起点换成 0）照样能过。所以拆成两条：起点必须是**真时刻**、
+  // 收尾必须是**两次清 0**（成功与失败各一条）。
+  check('秒表起点写的是发起时的真实时刻（不是 0）',
+    source.includes('optimizeStartedAt.set(startedAt)'))
+  check('秒表收尾：成功与失败两条路都清 0',
+    (source.match(/optimizeStartedAt\.set\(0\)/g) ?? []).length === 2,
+    String((source.match(/optimizeStartedAt\.set\(0\)/g) ?? []).length))
+  check('独立按钮与面板显示同一个秒表读数（两处文案一致）',
+    button.includes('优化中…（${String(seconds)}s）') && panel.includes('优化中…（${String(seconds)}s）'))
+  check('没在跑时不起计时器（读数回到 0）', button.includes('useOptimizeElapsed(busy ? startedAt : 0)')
+    && panel.includes('useOptimizeElapsed(busy ? startedAt : 0)'))
+  check('独立按钮点击 = 开面板 + 立刻开跑', source.includes('openAndOptimize: (anchor: QuickPanelAnchor)'))
+}
 
 console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')
 {

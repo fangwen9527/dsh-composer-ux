@@ -36,4 +36,16 @@ jobs:
       - name: 构建
         run: npm run build
       - name: 全量测试（18 套件）
-        run: npm test
+        # 用 bash 跑（三个平台都有）：失败时把关键行用 `::error::` 发成**注解**，
+        # 这样远程（没有 admin 权限下不到 job log）也能从 check-run 的 annotations 里读到原因。
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -nE "✗|Error|error:|not found|Cannot|failed" test-output.log | tail -30 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"

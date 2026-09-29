@@ -339,6 +339,20 @@ console.log('2.0d 字段常量必须真的 import 进来（typecheck 抓到的�
   }
 }
 
+console.log('2.0e 非浏览器环境下的健壮性（Node 20 没有全局 navigator）')
+{
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+    .filter(line => !/^\s*\/\//.test(line)).join('\n')
+  const interceptors = strip(readFileSync('src/client/interceptors.ts', 'utf8'))
+  // Node 22 才把 `navigator`（连剪贴板）补成全局；Node 20 及更早读它就是 ReferenceError。
+  // 0.12.0 三平台 CI 里三个平台**同时**在测试步骤崩掉，就是 `prefetchClipboard` 直接读
+  // `navigator.clipboard` —— 这条护栏让它在默认（Node 24）本地跑里也能被挡住。
+  check('预读剪贴板前先判 navigator 存在',
+    /function prefetchClipboard[\s\S]{0,500}?typeof navigator === 'undefined'/.test(interceptors))
+  check('剪贴板粘贴路径同样先判环境',
+    interceptors.includes("typeof navigator === 'undefined' || navigator.clipboard === undefined"))
+}
+
 console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')
 {
   const stats = byId('composer-ux-stats-line')

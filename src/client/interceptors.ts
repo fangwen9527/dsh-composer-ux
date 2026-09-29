@@ -63,6 +63,11 @@ let pasteCache: string | null = null
 /** 在右键手势里发起一次静默预读：授权浮窗此刻出现，用户顺手点一次即可。 */
 function prefetchClipboard(): void {
   pasteCache = null
+  // ⚠️ 先判 `navigator` 是否存在，再谈 `clipboard`：**Node 20 及更早没有全局 `navigator`**
+  // （Node 22 才把它连剪贴板一起补上），直接读会抛 ReferenceError 把整个右键处理打断。
+  // 浏览器里它当然一直在 —— 但这段代码也会在非浏览器环境被求值（测试、SSR、打包分析），
+  // 而"少一个可选功能"不该表现成"右键炸了"。CI 的 Node 20 矩阵就是靠这条红的抓到的。
+  if (typeof navigator === 'undefined') return
   const readText = (navigator as Navigator & { clipboard?: { readText?: () => Promise<string> } }).clipboard?.readText
   if (typeof readText !== 'function') return
   readText.call(navigator.clipboard).then(

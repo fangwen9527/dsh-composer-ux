@@ -923,6 +923,16 @@ const cases = [
     test: 'test/client-registration.mjs',
     expect: '用到的字段常量都 import/定义过',
   },
+  {
+    // Node 20（CI 的矩阵版本）没有全局 navigator；去掉这句守卫，三个平台的测试步骤会一起崩
+    // —— 0.12.0 首次跑三平台 CI 时就是这样，本地 Node 24 反而看不见。
+    name: 'DF 预读剪贴板不再判 navigator 是否存在（Node 20 上右键直接 ReferenceError）',
+    file: 'src/client/interceptors.ts',
+    from: "  if (typeof navigator === 'undefined') return\n  const readText = (navigator as Navigator",
+    to: '  const readText = (navigator as Navigator',
+    test: 'test/client-registration.mjs',
+    expect: '预读剪贴板前先判 navigator 存在',
+  },
 ]
 
 let allBit = true

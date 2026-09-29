@@ -614,6 +614,136 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
 }
 
 
+// ══════════════ 4c. 逐条流式扫描（0.12.0 的「边写边看」） ═════════════════════
+console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
+
+{
+  const original = '把那个页面弄好看点，另外加个导出'
+  // 手写 JSON（不用 JSON.stringify）是为了能精确知道"第几个 } 闭合了第几条"。
+  const raw = '{"items":['
+    + '{"kind":"rewrite","quote":"把那个页面弄好看点","text":"把设置页做得好看点"},'
+    + '{"kind":"requirement","quote":"弄好看点","text":"改完页面能正常打开"},'
+    + '{"kind":"requirement","quote":"我没说过这句话","text":"顺便把数据库也换了"}'
+    + ']}'
+  const closeOfFirst = raw.indexOf('},') + 1
+  const closeOfSecond = raw.indexOf('},', closeOfFirst) + 1
+
+  const beforeFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst - 1), original, 'advanced')
+  check('第一条还没闭合 → 一条都不显示（半截对象绝不外泄）',
+    beforeFirstClose.items.length === 0, JSON.stringify(beforeFirstClose.items.map(i => i.id)))
+
+  const afterFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst), original, 'advanced')
+  check('第一条一闭合就出现（而且只有它）',
+    afterFirstClose.items.length === 1 && afterFirstClose.items[0].id === 'item#1',
+    JSON.stringify(afterFirstClose.items.map(i => i.id)))
+  check('第一条的内容与引文来自原话',
+    afterFirstClose.items[0].text === '把设置页做得好看点'
+    && afterFirstClose.items[0].quote === '把那个页面弄好看点')
+
+  const afterSecond = pure.scanOptimizeStream(raw.slice(0, closeOfSecond), original, 'advanced')
+  check('第二条闭合后依次追加（顺序稳定、只增不减）',
+    afterSecond.items.map(i => i.id).join(',') === 'item#1,item#2',
+    JSON.stringify(afterSecond.items.map(i => i.id)))
+
+  // 逐字符喂一遍：任何一帧里都不许出现"引文对不上"的那条（item#3）。
+  let leaked = 0
+  let maxSeen = 0
+  for (let n = 1; n <= raw.length; n += 1) {
+    const scan = pure.scanOptimizeStream(raw.slice(0, n), original, 'advanced')
+    if (scan.items.some(item => item.id === 'item#3')) leaked += 1
+    maxSeen = Math.max(maxSeen, scan.items.length)
+  }
+  check('整段逐字符喂：引文对不上的条目一次都没闪过', leaked === 0, String(leaked))
+  check('逐字符喂的最大可见条数是 2（第 3 条始终被挡）', maxSeen === 2, String(maxSeen))
+
+  const full = pure.scanOptimizeStream(raw, original, 'advanced')
+  check('数组闭合后 closed = true', full.closed === true)
+  check('被丢的那条如实进 dropped（与批次同记账）',
+    full.dropped.length === 1 && full.dropped[0].id === 'item#3' && /引文不是原话/.test(full.dropped[0].reason),
+    JSON.stringify(full.dropped))
+
+  // ── 纪律的核心断言：流式显示的条目 = 批次解析采用的条目（同一个校验函数、同一口径）。
+  const batch = pure.parseOptimizeOutput(raw, original)
+  const shape = list => list.map(i => `${i.id}|${i.kind}|${i.text}|${i.quote ?? ''}|${i.quoteSource}`).join('\n')
+  check('流式条目与批次条目逐项相同（同判据，不是两套规则）',
+    shape(full.items) === shape(batch.items), `${shape(full.items)}\n---\n${shape(batch.items)}`)
+  check('流式的丢弃记账也与批次相同',
+    shape(full.dropped) === shape(batch.dropped), `${JSON.stringify(full.dropped)} vs ${JSON.stringify(batch.dropped)}`)
+}
+
+{
+  const original = '把那个页面弄好看点'
+  // 字符串里的 `}`、引号、反斜杠都不能打断扫描（纯文本级状态机的边界用例）。
+  const trickyText = '输出要包含 } 与 "引号" 与 \\ 反斜杠，还要换行\n第二行'
+  const tricky = JSON.stringify({
+    items: [{ kind: 'requirement', quote: '把那个页面弄好看点', text: trickyText }],
+  })
+  const scan = pure.scanOptimizeStream(tricky, original, 'advanced')
+  check('text 里带 } 与引号、反斜杠、换行也能正确闭合与解析',
+    scan.items.length === 1 && scan.items[0].text === trickyText, JSON.stringify(scan.items.map(i => i.text)))
+
+  // 档位门：basic 只做语言层修复，quality 不属于这一档 ⇒ 实时流水里也不该出现。
+  const quality = JSON.stringify({
+    items: [{ kind: 'quality', quote: '把那个页面弄好看点', text: '改完能正常打开' }],
+  })
+  check('basic 档不显示 quality 条目（与装配期的档位门同判据）',
+    pure.scanOptimizeStream(quality, original, 'basic').items.length === 0)
+  check('advanced 档显示同一条', pure.scanOptimizeStream(quality, original, 'advanced').items.length === 1)
+
+  // ops 形态（对方 0.6 的信封）与"不支持的 op"。
+  const ops = JSON.stringify({
+    ops: [
+      { op: 'add_item', item: { kind: 'requirement', quote: '把那个页面弄好看点', text: '改完能正常打开' } },
+      { op: 'set_item_status', id: 'x', status: 'done' },
+    ],
+  })
+  const opsScan = pure.scanOptimizeStream(ops, original, 'advanced')
+  check('ops 信封里只认 add_item，条目照常出现',
+    opsScan.items.length === 1 && opsScan.items[0].id === 'item#1', JSON.stringify(opsScan.items.map(i => i.id)))
+  check('不支持的 op 如实记一条警告',
+    opsScan.warnings.some(w => w.includes('set_item_status')), JSON.stringify(opsScan.warnings))
+
+  // 半截/坏 JSON：不抛错、不产出（失败由批次解析判）。
+  check('坏 JSON 前缀不抛错、不产出',
+    pure.scanOptimizeStream('{"items":[{"kind":', original, 'advanced').items.length === 0)
+  check('空数组：没有条目也没有丢弃，且数组已闭合',
+    (() => {
+      const scan = pure.scanOptimizeStream('{"items":[]}', original, 'advanced')
+      return scan.items.length === 0 && scan.dropped.length === 0 && scan.closed === true
+    })())
+  check('没有信封（自由文本）时不产出任何条目',
+    pure.scanOptimizeStream('我来帮你把这句话理顺一下。', original, 'advanced').items.length === 0)
+
+  // 思考块里复述了一份假信封：扫描取**最后**一个信封 ⇒ 认的是真产出。
+  const think = '<think>{"items":[{"kind":"requirement","quote":"这句在原话里不存在","text":"假的"}]}</think>'
+    + JSON.stringify({ items: [{ kind: 'requirement', quote: '把那个页面弄好看点', text: '改完能正常打开' }] })
+  const thinkScan = pure.scanOptimizeStream(think, original, 'advanced')
+  check('思考块里复述的假信封不会被当成产出（取最后一个信封）',
+    thinkScan.items.length === 1 && thinkScan.items[0].quote === '把那个页面弄好看点',
+    JSON.stringify(thinkScan.items.map(i => `${i.id}|${i.quote ?? ''}`)))
+
+  // rewrite 重复段只留一条（与批次同判据）。
+  const dup = JSON.stringify({
+    items: [
+      { kind: 'rewrite', quote: '把那个页面', text: 'A' },
+      { kind: 'rewrite', quote: '把那个页面', text: 'B' },
+    ],
+  })
+  const dupScan = pure.scanOptimizeStream(dup, original, 'advanced')
+  check('同一段原话的两条 rewrite：只留靠前那条，另一条如实丢弃',
+    dupScan.items.length === 1 && dupScan.items[0].text === 'A'
+    && dupScan.dropped.some(d => /重复/.test(d.reason)), JSON.stringify(dupScan.dropped))
+
+  // 单轮上限（12 条）：与批次同口径。
+  const many = JSON.stringify({
+    items: Array.from({ length: 13 }, () => ({ kind: 'requirement', quote: '把那个页面弄好看点', text: 'X' })),
+  })
+  const manyScan = pure.scanOptimizeStream(many, original, 'advanced')
+  check('超过单轮上限的条目在流里也不出现（12 条封顶）',
+    manyScan.items.length === 12 && manyScan.dropped.some(d => /上限/.test(d.reason)),
+    `${String(manyScan.items.length)} / ${String(manyScan.dropped.length)}`)
+}
+
 // ══════════════ 5. 宿主半的优化接口 ═════════════════════════════════════════
 console.log('5. 宿主半优化接口（假的 webServer + llm）')
 
@@ -1171,6 +1301,123 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
   check('客户端断连 → 这次模型调用被 abort', signal.aborted === true)
   check('断连后不假装成功：如实回失败',
     captured.status === 200 && json({ captured }).ok === false, captured.body)
+}
+
+// ══════════════ 5c. 流式（SSE）优化接口（0.12.0） ═══════════════════════════
+console.log('5c. 流式优化接口：逐条事件 + done 给结论（旧 JSON 路径不变）')
+
+/** 能收下 SSE 的假响应：把 `data:` 行解析成事件数组。 */
+function makeStreamRes() {
+  const captured = { status: 0, headers: {}, body: '', events: [] }
+  return {
+    captured,
+    writeHead(code, headers) { captured.status = code; captured.headers = headers ?? {} },
+    write(chunk) {
+      captured.body += String(chunk)
+      for (const frame of String(chunk).split('\n\n')) {
+        const line = frame.split('\n').find(row => row.startsWith('data: '))
+        if (line !== undefined) captured.events.push(JSON.parse(line.slice(6)))
+      }
+    },
+    end(body) { if (typeof body === 'string') captured.body += body },
+    get statusCode() { return captured.status },
+    set statusCode(code) { captured.status = code },
+  }
+}
+
+/** 明确要流式的请求（`Accept: text/event-stream`）。 */
+const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event-stream' } })
+
+{
+  const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
+  const res = makeStreamRes()
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  const events = res.captured.events
+
+  check('SSE：回 200 且 content-type 是 text/event-stream',
+    res.captured.status === 200 && /text\/event-stream/.test(res.captured.headers['content-type'] ?? ''),
+    JSON.stringify(res.captured.headers))
+  check('SSE：声明不缓存（中间层不许把流缓存起来）',
+    /no-cache/.test(res.captured.headers['cache-control'] ?? ''), String(res.captured.headers['cache-control']))
+
+  const items = events.filter(event => event.type === 'item')
+  check('SSE：逐条事件按数组顺序给出已校验的条目',
+    items.length === 2 && items[0].index === 1 && items[1].index === 2 && items[0].kind === 'rewrite',
+    JSON.stringify(items.map(row => `${String(row.index)}|${row.kind}`)))
+  check('SSE：条目带逐字引文（与成品里的「依据」同源）',
+    items[0].quote === '把那个页面弄好看点' && items[0].quoteSource === 'user', JSON.stringify(items[0]))
+
+  const done = events.find(event => event.type === 'done')
+  check('SSE：done 带完整结论（与一次给 JSON 的字段同形）',
+    done?.ok === true && typeof done.text === 'string' && done.provider === 'go' && done.model === 'deepseek-flash',
+    JSON.stringify(done))
+  check('SSE：done 是最后一个事件', events[events.length - 1]?.type === 'done',
+    JSON.stringify(events.map(event => event.type)))
+
+  // 两条路径必须给出一模一样的成品 —— 流式只改"送达方式"，不改任何判定。
+  const once = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), once)
+  check('SSE：成品与旧 JSON 路径逐字相同', done.text === json(once).text,
+    `${String(done.text)} vs ${String(json(once).text)}`)
+}
+
+{
+  // 真·边写边看：第一条在模型**还没写完**的时候就已经推给客户端了。
+  let sawItemBeforeFinish = false
+  let resRef = null
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    stream: () => (async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"items":[{"kind":"rewrite","quote":"把那个页面弄好看点","text":"把设置页做得好看点"}' }
+      sawItemBeforeFinish = resRef !== null && resRef.captured.events.some(event => event.type === 'item')
+      yield { type: 'text-delta', index: 0, text: ']}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })(),
+  })
+  const res = makeStreamRes()
+  resRef = res
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  check('SSE：条目在模型还没写完时就已推给客户端（真·边写边看）', sawItemBeforeFinish)
+  check('SSE：闭合后不重复推送', res.captured.events.filter(event => event.type === 'item').length === 1,
+    String(res.captured.events.filter(event => event.type === 'item').length))
+}
+
+{
+  // 引文对不上原话的条目：一次都不许闪出来（与批次同一判据），但要走 dropped 如实记账。
+  const host = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    chunks: [
+      { type: 'text-delta', index: 0, text: '{"items":[' },
+      { type: 'text-delta', index: 0, text: '{"kind":"requirement","quote":"我在思考里编的","text":"假的"},' },
+      { type: 'text-delta', index: 0, text: '{"kind":"requirement","quote":"把那个页面弄好看点","text":"真的"}' },
+      { type: 'text-delta', index: 0, text: ']}' },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ],
+  })
+  const res = makeStreamRes()
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  const items = res.captured.events.filter(event => event.type === 'item')
+  check('SSE：引文对不上原话的条目一次都没出现',
+    items.length === 1 && items[0].quote === '把那个页面弄好看点', JSON.stringify(items))
+  check('SSE：被丢的那条走 dropped 事件如实记账',
+    res.captured.events.some(event => event.type === 'dropped' && /引文不是原话/.test(String(event.reason))),
+    JSON.stringify(res.captured.events.filter(event => event.type === 'dropped')))
+}
+
+{
+  // 预校验失败：流还没开始，照旧普通 JSON + 4xx（与对方 0.3.17 的"预校验走状态码"同口径）。
+  const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  const res = makeStreamRes()
+  await handler0(host, streamReq(JSON.stringify({ text: '   ', tier: 'advanced' })), res)
+  check('SSE：预校验失败仍回普通 JSON + 400（不是事件流）',
+    res.captured.status === 400 && res.captured.events.length === 0 && JSON.parse(res.captured.body).ok === false,
+    res.captured.body)
+
+  const onlyCmd = makeStreamRes()
+  await handler0(host, streamReq(JSON.stringify({ text: '/goal', tier: 'advanced' })), onlyCmd)
+  check('SSE：只有命令没有正文也是 400（不发请求）',
+    onlyCmd.captured.status === 400 && /没有正文/.test(json({ captured: { body: onlyCmd.captured.body } }).error),
+    onlyCmd.captured.body)
 }
 
 // ══════════════ 6. 宿主半真实注册的 settings schema ═════════════════════════

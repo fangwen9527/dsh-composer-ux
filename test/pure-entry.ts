@@ -46,6 +46,9 @@ export {
 export {
   allowedKindsFor, assembleCommand, extractJson, findQuoteSpan, optimizeBudgetFor,
   parseOptimizeOutput, runOptimizePipeline,
+  // 0.12.0：逐条流式扫描 —— 与批次解析共用同一个单条校验函数（validateRawItem），
+  // 所以"流里显示的"必然等于"批次采用的"。
+  scanEnvelopeArray, scanOptimizeStream, validateRawItem,
 } from '../src/optimizer-assemble.ts'
 /** 样式表也当数据测：实色按钮的「填充 + 前景」必须成对（见测试第 7 节）。 */
 export * as styles from '../src/client/styles.ts'

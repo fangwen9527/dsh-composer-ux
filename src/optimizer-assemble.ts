@@ -255,6 +255,107 @@ function unknownClassOf(value: unknown): OptimizeUnknownClass {
     : 'user_preference'
 }
 
+/** 单条校验的产物：要么收下，要么如实记账丢弃。 */
+export type RawItemValidation =
+  | { readonly kind: 'item'; readonly item: OptimizeItem; readonly warnings: readonly string[] }
+  | { readonly kind: 'dropped'; readonly dropped: DroppedItem; readonly warnings: readonly string[] }
+
+/**
+ * 校验**一条**原始条目。
+ *
+ * 为什么单独抽出来：0.12.0 的逐条流式要在模型还在写的时候把条目一条条显示出来，
+ * 而"流里显示的"必须与"成品里采用的"是**同一套判据**。抽成函数后只有这一条代码路径：
+ * 批次解析（{@link parseOptimizeOutput}）与流式扫描（{@link scanOptimizeStream}）都调它。
+ * 任何"流式放宽一点"的念头都会在这里显形，而不是悄悄分叉成两套规则。
+ *
+ * @param entry - 原始条目（数组里的一个元素）。
+ * @param options.original - 用户原话（逐字比对用）。
+ * @param options.index - 它在数组里的下标（0 起；记账 id 是 `item#下标+1`）。
+ * @param options.accepted - 此刻已经收下几条（用于单轮上限）。
+ * @param options.seenRewrite - 已占用的 rewrite 引文区间（同一段原话只允许一条 rewrite）。
+ * @returns 收下（`item`）或如实记账丢弃（`dropped`），外加这一条的警告。
+ */
+export function validateRawItem(
+  entry: unknown,
+  options: {
+    readonly original: string
+    readonly index: number
+    readonly accepted: number
+    readonly seenRewrite: Set<string>
+  },
+): RawItemValidation {
+  const { original, index, accepted, seenRewrite } = options
+  const id = `item#${index + 1}`
+  const warnings: string[] = []
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    return { kind: 'dropped', dropped: { id, kind: '(非对象)', reason: '条目不是对象' }, warnings }
+  }
+  const row = entry as Record<string, unknown>
+  const kind = String(row.kind ?? '')
+  if (!OPTIMIZE_ITEM_KINDS.includes(kind as OptimizeItemKind)) {
+    return {
+      kind: 'dropped',
+      dropped: { id, kind: kind === '' ? '(空)' : kind, reason: `kind 不在允许列表里（${OPTIMIZE_ITEM_KINDS.join(' / ')}）` },
+      warnings,
+    }
+  }
+  let text = typeof row.text === 'string' ? row.text.trim() : ''
+  if (text === '') {
+    return { kind: 'dropped', dropped: { id, kind, reason: 'text 是空的' }, warnings }
+  }
+  if (text.length > OPTIMIZE_ITEM_MAX_CHARS) {
+    warnings.push(`${id}：text 超 ${OPTIMIZE_ITEM_MAX_CHARS} 字，已截断`)
+    text = text.slice(0, OPTIMIZE_ITEM_MAX_CHARS)
+  }
+  if (accepted >= OPTIMIZE_MAX_ITEMS) {
+    return {
+      kind: 'dropped',
+      dropped: { id, kind, reason: `超过单轮上限 ${OPTIMIZE_MAX_ITEMS} 条 ⇒ 截断丢弃（整轮照常出成品）` },
+      warnings,
+    }
+  }
+
+  const needsQuote = kind === 'rewrite' || kind === 'requirement' || kind === 'quality'
+  const quote = typeof row.quote === 'string' ? row.quote.trim() : ''
+  if (needsQuote) {
+    if (quote === '') {
+      return { kind: 'dropped', dropped: { id, kind, reason: '缺少 quote（这一类条目必须有逐字引文）' }, warnings }
+    }
+    const span = findQuoteSpan(original, quote)
+    if (span === undefined) {
+      return {
+        kind: 'dropped',
+        dropped: { id, kind, reason: `引文不是原话里的逐字片段：「${quote.slice(0, 40)}」` },
+        warnings,
+      }
+    }
+    if (kind === 'rewrite') {
+      // 同一段原话只允许一条 rewrite：重叠的两条会让回填顺序变得不可解释。
+      const key = `${String(span.start)}-${String(span.end)}`
+      if (seenRewrite.has(key)) {
+        return { kind: 'dropped', dropped: { id, kind, reason: '与另一条 rewrite 引用了同一段原话（重复）' }, warnings }
+      }
+      seenRewrite.add(key)
+    }
+    return { kind: 'item', item: { id, kind: kind as OptimizeItemKind, text, quote, span, quoteSource: 'user' }, warnings }
+  }
+
+  // unknown / plan / risk：引文可选。给了但对不上就如实记成"模型自己补的"，条目照常保留。
+  const span = quote === '' ? undefined : findQuoteSpan(original, quote)
+  if (quote !== '' && span === undefined) {
+    warnings.push(`${id}：引文对不上原话，已按"模型自己补的"记账（不冒充你说过的话）`)
+  }
+  return {
+    kind: 'item',
+    item: {
+      id, kind: kind as OptimizeItemKind, text, quoteSource: span === undefined ? 'none' : 'user',
+      ...(span === undefined ? {} : { span, quote }),
+      ...(kind === 'unknown' ? { unknownClass: unknownClassOf(row.unknownClass), blocking: row.blocking === true } : {}),
+    },
+    warnings,
+  }
+}
+
 /**
  * 解析并**逐条核对**模型输出。
  *
@@ -286,75 +387,170 @@ export function parseOptimizeOutput(raw: string, original: string): ParseResult 
   const seenRewrite = new Set<string>()
 
   for (let index = 0; index < raw_items.length; index += 1) {
-    const id = `item#${index + 1}`
-    const entry = raw_items[index]
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      dropped.push({ id, kind: '(非对象)', reason: '条目不是对象' })
-      continue
-    }
-    const row = entry as Record<string, unknown>
-    const kind = String(row.kind ?? '')
-    if (!OPTIMIZE_ITEM_KINDS.includes(kind as OptimizeItemKind)) {
-      dropped.push({ id, kind: kind === '' ? '(空)' : kind, reason: `kind 不在允许列表里（${OPTIMIZE_ITEM_KINDS.join(' / ')}）` })
-      continue
-    }
-    let text = typeof row.text === 'string' ? row.text.trim() : ''
-    if (text === '') {
-      dropped.push({ id, kind, reason: 'text 是空的' })
-      continue
-    }
-    if (text.length > OPTIMIZE_ITEM_MAX_CHARS) {
-      warnings.push(`${id}：text 超 ${OPTIMIZE_ITEM_MAX_CHARS} 字，已截断`)
-      text = text.slice(0, OPTIMIZE_ITEM_MAX_CHARS)
-    }
-    if (items.length >= OPTIMIZE_MAX_ITEMS) {
-      dropped.push({ id, kind, reason: `超过单轮上限 ${OPTIMIZE_MAX_ITEMS} 条 ⇒ 截断丢弃（整轮照常出成品）` })
-      continue
-    }
-
-    const needsQuote = kind === 'rewrite' || kind === 'requirement' || kind === 'quality'
-    const quote = typeof row.quote === 'string' ? row.quote.trim() : ''
-    if (needsQuote) {
-      if (quote === '') {
-        dropped.push({ id, kind, reason: '缺少 quote（这一类条目必须有逐字引文）' })
-        continue
-      }
-      const span = findQuoteSpan(original, quote)
-      if (span === undefined) {
-        dropped.push({ id, kind, reason: `引文不是原话里的逐字片段：「${quote.slice(0, 40)}」` })
-        continue
-      }
-      if (kind === 'rewrite') {
-        // 同一段原话只允许一条 rewrite：重叠的两条会让回填顺序变得不可解释。
-        const key = `${String(span.start)}-${String(span.end)}`
-        if (seenRewrite.has(key)) {
-          dropped.push({ id, kind, reason: '与另一条 rewrite 引用了同一段原话（重复）' })
-          continue
-        }
-        seenRewrite.add(key)
-      }
-      items.push({ id, kind: kind as OptimizeItemKind, text, quote, span, quoteSource: 'user' })
-      continue
-    }
-
-    // unknown / plan / risk：引文可选。给了但对不上就如实记成"模型自己补的"，条目照常保留。
-    const span = quote === '' ? undefined : findQuoteSpan(original, quote)
-    if (quote !== '' && span === undefined) {
-      warnings.push(`${id}：引文对不上原话，已按"模型自己补的"记账（不冒充你说过的话）`)
-    }
-    items.push({
-      id, kind: kind as OptimizeItemKind, text, quoteSource: span === undefined ? 'none' : 'user',
-      ...(span === undefined ? {} : { span, quote }),
-      ...(kind === 'unknown' ? { unknownClass: unknownClassOf(row.unknownClass), blocking: row.blocking === true } : {}),
-    })
+    const checked = validateRawItem(raw_items[index], { original, index, accepted: items.length, seenRewrite })
+    warnings.push(...checked.warnings)
+    if (checked.kind === 'item') items.push(checked.item)
+    else dropped.push(checked.dropped)
   }
 
   if (items.length === 0 && dropped.length === 0 && raw_items.length === 0) warnings.push('模型交回空数组：这一轮没有可核实的补全')
   return { ok: true, items, dropped, warnings }
 }
 
-/** 节的顺序即渲染顺序；`required` 的节**永不**因篇幅被丢（对方 compiler.js 的同一条纪律）。 */
-const SECTIONS: readonly { readonly key: OptimizeItemKind; readonly label: string; readonly required: boolean }[] = [
+/** 流式扫描的一帧产物。 */
+export interface StreamScan {
+  /**
+   * 到这一帧为止**通过校验**的条目（含之前各帧那些）。
+   *
+   * 只增不减：缓冲是只追加的，而每条判据只看它自己与用户原话，所以第 N 帧收下的条目在
+   * 第 N+1 帧仍然收下。调用方记住"已经发出去几条"，用 `slice(sent)` 取新增即可。
+   */
+  readonly items: readonly OptimizeItem[]
+  /** 到这一帧为止被丢掉的条目（实时记账用；与批次解析同口径）。 */
+  readonly dropped: readonly DroppedItem[]
+  readonly warnings: readonly string[]
+  /** 信封数组已经闭合（`]` 出现）—— 模型这一轮写完了。 */
+  readonly closed: boolean
+}
+
+/**
+ * 信封数组的起始位置。
+ *
+ * 取**最后**一个 `"items":[` / `"ops":[`：推理模型会把整份信封在思考块里复述一遍，
+ * 最早那次出现可能是思考内容而不是真正的产出（对方 0.3.17 也为同一件事把标记解析
+ * 改成"取最后一组"）。取最后一次，指向的才是真信封。
+ *
+ * @param buffer - 到这一帧为止的全部模型输出。
+ * @returns 数组起始下标（`[` 之后）；还没出现信封时 -1。
+ */
+function envelopeArrayStart(buffer: string): number {
+  const pattern = /"(?:items|ops)"\s*:\s*\[/g
+  let last = -1
+  let matched = pattern.exec(buffer)
+  while (matched !== null) {
+    last = matched.index + matched[0].length
+    matched = pattern.exec(buffer)
+  }
+  return last
+}
+
+/**
+ * 从**还在增长**的缓冲里扫出信封数组里**已经闭合**的元素。
+ *
+ * 判据是纯文本级的：只看"引号 / 转义 / 花括号深度"三个状态，不猜语义 —— 于是模型
+ * 正写到一半的对象永远不会被当成完整元素交出去（这是"绝不显示未校验内容"的第一道闸）。
+ *
+ * @param buffer - 到这一帧为止的全部模型输出。
+ * @returns 完整元素（含它在数组里的下标与原始文本）与"数组是否已闭合"。
+ */
+export function scanEnvelopeArray(buffer: string): {
+  readonly elements: readonly { readonly index: number; readonly raw: string }[]
+  readonly closed: boolean
+} {
+  const start = envelopeArrayStart(buffer)
+  if (start < 0) return { elements: [], closed: false }
+  const elements: { index: number; raw: string }[] = []
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let elementStart = -1
+  for (let i = start; i < buffer.length; i += 1) {
+    const ch = buffer[i]!
+    if (inString) {
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\') { escaped = true; continue }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') {
+      if (depth === 0) elementStart = i
+      depth += 1
+      continue
+    }
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0 && elementStart >= 0) {
+        elements.push({ index: elements.length, raw: buffer.slice(elementStart, i + 1) })
+        elementStart = -1
+      }
+      continue
+    }
+    if (ch === ']' && depth === 0) return { elements, closed: true }
+  }
+  return { elements, closed: false }
+}
+
+/** 单个数组元素的归一化：认对方 0.6 的 `{op:'add_item', item:{…}}`（与批次解析同一口径）。 */
+function normalizeStreamElement(value: unknown, warnings: string[]): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const row = value as Record<string, unknown>
+  if (row.op === 'add_item' && typeof row.item === 'object' && row.item !== null) return row.item
+  if (typeof row.op === 'string') {
+    warnings.push(`忽略了不支持的 op「${row.op}」：本插件不做跨轮状态，只认 add_item`)
+    return undefined
+  }
+  return row
+}
+
+/**
+ * 流式逐条扫描：模型还在写的时候，把**已经闭合且已通过校验**的条目交出来。
+ *
+ * 纪律（这是本插件相对"把草稿丢给模型重写"的核心差异，流式不能把它弄丢）：
+ * 交出来的每一条都走 {@link validateRawItem} —— 与批次解析**同一套判据**；引文对不上
+ * 原话的条目在这里就被丢掉，绝不会先闪一下再消失。档位门也与装配期同判据，所以
+ * "流水里出现过的条目"就是"成品里可能出现的那批"（篇幅闸门仍可能在最后丢掉可选的节，
+ * 那是另一回事，界面会如实报"省略了几条"）。
+ *
+ * 与批次解析的关系：本函数只负责**显示**，成品永远由 {@link runOptimizePipeline} 用完整
+ * 输出算出来 —— 两者对同一份完整输出必然得到同一批条目（同一校验函数、同一下标口径）。
+ *
+ * @param buffer - 到这一帧为止的全部模型输出（只追加，不要传窗口切片）。
+ * @param original - 用户原话（逐字比对用）。
+ * @param tier - 当前档位（用于档位门）。
+ * @returns 通过校验的条目 / 丢弃记账 / 警告 / 数组是否已闭合。
+ */
+export function scanOptimizeStream(buffer: string, original: string, tier: string): StreamScan {
+  const { elements, closed } = scanEnvelopeArray(buffer)
+  const allowed = allowedKindsFor(tier)
+  const items: OptimizeItem[] = []
+  const dropped: DroppedItem[] = []
+  const warnings: string[] = []
+  const seenRewrite = new Set<string>()
+  let position = 0
+  for (const element of elements) {
+    let value: unknown
+    try {
+      value = JSON.parse(element.raw)
+    } catch {
+      // 已闭合却仍解析不动：这一帧不发它，也不在这里判失败 —— 真坏了会被批次解析
+      // （extractJson → BAD_JSON）如实判死。这里只保证"绝不显示没校验过的东西"。
+      continue
+    }
+    const normalized = normalizeStreamElement(value, warnings)
+    if (normalized === undefined) continue
+    // 下标口径与批次一致：只对"能归一成条目"的元素计数（ops 里其它 op 不占号）。
+    const checked = validateRawItem(normalized, { original, index: position, accepted: items.length, seenRewrite })
+    position += 1
+    warnings.push(...checked.warnings)
+    if (checked.kind === 'dropped') {
+      dropped.push(checked.dropped)
+      continue
+    }
+    if (!allowed.includes(checked.item.kind)) {
+      dropped.push({
+        id: checked.item.id,
+        kind: checked.item.kind,
+        reason: `当前档位（${tier}）不产出「${checked.item.kind}」这一类条目`,
+      })
+      continue
+    }
+    items.push(checked.item)
+  }
+  return { items, dropped, warnings, closed }
+}
+
+/** 节的顺序即渲染顺序；`required` 的节**永不**因篇幅被丢（对方 compiler.js 的同一条纪律）。 */const SECTIONS: readonly { readonly key: OptimizeItemKind; readonly label: string; readonly required: boolean }[] = [
   { key: 'requirement', label: '补全要求（每条都指回你原话里的某句）', required: true },
   { key: 'quality', label: '对质量词的理解', required: false },
   { key: 'plan', label: '分阶段执行计划', required: false },

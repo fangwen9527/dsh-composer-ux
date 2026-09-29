@@ -67,7 +67,7 @@ import {
 } from './restart.ts'
 import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
-import { runOptimizePipeline } from './optimizer-assemble.ts'
+import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
 
@@ -807,7 +807,8 @@ export function apply(ctx: Context, config?: unknown): void {
       req: { method?: string; [key: string]: unknown },
       res: {
         writeHead: (code: number, headers: Record<string, string>) => void
-        end: (body: string) => void
+        end: (body?: string) => void
+        write?: (chunk: string) => void
         statusCode?: number
         on?: (event: string, listener: () => void) => unknown
       },
@@ -878,8 +879,68 @@ export function apply(ctx: Context, config?: unknown): void {
       // 钳到该路由最省的推理档（查不到就是空串 = 什么都不传）。
       const effort = await lowestReasoningEffort(route.provider, route.model)
 
+      /**
+       * 是不是要流式（0.12.0）：看 `Accept`。
+       *
+       * 为什么用协商而不是换一条新路径：旧客户端（浏览器里缓存的 0.11.x bundle）与
+       * 新宿主可能短暂并存 —— 它发的还是不带 Accept 的 POST，那就照旧一次给 JSON；
+       * 新客户端明确要 `text/event-stream` 才走流。**校验失败一律回普通 JSON + 4xx**
+       * （流还没开始，谈不上事件），这条与对方 0.3.17 的"预校验 400/405/409/413"同口径。
+       */
+      const wantsStream = /text\/event-stream/i.test(String((req.headers as Record<string, unknown> | undefined)?.accept ?? ''))
+      const emit = (payload: Record<string, unknown>): void => {
+        if (!wantsStream) return
+        try {
+          res.write?.(`data: ${JSON.stringify(payload)}\n\n`)
+        } catch {
+          // 客户端已经断开：写不进去就算了 —— 模型那边会由 close → abort 收尾。
+        }
+      }
+      if (wantsStream) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+        })
+      }
+
+      /**
+       * 逐条流式：只在流式请求下做，且**只在可能闭合元素时才重扫**。
+       *
+       * 为什么要有这个预筛：逐 token 全量重扫一个不断变长的缓冲是 O(n²)（一条 12 条的
+       * 输出有几 KB，真机上是白烧 CPU）。只有 `}` / `]` 才可能闭合一个数组元素。
+       * 重扫本身走 `scanOptimizeStream` —— 与批次解析**同一个校验函数**，所以流里出现的
+       * 每条都已通过逐字依据核对，绝不会"先闪一下再消失"。
+       */
+      let seenItems = 0
+      let seenDropped = 0
+      const onStreamDelta = (out: string, delta: string): void => {
+        if (!wantsStream) return
+        if (!delta.includes('}') && !delta.includes(']')) return
+        const scan = scanOptimizeStream(out, body, tier)
+        for (const item of scan.items.slice(seenItems)) {
+          emit({
+            type: 'item',
+            index: seenItems + 1,
+            id: item.id,
+            kind: item.kind,
+            text: item.text,
+            quote: item.quote ?? '',
+            quoteSource: item.quoteSource,
+          })
+          seenItems += 1
+        }
+        for (const row of scan.dropped.slice(seenDropped)) {
+          emit({ type: 'dropped', ...row })
+        }
+        seenDropped = scan.dropped.length
+      }
+
       /** 跑一次模型调用，返回原始正文与失败原因（重试时会被调用第二次）。 */
-      const runOnce = async (userText: string): Promise<{ out: string; failure: string }> => {
+      const runOnce = async (
+        userText: string,
+        onDelta: (out: string, delta: string) => void,
+      ): Promise<{ out: string; failure: string }> => {
         let out = ''
         let failure = ''
         try {
@@ -899,7 +960,9 @@ export function apply(ctx: Context, config?: unknown): void {
           })
           for await (const chunk of stream as AsyncIterable<Record<string, unknown>>) {
             if (chunk.type === 'text-delta') {
-              out += String(chunk.text ?? '')
+              const delta = String(chunk.text ?? '')
+              out += delta
+              onDelta(out, delta)
               // 原始 JSON 会比成品长不少（每条都带引文与字段名），上限按成品的 4 倍给。
               if (out.length > OPTIMIZE_OUTPUT_MAX * 4) break
             } else if (chunk.type === 'finish') {
@@ -919,13 +982,13 @@ export function apply(ctx: Context, config?: unknown): void {
       let retried = false
       let result: { out: string; failure: string }
       try {
-        result = await runOnce(buildOptimizeUser(body))
+        result = await runOnce(buildOptimizeUser(body), onStreamDelta)
         // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
         // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
         // 只在**没报错**时重试（报错重试一次只是白等一轮）。
         if (result.out.trim() === '' && result.failure === '') {
           retried = true
-          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目' }))
+          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目' }), onStreamDelta)
           if (second.out.trim() !== '') result = second
           else if (result.failure === '') result = second
         }
@@ -935,48 +998,60 @@ export function apply(ctx: Context, config?: unknown): void {
         clearTimeout(timer)
       }
 
-      if (result.out.trim() === '') {
-        sendJson(res, 200, {
-          ok: false,
-          error: result.failure === '' ? '模型没有产出任何内容' : `优化失败：${result.failure}`,
+      /**
+       * 这一轮的最终结果 —— 两条路径共用同一份字段（旧路径一次给 JSON，流式在 done 事件里给），
+       * 于是"流式与否"只影响**送达方式**，不影响任何判定。
+       */
+      const outcome = ((): Record<string, unknown> => {
+        if (result.out.trim() === '') {
+          return {
+            ok: false,
+            error: result.failure === '' ? '模型没有产出任何内容' : `优化失败：${result.failure}`,
+            retried,
+          }
+        }
+        // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
+        const assembled = runOptimizePipeline(result.out, body, { tier })
+        if (!assembled.ok) {
+          return {
+            ok: false,
+            error: `模型输出不是可用的条目 JSON（${assembled.code}）：${assembled.reason}`,
+            retried,
+          }
+        }
+        const optimized = assembled.text.trim()
+        if (optimized === '') return { ok: false, error: '装配后是空的（模型没有给出可核实的条目）', retried }
+        return {
+          ok: true,
+          text: optimized,
+          // 语义收窄：`truncated` 现在专指"篇幅闸门真的动过手"（装了必保节仍超预算）。
+          truncated: assembled.overBudget,
+          provider: route.provider,
+          model: route.model,
+          // ── 以下为 0.6.0 新增的**附加**字段：老客户端不读它们也不会坏。
+          promptSource: optimizePromptSource(customPrompt),
           retried,
-        })
-        return
-      }
+          fallback: assembled.fallback,
+          itemCount: assembled.itemCount,
+          rewrittenChars: assembled.rewrittenChars,
+          dropped: assembled.dropped,
+          warnings: assembled.warnings,
+          budget: assembled.budget,
+          chars: assembled.chars,
+        }
+      })()
 
-      // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
-      const assembled = runOptimizePipeline(result.out, body, { tier })
-      if (!assembled.ok) {
-        sendJson(res, 200, {
-          ok: false,
-          error: `模型输出不是可用的条目 JSON（${assembled.code}）：${assembled.reason}`,
-          retried,
-        })
+      if (!wantsStream) {
+        sendJson(res, 200, outcome)
         return
       }
-      const optimized = assembled.text.trim()
-      if (optimized === '') {
-        sendJson(res, 200, { ok: false, error: '装配后是空的（模型没有给出可核实的条目）', retried })
-        return
+      // 流式的收尾：done 事件带的就是旧路径那份 JSON（含失败情形），随后关流。
+      emit({ type: 'done', ...outcome })
+      try {
+        res.end()
+      } catch {
+        // 已经断开：无所谓，这一轮的账已经在 outcome 里算清了。
       }
-      sendJson(res, 200, {
-        ok: true,
-        text: optimized,
-        // 语义收窄：`truncated` 现在专指"篇幅闸门真的动过手"（装了必保节仍超预算）。
-        truncated: assembled.overBudget,
-        provider: route.provider,
-        model: route.model,
-        // ── 以下为 0.6.0 新增的**附加**字段：老客户端不读它们也不会坏。
-        promptSource: optimizePromptSource(customPrompt),
-        retried,
-        fallback: assembled.fallback,
-        itemCount: assembled.itemCount,
-        rewrittenChars: assembled.rewrittenChars,
-        dropped: assembled.dropped,
-        warnings: assembled.warnings,
-        budget: assembled.budget,
-        chars: assembled.chars,
-      })
     }
 
     optCtx.effect(() => optCtx.webServer.register({

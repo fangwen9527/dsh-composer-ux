@@ -35,6 +35,8 @@ jobs:
         run: npm run typecheck
       - name: 构建
         run: npm run build
+      - name: 包内容门禁（files 白名单 / 不许夹带开发目录）
+        run: npm run check:pack
       - name: 全量测试（18 套件）
         # 用 bash 跑（三个平台都有）：失败时把关键行用 `::error::` 发成**注解**，
         # 这样远程（没有 admin 权限下不到 job log）也能从 check-run 的 annotations 里读到原因。
@@ -52,3 +54,8 @@ jobs:
             done
           fi
           exit "$status"
+      - name: 文档数字门禁（README 的套件数/条数 vs 刚跑出来的事实）
+        run: npm run check:docs
+      - name: tag 指向门禁（只在 tag 上跑：tag 名里的版本 == 该提交的 package.json）
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run check:tag -- "${{ github.ref_name }}"

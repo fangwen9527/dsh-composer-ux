@@ -10,3 +10,6 @@ lib/*.map
 cordis.dev.patch.yml
 # 测试用 esbuild 中间产物
 test/.build/
+# 最近一次真实运行的记录（供 check-docs 判漂移；本机事实，不进仓库）
+test/.last-run.json
+test/.last-mutation.json

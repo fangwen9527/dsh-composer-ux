@@ -481,7 +481,13 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
 npm test                          # 18 个套件；当前 1943 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
-node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（109 条，须单独跑）
+                                  #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（109 条，须单独跑）
+                                  #   同样记录结果，供下面的文档门禁核对
+npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
+npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本
+npm run check:pack                #   ② npm pack 的文件清单 == files 白名单（不许夹带 src/test/scripts/docs）
+npm run check:docs                #   ③ README 的套件数/条数 == 最近一次真实运行；引用的截图本地都在
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示、以及"非默认设置"下的「金额」卡（78 条）
 node test/cost-panel-render.mjs   # 已进 npm test：把「金额浮层」真渲染成 HTML，断言分列 / 峰谷行 / 未定价 / 内置快照价 / 明文没混进 markdown 记号（19 条）
 node scripts/live-smoke.mjs       # 手动跑：**联网复核**（官方页 vs 写死的价目表逐格对比 / models.dev vs 内置快照逐条对比 / 余额端点白名单与状态码）；只读，不写任何文件

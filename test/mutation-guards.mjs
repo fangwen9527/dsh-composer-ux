@@ -933,6 +933,16 @@ const cases = [
     test: 'test/client-registration.mjs',
     expect: '预读剪贴板前先判 navigator 存在',
   },
+  {
+    // 0.12.0 截图验收抓到的那条：主按钮的填色与前景必须是配对令牌。
+    // 这条变异把它退回到"深色主题下白底白字"的写法，2.0f 的对象级断言必须变红。
+    name: 'DG 主按钮前景退回不存在的令牌名（深色主题下白底黑字变白字）',
+    file: 'src/client/styles.ts',
+    from: "  color: 'var(--dsw-alias-label-primary-foreground)',\n  fontWeight: 600,",
+    to: "  color: 'var(--dsw-alias-label-inverse, #fff)',\n  fontWeight: 600,",
+    test: 'test/client-registration.mjs',
+    expect: '填色与前景是配对令牌',
+  },
 ]
 
 let allBit = true

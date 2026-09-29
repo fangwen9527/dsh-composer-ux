@@ -324,6 +324,16 @@ export const OPTIMIZER_CONTEXT_FIELD = 'optimizerContext'
  */
 export const OPTIMIZER_LEDGER_FIELD = 'optimizerLedger'
 
+/**
+ * 重启后是否保留结果框（0.13.0 ①，默认开）。
+ *
+ * 打开后，结果框的状态（成品正文、条目、逐字引文、发起时的草稿）会写进
+ * `$DSH_HOME/composer-ux/optimize-dock.json`（原子写、损坏隔离、超 64 KB 不写），
+ * 下次启动/刷新页面时恢复 —— 否则重启一次 DSH 就丢了刚跑出来的成品，再看要再花一次模型调用。
+ * ⚠️ **这份文件里有内容**（与 `quick-prompts.json` 同级），只记元数据的那份是逐轮台账。
+ */
+export const OPTIMIZE_KEEP_DOCK_FIELD = 'optimizeKeepDock'
+
 /** 上下文里最多各带几条（你的话 / 助手的话）。 */
 export const OPTIMIZER_CONTEXT_TURNS = 4
 
@@ -390,6 +400,9 @@ export const OPTIMIZE_OUTPUT_MAX = 12000
  * 而宿主半 <-> 客户端半之间没有别的受支持通道 —— 与
  * WestFox-AwA/dsh-prompt-optimizer 的做法一致。
  */
+/** 结果框状态路由（0.13.0 ①）：`GET` 读上一轮、`POST` 存这一轮。 */
+export const OPTIMIZE_STATE_API_PATH = '/composer-ux/optimize-state'
+
 export const OPTIMIZER_API_PATH = '/composer-ux/optimize'
 
 /**
@@ -832,6 +845,7 @@ export type SettingsField =
   | typeof OPTIMIZER_TIER_FIELD
   | typeof OPTIMIZER_CONTEXT_FIELD
   | typeof OPTIMIZER_LEDGER_FIELD
+  | typeof OPTIMIZE_KEEP_DOCK_FIELD
   | typeof OPTIMIZER_PROMPT_FIELDS.basic
   | typeof OPTIMIZER_PROMPT_FIELDS.advanced
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
@@ -913,6 +927,8 @@ export interface ComposerUxSettings {
   optimizerContext: boolean
   /** 每轮优化记一条**只含元数据**的台账（见 OPTIMIZER_LEDGER_FIELD）。 */
   optimizerLedger: boolean
+  /** 重启后保留结果框（见 OPTIMIZE_KEEP_DOCK_FIELD；这份文件里有内容）。 */
+  optimizeKeepDock: boolean
   /**
    * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
    *
@@ -995,6 +1011,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   optimizerContext: true,
   // 台账默认开：只写数字与原因，不写一个字原文，所以默认开不冒隐私风险。
   optimizerLedger: true,
+  // 默认开：重启/刷新后上一轮结果还在框里（关掉就每次都要重跑一遍模型）。
+  optimizeKeepDock: true,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
   optimizerPromptBasic: '',
   optimizerPromptAdvanced: '',
@@ -1316,6 +1334,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     optimizerTier: asTier(),
     optimizerContext: asBool(OPTIMIZER_CONTEXT_FIELD),
     optimizerLedger: asBool(OPTIMIZER_LEDGER_FIELD),
+    optimizeKeepDock: asBool(OPTIMIZE_KEEP_DOCK_FIELD),
     optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
     optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
     optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),

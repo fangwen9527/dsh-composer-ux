@@ -42,6 +42,7 @@ import {
 import {
   dockReducer, dockSummary, insertDecision, previousForChain, type OptimizeDockState,
 } from './client/optimize-dock.ts'
+import { clearDockStateOnHost, loadDockState, saveDockState } from './client/optimize-state.ts'
 
 export const name = 'composer-ux'
 /**
@@ -91,6 +92,27 @@ export function apply(ctx: any): void {
   const optimizeStartedAt = createSnapshotStore<number>(0)
   /** 优化结果框（0.12.0）；null = 框收起。 */
   const dock = createSnapshotStore<OptimizeDockState | null>(null)
+  /**
+   * 结果框的**落盘**（0.13.0 ①）。
+   *
+   * 存的是一整份快照（`$DSH_HOME/composer-ux/optimize-dock.json`，原子写 + 损坏隔离）——
+   * 这份文件里**有内容**（成品、引文、发起时的草稿），与 `quick-prompts.json` 同性质；
+   * 只记元数据的那一份是逐轮台账（optimize-log.jsonl），两者刻意分开。
+   *
+   * 两条边界：只在**框还空着**时恢复（期间用户可能已经开了新一轮）；只在开关开着时存
+   * （关掉开关 = 宿主拒写并删掉旧文件，这里就不再白发请求）。
+   */
+  const keepDockOn = (): boolean => live.getSnapshot().optimizeKeepDock === true
+  /** 去抖存盘：跑一轮会连着改很多次状态（逐条流式 + 完成后一次），别每改一次就走一趟 HTTP。 */
+  const DOCK_SAVE_DEBOUNCE_MS = 1_200
+  const persistDock = (): void => {
+    if (!keepDockOn()) return
+    void saveDockState(dock.getSnapshot())
+  }
+  const clearPersistedDock = (): void => {
+    // 无论开关是否开着都清：用户点的是"清空"，那就该把磁盘上那份也弄掉。
+    void clearDockStateOnHost()
+  }
   const panelNotice = createSnapshotStore<string>('')
   /**
    * 设置写入的说明行；'' = 正常。渲染在设置卡片顶部（与「重启 DSH」横幅同位置）。
@@ -133,6 +155,28 @@ export function apply(ctx: any): void {
     scope = next as SettingsScopeLike
     sync()
     ctx.effect(() => scope.subscribe(sync), 'composer-ux: settings sync')
+    // 启动时把上一轮结果框放回来（重启/刷新不丢刚跑出来的成品）。
+    ctx.effect(() => {
+      let alive = true
+      void loadDockState().then((reply) => {
+        if (!alive || !reply.ok || reply.state === null) return
+        // 只在框仍空着时恢复：期间用户可能已经自己开了一轮。
+        if (dock.getSnapshot() === null) dock.set(dockReducer(null, { type: 'restore', snapshot: reply.state }))
+      })
+      return () => { alive = false }
+    }, 'composer-ux: restore optimize dock')
+    // 结果框一变化就（去抖）存一次。
+    ctx.effect(() => {
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const unsubscribe = dock.subscribe(() => {
+        if (timer !== null) clearTimeout(timer)
+        timer = setTimeout(() => { timer = null; persistDock() }, DOCK_SAVE_DEBOUNCE_MS)
+      })
+      return () => {
+        if (timer !== null) clearTimeout(timer)
+        unsubscribe()
+      }
+    }, 'composer-ux: persist optimize dock')
   }
   /**
    * 等一个服务出现（cordis 的 `inject` 语义）。
@@ -540,6 +584,11 @@ export function apply(ctx: any): void {
         reloadBook: bookActions.reload,
         resetBook: bookActions.resetBook,
         dismissNotice: () => { writeNotice.set('') },
+        clearDockState: () => {
+          // 先清磁盘再清内存：反过来的话，去抖存盘可能把刚清掉的内容又写回去。
+          clearPersistedDock()
+          dock.set(null)
+        },
       },
     }),
   }, SettingsSection))

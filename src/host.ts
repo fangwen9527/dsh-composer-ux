@@ -29,6 +29,7 @@ import {
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
+  OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_STATE_API_PATH,
   OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
@@ -69,6 +70,7 @@ import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
 import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts'
 import { appendLedger, buildLedgerRun } from './optimize-ledger.ts'
+import { clearDockState, dockStateBytes, optimizeStatePath, readDockState, writeDockState } from './optimize-state.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
@@ -451,6 +453,8 @@ function ownSchema(): Schema {
     [OPTIMIZER_CONTEXT_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerContext),
     // 逐轮台账（0.13.0；默认开）。只记元数据，见契约里的说明。
     [OPTIMIZER_LEDGER_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerLedger),
+    // 重启后保留结果框（0.13.0；默认开）。这份状态文件里**有内容**，见契约里的说明。
+    [OPTIMIZE_KEEP_DOCK_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizeKeepDock),
     // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
     [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
     [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
@@ -1154,6 +1158,89 @@ export function apply(ctx: Context, config?: unknown): void {
         // 已经断开：无所谓，这一轮的账已经在 outcome 里算清了。
       }
     }
+
+    /**
+     * 结果框状态（0.13.0 ①）：`GET` 读上一轮、`POST` 存这一轮。
+     *
+     * 与其余路由一样**先过官方信任关卡**；只读写**固定路径**那一份文件
+     * （不接受调用方给路径，避免这条路由变成"任意文件读写"）。
+     */
+    const handleState = async (
+      req: { method?: string; [key: string]: unknown },
+      res: {
+        writeHead: (code: number, headers: Record<string, string>) => void
+        end: (body?: string) => void
+        statusCode?: number
+      },
+    ): Promise<void> => {
+      if (rejectUntrustedRequest(optCtx as never, req, res as never)) return
+      const method = (req.method ?? 'GET').toUpperCase()
+      // 开关（默认开）：关掉就既不读也不写，并把已存的那份删掉。
+      const keep = readOwnFlag(optCtx, config, OPTIMIZE_KEEP_DOCK_FIELD, DEFAULT_SETTINGS.optimizeKeepDock)
+      const file = optimizeStatePath()
+      if (method === 'GET') {
+        if (!keep) {
+          sendJson(res, 200, { ok: true, state: null, keep: false, file })
+          return
+        }
+        const read = readDockState(file)
+        sendJson(res, 200, {
+          ok: true,
+          state: read.state,
+          keep: true,
+          file,
+          bytes: dockStateBytes(file),
+          ...(read.corrupt ? { corrupt: true } : {}),
+          ...(read.quarantined === undefined ? {} : { quarantined: read.quarantined }),
+          ...(read.unknownVersion === undefined ? {} : { unknownVersion: read.unknownVersion }),
+        })
+        return
+      }
+      if (method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+      let payload: Record<string, unknown>
+      try {
+        payload = objectOf(JSON.parse(await readBody(req as unknown as AsyncIterable<unknown>))) ?? {}
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: `请求体不是合法 JSON：${errorText(error)}` })
+        return
+      }
+      if (!Object.prototype.hasOwnProperty.call(payload, 'state')) {
+        sendJson(res, 400, { ok: false, error: '缺少 state 字段（null = 清空）' })
+        return
+      }
+      const candidate = payload.state
+      if (candidate !== null && (typeof candidate !== 'object' || Array.isArray(candidate))) {
+        sendJson(res, 400, { ok: false, error: 'state 必须是对象或 null' })
+        return
+      }
+      if (!keep) {
+        clearDockState(file)
+        sendJson(res, 200, { ok: true, cleared: true, keep: false, file })
+        return
+      }
+      const result = writeDockState(candidate as Record<string, unknown> | null, file)
+      if (!result.written) {
+        // 太大（或写不进去）：如实回报，**不截半**、也不假装存上了。
+        sendJson(res, 200, {
+          ok: false,
+          keep: true,
+          file,
+          ...(result.tooBig === true ? { tooBig: true, bytes: result.bytes, error: `状态超过上限（${result.bytes} 字节），没有写盘` } : {}),
+          ...(result.error === undefined ? {} : { error: result.error }),
+        })
+        return
+      }
+      sendJson(res, 200, { ok: true, keep: true, file, bytes: result.bytes ?? 0 })
+    }
+
+    optCtx.effect(() => optCtx.webServer.register({
+      kind: 'exact',
+      path: OPTIMIZE_STATE_API_PATH,
+      handler: handleState as never,
+    }), 'composer-ux: optimize dock state route')
 
     optCtx.effect(() => optCtx.webServer.register({
       kind: 'exact',

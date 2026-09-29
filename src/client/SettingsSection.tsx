@@ -13,7 +13,8 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD,
+  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZER_CONTEXT_FIELD,
+  OPTIMIZER_LEDGER_FIELD,
   OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
@@ -82,6 +83,8 @@ export interface SettingsSectionInjected {
     resetBook: () => void
     /** 关掉顶部那条写入失败/未生效的说明。 */
     dismissNotice: () => void
+    /** 清空结果框状态（磁盘上那份 + 当前框里这份）。 */
+    clearDockState: () => void
   }
 }
 
@@ -341,16 +344,21 @@ function ToggleRow(props: {
   desc?: string
   checked: boolean
   onChange: (next: boolean) => void
+  /** 可选的动作按钮（例如「清空结果框状态」）。 */
+  action?: { label: string; onClick: () => void }
   /** 展开区里的第一行：不画上边框。 */
   first?: boolean
 }) {
-  const { label, desc, checked, onChange, first } = props
+  const { label, desc, checked, onChange, action, first } = props
   return (
     <div style={first === true ? { ...row, borderTop: 'none' } : row}>
       <div style={rowText}>
         <div style={rowTitle}>{label}</div>
         {desc !== undefined && desc !== '' && <div style={rowDesc}>{desc}</div>}
       </div>
+      {action !== undefined && (
+        <button type="button" style={pill} onClick={action.onClick}>{action.label}</button>
+      )}
       <Switch label={label} checked={checked} onChange={onChange} />
     </div>
   )
@@ -1331,6 +1339,14 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           desc="每轮往 $DSH_HOME/composer-ux/optimize-log.jsonl 追加一条元数据：档位、草稿字数、上下文规模、条目数、丢弃条数与原因、是否重试或回落、耗时、路由、成败 —— 只记数字与原因，不记一个字原文。看：node scripts/recap.mjs；清空：node scripts/recap.mjs --clear"
           checked={settings.optimizerLedger}
           onChange={next => { actions.setField(OPTIMIZER_LEDGER_FIELD, next) }}
+        />
+
+        <ToggleRow
+          label="重启后保留结果框"
+          desc="打开后，结果框这一份状态（成品正文、条目、逐字引文、发起时的草稿）会存进 $DSH_HOME/composer-ux/optimize-dock.json，下次启动或刷新页面时恢复 —— 否则重启一次 DSH 就丢了刚跑出来的成品，再看要再花一次模型调用。⚠ 这份文件里**有内容**（与 quick-prompts.json 同性质）；只记元数据的那份是上面的逐轮台账。"
+          checked={settings.optimizeKeepDock}
+          onChange={next => { actions.setField(OPTIMIZE_KEEP_DOCK_FIELD, next) }}
+          action={{ label: '清空结果框状态', onClick: actions.clearDockState }}
         />
         <OptimizerPromptEditor
           tier={settings.optimizerTier}

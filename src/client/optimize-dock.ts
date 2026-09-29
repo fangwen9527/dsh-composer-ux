@@ -62,6 +62,8 @@ export type OptimizeDockEvent =
   | { readonly type: 'cancel'; readonly at: number }
   | { readonly type: 'edit'; readonly text: string }
   | { readonly type: 'clear' }
+  /** 从磁盘恢复上一轮（0.13.0 ①）：只在框空着时由启动流程发一次。 */
+  | { readonly type: 'restore'; readonly snapshot: OptimizeDockState }
 
 /**
  * 状态迁移。
@@ -75,6 +77,9 @@ export type OptimizeDockEvent =
  */
 export function dockReducer(state: OptimizeDockState | null, event: OptimizeDockEvent): OptimizeDockState | null {
   switch (event.type) {
+    case 'restore':
+      // 整份替换（不是增量）：调用方保证 snapshot 已过 sanitizeDockSnapshot，且框此刻是空的。
+      return event.snapshot
     case 'start':
       // 开新一轮：条目流水、成品、记账全部清空（单轮语义）。
       return {
@@ -227,5 +232,85 @@ export function dockPhaseText(state: OptimizeDockState): string {
     case 'done': return '优化完成'
     case 'cancelled': return '已取消：下面是已经生成的部分'
     case 'error': return '出错了'
+  }
+}
+
+/** 与宿主的 OPTIMIZE_MAX_ITEMS 对齐（测试钉住两者相等）；坏文件塞再多也只恢复这么多。 */
+export const DOCK_RESTORE_MAX_ITEMS = 12
+
+/** 恢复时单个文本字段的上限：正常几 KB，给足余量但别让一份被改坏的文件把界面塞爆。 */
+const DOCK_RESTORE_MAX_TEXT = 60_000
+
+const restoreStr = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '')
+const restoreNum = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0
+
+/**
+ * 把磁盘上那份状态净化为可用状态。
+ *
+ * 为什么必须净化：那份 JSON 可能是被手工改过的、旧版本写的、或写到一半断电的。
+ * 认不出就返回 null —— 宁可"没有可恢复的结果"，也不要拿半份脏数据把界面弄乱。
+ *
+ * @param raw - 读出来的未知值（来自 GET /composer-ux/optimize-state）。
+ * @returns 可用的结果框状态，或 null（认不出）。
+ */
+export function sanitizeDockSnapshot(raw: unknown): OptimizeDockState | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const row = raw as Record<string, unknown>
+  const phase = row.phase
+  if (phase !== 'running' && phase !== 'done' && phase !== 'error' && phase !== 'cancelled') return null
+
+  const items: OptimizeItemView[] = []
+  for (const entry of Array.isArray(row.items) ? row.items : []) {
+    if (items.length >= DOCK_RESTORE_MAX_ITEMS) break
+    if (typeof entry !== 'object' || entry === null) continue
+    const item = entry as Record<string, unknown>
+    const id = restoreStr(item.id, 80)
+    const body = restoreStr(item.text, 6_000)
+    if (id === '' && body === '') continue
+    items.push({
+      index: restoreNum(item.index) || items.length + 1,
+      id,
+      kind: restoreStr(item.kind, 40),
+      text: body,
+      quote: restoreStr(item.quote, 6_000),
+      quoteSource: restoreStr(item.quoteSource, 16) === 'user' ? 'user' : 'none',
+    })
+  }
+
+  const dropped: OptimizeDropped[] = []
+  for (const entry of Array.isArray(row.dropped) ? row.dropped : []) {
+    if (dropped.length >= DOCK_RESTORE_MAX_ITEMS * 2) break
+    if (typeof entry !== 'object' || entry === null) continue
+    const item = entry as Record<string, unknown>
+    const reason = restoreStr(item.reason, 200)
+    if (reason === '') continue
+    dropped.push({
+      id: restoreStr(item.id, 80),
+      kind: restoreStr(item.kind, 40),
+      reason,
+    })
+  }
+
+  return {
+    // 重启前那一轮没跑完：如实当"已取消"，不假装还在跑（秒表也不再走）。
+    phase: phase === 'running' ? 'cancelled' : phase,
+    items,
+    dropped,
+    text: restoreStr(row.text, DOCK_RESTORE_MAX_TEXT),
+    edited: row.edited === true,
+    error: restoreStr(row.error, 400),
+    route: restoreStr(row.route, 200),
+    truncated: row.truncated === true,
+    fallback: row.fallback === true,
+    retried: row.retried === true,
+    promptSource: restoreStr(row.promptSource, 32),
+    itemCount: restoreNum(row.itemCount),
+    // 恢复的框不该有秒表在跑：起点归零，耗时用存下来的值。
+    startedAt: 0,
+    elapsedMs: restoreNum(row.elapsedMs),
+    draftAtStart: restoreStr(row.draftAtStart, 20_000),
+    source: restoreStr(row.source, 20_000),
+    slashPrefix: restoreStr(row.slashPrefix, 40),
   }
 }

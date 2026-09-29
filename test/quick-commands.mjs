@@ -1201,17 +1201,17 @@ const json = res => JSON.parse(res.captured.body)
 
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
-  // 0.10.0 起是六条（多了「价目同步」与「余额」）。这条断言的价值就是
+  // 0.10.0 起是六条（多了「价目同步」与「余额」），0.13.0 起是七条（多了「结果框状态」）。这条断言的价值就是
   // **新增路由必须在测试里登记**：所以既数总条数（多一条就红），又逐条比对契约里的路径常量
   // （路径改名也红）。绝不放宽成"至少 N 条"——那等于把这道登记关卡拆掉。
   const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
   const syncPath = /SYNC_API_PATH = '([^']+)'/.exec(contract)?.[1]
   const expectedPaths = [
-    pure.OPTIMIZER_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
+    pure.OPTIMIZER_API_PATH, pure.OPTIMIZE_STATE_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
     pure.BALANCE_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH,
   ]
-  check('注册了六条 exact 路由（优化 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启）',
-    host.routes.length === 6
+  check('注册了七条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启）',
+    host.routes.length === 7
     && host.routes.every(route => route.kind === 'exact')
     && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))

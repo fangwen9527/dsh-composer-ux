@@ -976,6 +976,55 @@ const cases = [
     expect: "台账文件写出来了",
   },
 
+  {
+    name: "DL 损坏状态不再改名留证据（用户唯一一份成品会消失）",
+    file: "src/optimize-state.ts",
+    from: "    renameSync(file, target)\n    return target",
+    to: "    return target",
+    test: "test/optimize-state.mjs",
+    expect: "原文件被**改名**留证据（不是覆盖/删除）",
+  },
+  {
+    name: "DM 体积上限被放大（超限照样写盘）",
+    file: "src/optimize-state.ts",
+    from: "    if (bytes > OPTIMIZE_STATE_MAX_BYTES) return { written: false, tooBig: true, bytes }",
+    to: "    if (bytes > OPTIMIZE_STATE_MAX_BYTES * 1_000) return { written: false, tooBig: true, bytes }",
+    test: "test/optimize-state.mjs",
+    expect: "超上限拒写（不截半）",
+  },
+  {
+    name: "DN 清空不再删文件（点了清空却还在）",
+    file: "src/optimize-state.ts",
+    from: "    if (state === null) {\n      if (existsSync(file)) rmSync(file)\n      return { written: true, bytes: 0 }",
+    to: "    if (state === null) {\n      return { written: true, bytes: 0 }",
+    test: "test/optimize-state.mjs",
+    expect: "null = 清空（删文件）",
+  },
+  {
+    name: "DO 重启前没跑完的那一轮恢复成\"还在跑\"（秒表会一直走）",
+    file: "src/client/optimize-dock.ts",
+    from: "    phase: phase === 'running' ? 'cancelled' : phase,",
+    to: "    phase,",
+    test: "test/optimize-state.mjs",
+    expect: "重启前没跑完的那一轮 → 已取消（不假装还在跑）",
+  },
+  {
+    name: "DP 净化不再校验 phase（脏数据会糊到界面上）",
+    file: "src/client/optimize-dock.ts",
+    from: "  if (phase !== 'running' && phase !== 'done' && phase !== 'error' && phase !== 'cancelled') return null",
+    to: "  if (false) return null",
+    test: "test/optimize-state.mjs",
+    expect: "phase 不认识 → null",
+  },
+  {
+    name: "DQ 恢复不再判断\"框是否空着\"（会把用户正在跑的那一轮顶掉）",
+    file: "src/client.tsx",
+    from: "        if (dock.getSnapshot() === null) dock.set(dockReducer(null, { type: 'restore', snapshot: reply.state }))",
+    to: "        dock.set(dockReducer(null, { type: 'restore', snapshot: reply.state }))",
+    test: "test/optimize-state.mjs",
+    expect: "只在框还空着时恢复",
+  },
+
 ]
 
 let allBit = true

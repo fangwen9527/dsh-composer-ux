@@ -6,7 +6,8 @@
  * 由 test/quick-commands.mjs 用 esbuild 现场打包再 import。
  */
 export {
-  DEFAULT_SETTINGS, DEFAULT_QUICK_PROMPTS, OPTIMIZER_API_PATH, OPTIMIZER_TIERS,
+  DEFAULT_SETTINGS, DEFAULT_QUICK_PROMPTS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_STATE_API_PATH,
+  OPTIMIZER_API_PATH, OPTIMIZER_TIERS,
   QUICK_LABEL_MAX, QUICK_PROMPT_MAX, QUICK_TEXT_MAX, sanitizeSettings,
   SLASH_COMMAND_RE, splitSlashCommand,
 } from '../src/settings-contract.ts'
@@ -40,7 +41,8 @@ export {
  * 这些是行为契约，在浏览器里很难逐例复现，所以整组出口在 node 里钉住。
  */
 export {
-  dockPhaseText, dockReducer, dockSummary, insertDecision, previousForChain,
+  DOCK_RESTORE_MAX_ITEMS, dockPhaseText, dockReducer, dockSummary, insertDecision, previousForChain,
+  sanitizeDockSnapshot,
 } from '../src/client/optimize-dock.ts'
 export {
   OPTIMIZER_SPECS, OPTIMIZER_OUTPUT_CONTRACT, OPTIMIZE_ITEM_KINDS, OPTIMIZE_ITEM_MAX_CHARS,

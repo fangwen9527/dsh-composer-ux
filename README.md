@@ -154,6 +154,38 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
   - 三档的差别是**依据预算**：普通 = 只做语言层修复；高级 = 可以补"能指回原话某一句"的必要要求；极端 = 再加分阶段计划与预案。成品有篇幅预算（普通档 1.4 倍），超了就按固定顺序丢可选的节，并把"省略了几条"写进成品（绝不静默截断）。
   - 状态行会如实交代这一轮的结果：`N 条补全 · 丢弃 M 条 · 重试过一次 · 自定义提示词`；模型没按条目契约输出时走**整段照收**的兜底并标注 `未校验依据`（保证改造不会让原本能用的优化变成失败），输出像条目信封但半截坏掉时**直接失败**、绝不把坏 JSON 写进输入框。
 
+### 实机（0.12.0）
+
+**工具行只有一枚「⚡ 快捷指令」**（优化从面板进，见下面第 2 张）：
+0.11.1 曾在工具行并排加过一枚独立的「✨ 优化」按钮，用户看到实机后否掉 —— 它撤了，
+秒表读数与忙碌态都在面板主按钮上，信息一点没少。
+
+![工具行：只剩一枚「快捷指令」按钮](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-toolrow-0.12.0.png)
+
+**逐条流式**：点开面板 → 点「✨ 优化提示词」→ 条目**一条一条**出现，
+**只显示已经闭合、且通过逐字校验的条目**（没通过的不会伪装成通过）；
+框顶是秒表读数与「取消」，跑的时候按钮是压暗的：
+
+![逐条流式进行中：已到的条目 + 优化中…（16s）+ 取消](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-streaming-0.12.0.png)
+
+**完成态**：`优化完成 · 用时 17.5 秒`。每条下面挂着它引用的**那句原话**，
+成品可以直接在框里改，点「插入输入框」才写回你的输入框：
+
+![优化完成：条目 + 逐字依据 + 可编辑成品 + 插入输入框](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-done-0.12.0.png)
+
+**写回之后**：输入框里就是成品（`Ctrl+Z` 可还原），可以接着改或直接发：
+
+![插入输入框之后](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-inserted-0.12.0.png)
+
+**设置页**那一栏新增「携带会话上下文」（**默认开**，用来消歧义；上下文不算引文依据）：
+
+![设置页：优化强度三档 + 携带会话上下文开关](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/settings-session-context-0.12.0.png)
+
+> 上面这 5 张是 0.12.0 发布前在真机上截的（同一份产物）。截图验收当场抓到一个**只在深色主题出现**的
+> 真 bug：结果框那颗「插入输入框」是白底白字（`--dsw-alias-label-inverse` 这个令牌名不存在，
+> 兜底成 `#fff`，而深色主题里 `brand-primary` 恰好是近白）—— 已修，并补了对象级护栏；
+> 修前的样子留在 `docs/optimize-button-contrast-before.png` 里做记录。
+
 ### 数据存在哪
 
 快捷指令（分类 + 条目 + 每条的插入模式）存在 **`$DSH_HOME/quick-prompts.json`**（默认 `~/.dsh/quick-prompts.json`）：

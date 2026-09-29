@@ -41,7 +41,7 @@ import {
   insertIntoDraft, optimizeDraftStream, replaceDraft, sameAnchor,
 } from './client/quick-commands.ts'
 import {
-  dockReducer, dockSummary, insertDecision, type OptimizeDockState,
+  dockReducer, dockSummary, insertDecision, previousForChain, type OptimizeDockState,
 } from './client/optimize-dock.ts'
 
 export const name = 'composer-ux'
@@ -368,7 +368,7 @@ export function apply(ctx: any): void {
    *
    * @param input - 这一轮的输入（默认读输入框；「重新优化」用的是框里那一轮的原文）。
    */
-  const startOptimize = (input: { source: string; draftAtStart: string; prefix: string }): void => {
+  const startOptimize = (input: { source: string; draftAtStart: string; prefix: string; previous?: string }): void => {
     if (optimizing.getSnapshot()) return
     const startedAt = Date.now()
     optimizing.set(true)
@@ -389,7 +389,7 @@ export function apply(ctx: any): void {
     void optimizeDraftStream(input.source, live.getSnapshot().optimizerTier, {
       onItem: (item) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'item', item })) },
       onDropped: (row) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'dropped', row })) },
-    }, controller.signal).then(
+    }, controller.signal, input.previous).then(
       (result) => {
         // 取消/被新一轮替换：状态由那两路自己写，这里再写一次会把它覆盖成"失败"。
         if (controller.signal.aborted) return
@@ -427,10 +427,12 @@ export function apply(ctx: any): void {
       note(`${slash.prefix} 后面没有正文：命令本身不需要优化`)
       return
     }
+    const source = slash.prefix === '' ? draft : slash.body
     startOptimize({
-      source: slash.prefix === '' ? draft : slash.body,
+      source,
       draftAtStart: draft,
       prefix: slash.prefix,
+      previous: previousForChain(dock.getSnapshot(), source),
     })
   }
 
@@ -487,7 +489,12 @@ export function apply(ctx: any): void {
       const state = dock.getSnapshot()
       if (state === null) return
       if (state.edited) note('重新优化会覆盖你在结果框里手改的内容')
-      startOptimize({ source: state.source, draftAtStart: currentDraft(), prefix: state.slashPrefix })
+      startOptimize({
+        source: state.source,
+        draftAtStart: currentDraft(),
+        prefix: state.slashPrefix,
+        previous: state.edited ? state.text : '',
+      })
     },
     /** 中止这一轮并保留已生成的部分（条目流水留着，成品本来就不存在）。 */
     dockCancel: (): void => {

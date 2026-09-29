@@ -40,13 +40,20 @@ export {
  * 这些是行为契约，在浏览器里很难逐例复现，所以整组出口在 node 里钉住。
  */
 export {
-  dockPhaseText, dockReducer, dockSummary, insertDecision,
+  dockPhaseText, dockReducer, dockSummary, insertDecision, previousForChain,
 } from '../src/client/optimize-dock.ts'
 export {
   OPTIMIZER_SPECS, OPTIMIZER_OUTPUT_CONTRACT, OPTIMIZE_ITEM_KINDS, OPTIMIZE_ITEM_MAX_CHARS,
   OPTIMIZE_MAX_ITEMS,
   buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource,
 } from '../src/optimizer-prompt.ts'
+/**
+ * 会话上下文（0.12.0）：从会话快照里挑往来、按预算收敛、渲染成块。
+ * 这三步决定了模型看到什么，而它们全是纯函数（快照形状来自真实会话日志）。
+ */
+export {
+  contextBlock, contextWithinBudget, messageTextOf, recentTurns,
+} from '../src/prompt-context.ts'
 /**
  * 依据校验 + 宿主装配（0.6.0 的机制内核）：这些函数是"模型能不能凭空加需求"的唯一防线，
  * 每一条判据都要能在 node 里单独钉住，所以整组出口。

@@ -13,7 +13,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
+  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
@@ -1318,6 +1318,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             ))}
           </div>
         </div>
+        <ToggleRow
+          label="携带会话上下文"
+          desc="优化时把当前会话最近的往来（各 4 条、共约 1600 字）一并交给模型，用来消歧义 —— 比如“它那个也改一下”里的“它”指谁。关掉就只按草稿本身优化。上下文只发给你自己配置的那条模型路由；它只用于理解，不能当引文依据。"
+          checked={settings.optimizerContext}
+          onChange={next => { actions.setField(OPTIMIZER_CONTEXT_FIELD, next) }}
+        />
         <OptimizerPromptEditor
           tier={settings.optimizerTier}
           value={settings[optimizerPromptFieldOf(settings.optimizerTier) as keyof ComposerUxSettings] as string}

@@ -505,6 +505,7 @@ export async function optimizeDraftStream(
   tier: string,
   handlers: OptimizeStreamHandlers = {},
   signal?: AbortSignal,
+  previous?: string,
 ): Promise<OptimizeOutcome> {
   const body = text.trim()
   if (body === '') return { ok: false, error: '输入框是空的，先写点什么再优化' }
@@ -513,7 +514,14 @@ export async function optimizeDraftStream(
     response = await fetch(OPTIMIZER_API_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ text: body, tier }),
+      // sessionId: the host uses it to read conversation context (0.12.0);
+      // unavailable session just means "no context", never a failed round.
+      body: JSON.stringify({
+        text: body,
+        tier,
+        sessionId: currentSessionId(),
+        ...(previous === undefined || previous.trim() === '' ? {} : { previous }),
+      }),
       ...(signal === undefined ? {} : { signal }),
     })
   } catch (error) {

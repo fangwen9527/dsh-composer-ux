@@ -878,6 +878,41 @@ const cases = [
     test: 'test/quick-commands.mjs',
     expect: '停表',
   },
+  // ── 0.12.0：会话上下文与记忆链 ───────────────────────────────────────────
+  {
+    // 这条是**真踩过的 bug**：readOwnSetting 走 textOf，把 false 读成空串，
+    // 于是"关掉上下文开关"被读成"没设置"、永远开着。5d 那组用例逮住了它。
+    name: 'DA 上下文开关用文本读法（false 读成空串 ⇒ 关不掉）',
+    file: 'src/host.ts',
+    from: '      const contextOn = readOwnFlag(optCtx, config, OPTIMIZER_CONTEXT_FIELD, DEFAULT_SETTINGS.optimizerContext)',
+    to: "      const contextOn = readOwnSetting(optCtx, config, OPTIMIZER_CONTEXT_FIELD) !== '' || true",
+    test: 'test/quick-commands.mjs',
+    expect: '开关关掉：不读会话',
+  },
+  {
+    name: 'DB 上下文不按角色各取（助手碎片把用户的诉求挤出上下文）',
+    file: 'src/prompt-context.ts',
+    from: "  const users = collected.filter(item => item.role === 'user').slice(-Math.max(0, turns))\n  const assistants = collected.filter(item => item.role === 'assistant').slice(-Math.max(0, turns))",
+    to: "  const users = collected.filter(item => item.role === 'user')\n  const assistants = collected.filter(item => item.role === 'assistant')",
+    test: 'test/quick-commands.mjs',
+    expect: '两个角色各自只取最近 N 条',
+  },
+  {
+    name: 'DC 上下文把插件注入的 user 消息也当"你说过的话"',
+    file: 'src/prompt-context.ts',
+    from: "      if (source !== undefined && textOf(source.kind) !== 'user') continue",
+    to: '      // mutated: 不再过滤来源',
+    test: 'test/quick-commands.mjs',
+    expect: '只取真正来自用户的',
+  },
+  {
+    name: 'DD 记忆链门槛拆掉（同文重试/对成品重跑也带上参考，污染模型判断）',
+    file: 'src/client/optimize-dock.ts',
+    from: "  if (sameDraft(dock.source, nextSource)) return ''",
+    to: "  if (false) return ''",
+    test: 'test/quick-commands.mjs',
+    expect: '同文重试',
+  },
 ]
 
 let allBit = true

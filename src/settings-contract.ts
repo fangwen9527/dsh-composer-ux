@@ -305,6 +305,29 @@ export const QUICK_PROMPTS_FIELD = 'quickPrompts'
 /** 优化强度档位字段名。 */
 export const OPTIMIZER_TIER_FIELD = 'optimizerTier'
 
+/**
+ * 「携带会话上下文」开关（0.12.0）。
+ *
+ * 默认**开**：优化质量主要取决于"这句话是在什么对话里说的" —— agentic 会话里你的输入
+ * 常常是"它那个也顺手改一下"这种离开上文就没有意义的短句。关掉就只按草稿本身优化。
+ * 上下文与草稿一样，只发给你自己配置的那条模型路由，不经过任何第三方。
+ */
+export const OPTIMIZER_CONTEXT_FIELD = 'optimizerContext'
+
+/** 上下文里最多各带几条（你的话 / 助手的话）。 */
+export const OPTIMIZER_CONTEXT_TURNS = 4
+
+/**
+ * 上下文总量上限（字符）。
+ *
+ * 为什么是 1600：它要能装下"最近一轮完整问答"，又不至于把草稿挤到提示词的角落 ——
+ * 优化是短任务，上下文只用来消歧义，不该变成主要输入。
+ */
+export const OPTIMIZER_CONTEXT_MAX_CHARS = 1_600
+
+/** 单条上下文的上限（字符）；超了截断，绝不整条丢（丢的那条可能正好是"它"指谁）。 */
+export const OPTIMIZER_CONTEXT_TURN_MAX_CHARS = 600
+
 /** 单个分类内的条数上限。 */
 export const QUICK_PROMPT_MAX = 60
 
@@ -797,6 +820,7 @@ export type SettingsField =
   | typeof HEADER_ROUTES_FIELD
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
+  | typeof OPTIMIZER_CONTEXT_FIELD
   | typeof OPTIMIZER_PROMPT_FIELDS.basic
   | typeof OPTIMIZER_PROMPT_FIELDS.advanced
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
@@ -874,6 +898,8 @@ export interface ComposerUxSettings {
   quickPrompts: readonly QuickPrompt[]
   /** 提示词优化强度档位。 */
   optimizerTier: OptimizerTier
+  /** 优化时是否携带当前会话的近期往来（默认开）。 */
+  optimizerContext: boolean
   /**
    * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
    *
@@ -953,6 +979,7 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   headerStatus: '',
   quickPrompts: DEFAULT_QUICK_PROMPTS,
   optimizerTier: DEFAULT_OPTIMIZER_TIER,
+  optimizerContext: true,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
   optimizerPromptBasic: '',
   optimizerPromptAdvanced: '',
@@ -1272,6 +1299,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     headerStatus: asText(HEADER_STATUS_FIELD, HEADER_VALUE_MAX),
     quickPrompts: asQuickPrompts(),
     optimizerTier: asTier(),
+    optimizerContext: asBool(OPTIMIZER_CONTEXT_FIELD),
     optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
     optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
     optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),

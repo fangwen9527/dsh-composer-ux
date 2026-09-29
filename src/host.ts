@@ -29,7 +29,7 @@ import {
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
-  OPTIMIZER_API_PATH, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
+  OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
@@ -68,6 +68,7 @@ import {
 import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
 import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts'
+import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
 
@@ -186,6 +187,25 @@ function readOwnSetting(scope: unknown, config: unknown, field: string): string 
     return textOf(makeReader(service, config)(NAMESPACE)?.[field])
   } catch {
     return ''
+  }
+}
+
+/**
+ * 读一个**布尔**设置。
+ *
+ * 为什么不能用 {@link readOwnSetting}：那个函数走 `textOf`，而 `textOf(false) === ''`
+ * —— 于是"关掉开关"会被读成"没设置"（0.12.0 的上下文开关就是这么踩的，
+ * 是 5d 那组用例逮住的）。认不出类型就回退到给定的默认值。
+ */
+function readOwnFlag(scope: unknown, config: unknown, field: string, fallback: boolean): boolean {
+  try {
+    const get = (scope as { get?: (name: string) => unknown } | undefined)?.get
+    if (typeof get !== 'function') return fallback
+    const service = get.call(scope, 'settings') as SettingsLike | undefined
+    const value = makeReader(service, config)(NAMESPACE)?.[field]
+    return typeof value === 'boolean' ? value : fallback
+  } catch {
+    return fallback
   }
 }
 
@@ -426,6 +446,8 @@ function ownSchema(): z {
       always: z.boolean().default(false),
     })).default(DEFAULT_QUICK_PROMPTS.map(item => ({ ...item }))),
     [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
+    // 优化时是否携带当前会话的近期往来（0.12.0；默认开，见契约里的说明）。
+    [OPTIMIZER_CONTEXT_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerContext),
     // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
     [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
     [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
@@ -716,6 +738,8 @@ export function apply(ctx: Context, config?: unknown): void {
   ctx.inject(['webServer', 'llm'], (optCtx) => {
     /** 单次优化的墙钟上限：够慢模型跑完，但不会让请求永远挂着。 */
     const LLM_TIMEOUT_MS = 180_000
+    /** 记忆链里"上一轮成品"的长度上限（再多就本末倒置了）。 */
+    const PREVIOUS_MAX = 1_500
     /** 请求体上限（输入框里的原文，正常都是几 KB）。 */
     const BODY_MAX_BYTES = 1_000_000
     /**
@@ -803,6 +827,23 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }
 
+    /**
+     * 读一份会话日志快照（0.12.0 的会话上下文用）。
+     *
+     * 上下文是**加分项**：宿主没装 sessionQuery、会话 id 认不出、快照读失败……一律返回
+     * undefined 并按"没有上下文"继续优化 —— 绝不因为读不到上文就让整轮失败。
+     */
+    const readSessionSnapshot = async (sessionId: string): Promise<unknown> => {
+      try {
+        const query = optCtx.get('sessionQuery') as
+          { readSession?: (id: string) => Promise<unknown> } | undefined
+        if (query?.readSession === undefined) return undefined
+        return await query.readSession(sessionId as never)
+      } catch {
+        return undefined
+      }
+    }
+
     const handle = async (
       req: { method?: string; [key: string]: unknown },
       res: {
@@ -861,7 +902,21 @@ export function apply(ctx: Context, config?: unknown): void {
       // 读设置走 `optCtx.get('settings')`（**不在 inject 列表**里也安全：`get` 不抛，
       // 裸属性读才会抛）。读不到就当作"没有自定义"——内置那份永远可用。
       const customPrompt = readOwnSetting(optCtx, config, optimizerPromptFieldOf(tier))
-      const system = buildOptimizeSystem(tier, customPrompt)
+
+      // 会话上下文（0.12.0）：设置里默认开；关了、或没送 sessionId、或读不到快照，都按
+      // "没有上下文"走（优化本身不依赖它）。
+      const contextOn = readOwnFlag(optCtx, config, OPTIMIZER_CONTEXT_FIELD, DEFAULT_SETTINGS.optimizerContext)
+      const sessionId = textOf(payload.sessionId)
+      const contextTurns = contextOn && sessionId !== ''
+        ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId)))
+        : []
+      const contextText = contextBlock(contextTurns)
+
+      // 记忆链（0.12.0）：上一轮成品。客户端只在"用户在上一版基础上又改了原文"时才带它。
+      const previous = textOf(payload.previous).trim().slice(0, PREVIOUS_MAX)
+
+      // 达到了上下文就加"只用于消歧义、不算依据"那段纪律。
+      const system = buildOptimizeSystem(tier, customPrompt, { intent: contextText !== '' })
 
       const controller = new AbortController()
       const timer = setTimeout(() => { controller.abort() }, LLM_TIMEOUT_MS)
@@ -982,13 +1037,13 @@ export function apply(ctx: Context, config?: unknown): void {
       let retried = false
       let result: { out: string; failure: string }
       try {
-        result = await runOnce(buildOptimizeUser(body), onStreamDelta)
+        result = await runOnce(buildOptimizeUser(body, { context: contextText, previous }), onStreamDelta)
         // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
         // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
         // 只在**没报错**时重试（报错重试一次只是白等一轮）。
         if (result.out.trim() === '' && result.failure === '') {
           retried = true
-          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目' }), onStreamDelta)
+          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目', context: contextText, previous }), onStreamDelta)
           if (second.out.trim() !== '') result = second
           else if (result.failure === '') result = second
         }
@@ -1030,6 +1085,9 @@ export function apply(ctx: Context, config?: unknown): void {
           model: route.model,
           // ── 以下为 0.6.0 新增的**附加**字段：老客户端不读它们也不会坏。
           promptSource: optimizePromptSource(customPrompt),
+          // 这一轮带了几个往来（0 = 没带上下文：关了开关 / 没有会话 / 读不到快照）。
+          contextTurns: contextTurns.length,
+          hadPrevious: previous !== '',
           retried,
           fallback: assembled.fallback,
           itemCount: assembled.itemCount,

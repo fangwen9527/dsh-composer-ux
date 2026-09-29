@@ -155,6 +155,15 @@ console.log('1. 快捷指令的净化（防脏数据）')
     JSON.stringify([blank.keysEnabled, blank.menuEnabled, blank.quickEnabled, blank.panelEnabled, blank.terminalEnabled]))
   check('总开关默认开（它是总闸，不是"要不要用这一栏"）', blank.enabled === true)
   check('OpenCode 那一栏沿用 headerEnabled，且默认关', blank.headerEnabled === false)
+  // 上下文开关是"默认开"的那一类（与栏开关相反）：它不改任何既有行为，只是让优化多知道
+  // 一点上文；所以默认开，且**关掉必须真的关掉**（0.12.0 踩过一次：布尔被 textOf 读成空串，
+  // 于是"关"等于"没设置"，永远开着 —— 由 5d 那组用例逮住）。
+  check('上下文开关默认开', blank.optimizerContext === true && pure.DEFAULT_SETTINGS.optimizerContext === true)
+  check('上下文开关显式关掉就是关',
+    pure.sanitizeSettings({ optimizerContext: false }).optimizerContext === false)
+  check('上下文开关收到脏值（字符串/数字）回落默认开',
+    pure.sanitizeSettings({ optimizerContext: 'no' }).optimizerContext === true
+    && pure.sanitizeSettings({ optimizerContext: 0 }).optimizerContext === true)
   check('DEFAULT_SETTINGS 与净化结果一致（两处不许分叉）',
     pure.DEFAULT_SETTINGS.enabled === true && pure.DEFAULT_SETTINGS.keysEnabled === false
     && pure.DEFAULT_SETTINGS.menuEnabled === false && pure.DEFAULT_SETTINGS.quickEnabled === false
@@ -649,6 +658,123 @@ console.log('3d. 结果框状态机：单轮、取消保留、插入前比对')
     && pure.dockPhaseText({ ...base, phase: 'error' }) === '出错了')
 }
 
+// ══════════════ 3e. 会话上下文与记忆链（0.12.0） ═════════════════════════════
+console.log('3e. 会话上下文：挑往来 / 收敛预算 / 渲染成块；记忆链门槛')
+
+{
+  // 快照形状照真实会话日志：user/message 的 data 就是消息本身，assistant/message 在 data.message 里。
+  const snapshot = {
+    events: [
+      { type: 'user/message', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: '帮我改一下设置页' }], source: { kind: 'user' } } },
+      { type: 'assistant/message', data: { message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '好的，改了标题' }] } } },
+      // 插件注入的 user 角色消息：不算"你说过的话"。
+      { type: 'user/message', data: { id: 'u2', role: 'user', content: [{ type: 'text', text: '<goal>内部注入</goal>' }], source: { kind: 'plugin' } } },
+      // 只承载 usage 的空壳助手消息（没有正文）。
+      { type: 'assistant/message', data: { message: { id: 'a2', role: 'assistant', content: [] } } },
+      { type: 'user/message', data: { id: 'u3', role: 'user', content: [{ type: 'text', text: '它那个也顺手改一下' }], source: { kind: 'user' } } },
+      // 助手思考块不算对话正文。
+      { type: 'assistant/message', data: { message: { id: 'a3', role: 'assistant', content: [{ type: 'reasoning', text: '我在想……' }, { type: 'text', text: '改好了' }] } } },
+    ],
+  }
+  const turns = pure.recentTurns(snapshot)
+  check('挑往来：只取真正来自用户的（插件注入的不算）',
+    turns.filter(turn => turn.role === 'user').map(turn => turn.text).join('|') === '帮我改一下设置页|它那个也顺手改一下',
+    JSON.stringify(turns))
+  check('挑往来：助手空壳不算一条', turns.filter(turn => turn.role === 'assistant').length === 2, JSON.stringify(turns))
+  check('挑往来：助手的思考块不进上下文',
+    turns.filter(turn => turn.role === 'assistant').map(turn => turn.text).join('|') === '好的，改了标题|改好了',
+    JSON.stringify(turns))
+  check('挑往来：按发生顺序合并（不是先排完用户再排助手）',
+    turns.map(turn => turn.role).join(',') === 'user,assistant,user,assistant', turns.map(turn => turn.role).join(','))
+  check('挑往来：垃圾快照不抛', pure.recentTurns(null).length === 0 && pure.recentTurns({ events: 'x' }).length === 0)
+
+  check('messageTextOf：多块按换行拼；非文本块忽略',
+    pure.messageTextOf({ content: [{ type: 'text', text: 'A' }, { type: 'image' }, { type: 'text', text: 'B' }] }) === 'A\nB')
+  check('messageTextOf：content 是老式字符串也认', pure.messageTextOf({ content: ' 就一句话 ' }) === '就一句话')
+  check('messageTextOf：认不出的输入返回空串', pure.messageTextOf(undefined) === '' && pure.messageTextOf({}) === '')
+
+  // 每角色各自取最近 N 条：助手碎片多的时候，用户的诉求不能被挤出去。
+  const many = {
+    events: [
+      ...Array.from({ length: 10 }, (_, i) => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `助手${String(i)}` }] } } })),
+      { type: 'user/message', data: { content: [{ type: 'text', text: '我的诉求' }], source: { kind: 'user' } } },
+      ...Array.from({ length: 10 }, (_, i) => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `后段助手${String(i)}` }] } } })),
+    ],
+  }
+  const picked = pure.recentTurns(many, 2)
+  check('用户消息优先保底：助手再多也挤不掉你的那一句',
+    picked.some(turn => turn.text === '我的诉求'), JSON.stringify(picked))
+  check('两个角色各自只取最近 N 条',
+    picked.filter(turn => turn.role === 'assistant').length === 2, String(picked.length))
+}
+
+{
+  const many = turns => turns
+  const long = 'x'.repeat(900)
+  const budgeted = pure.contextWithinBudget([
+    { role: 'user', text: '最早的' },
+    { role: 'assistant', text: '中间的' },
+    { role: 'user', text: '最新的' },
+  ], { maxChars: 5, turnMaxChars: 600 })
+  check('收敛：超总量时从最旧的开始整条丢，最新那条永远留着',
+    budgeted.length === 1 && budgeted[0].text === '最新的', JSON.stringify(budgeted))
+  const clipped = pure.contextWithinBudget([{ role: 'user', text: long }], { maxChars: 100, turnMaxChars: 40 })
+  check('收敛：单条先截断到上限、保留末尾（问题通常在最后）',
+    clipped[0].text.length === 40 && clipped[0].text.startsWith('…') && clipped[0].text.endsWith('x'), String(clipped[0].text.length))
+  const single = pure.contextWithinBudget([{ role: 'user', text: long }], { maxChars: 30, turnMaxChars: 600 })
+  check('收敛：只剩最新一条还超预算 → 再截一次（不是丢掉它）',
+    single.length === 1 && single[0].text.length <= 30, JSON.stringify(single.map(t => t.text.length)))
+  check('收敛：空数组进空数组出', pure.contextWithinBudget([]).length === 0)
+  check('收敛：默认参数下 4+4 条短往来全保留',
+    pure.contextWithinBudget(many(Array.from({ length: 8 }, () => ({ role: 'user', text: '短句' })))).length === 8)
+
+  check('渲染：空数组 → 空串（调用方据此不加块）', pure.contextBlock([]) === '')
+  check('渲染：每条一行，标明谁说的',
+    pure.contextBlock([{ role: 'user', text: 'A' }, { role: 'assistant', text: 'B' }]) === '用户：A\n工作 AI：B')
+}
+
+{
+  const withIntent = pure.buildOptimizeSystem('advanced', '', { intent: true })
+  const without = pure.buildOptimizeSystem('advanced')
+  check('system：带上下文时追加"只用于理解、不算依据"那段纪律',
+    withIntent.includes('不算依据') && withIntent.includes('会话上下文'), withIntent.slice(-160))
+  check('system：不带上下文时没有那段', without.includes('不算依据') === false)
+  check('system：两种情况都仍以输出契约结尾（契约永远是最后一块）',
+    withIntent.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT) && without.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
+  check('system：自定义提示词 + 上下文也照加纪律',
+    pure.buildOptimizeSystem('advanced', '我的任务段', { intent: true }).startsWith('我的任务段')
+    && pure.buildOptimizeSystem('advanced', '我的任务段', { intent: true }).includes('不算依据'))
+
+  const user = pure.buildOptimizeUser('把那个页面弄好看点', { context: '用户：改一下设置页\n工作 AI：好了', previous: '上一版成品' })
+  check('user：上下文与上一轮成品都有各自的块',
+    user.includes('<会话上下文>') && user.includes('</会话上下文>') && user.includes('<上一轮成品>'), user.slice(0, 120))
+  check('user：原文永远排在最后（紧贴任务说明）',
+    user.indexOf('<原文>') > user.indexOf('</上一轮成品>') && user.indexOf('【待转达内容】') > user.indexOf('</上一轮成品>'))
+  check('user：空上下文/空上一轮时不留空块',
+    pure.buildOptimizeUser('X', { context: '  ', previous: '' }).includes('<会话上下文>') === false)
+  check('user：没有上下文时与旧形状一致（老用例仍应通过）',
+    pure.buildOptimizeUser('X').startsWith('【待转达内容】') && pure.buildOptimizeUser('X').includes('<原文>'))
+}
+
+{
+  const base = {
+    phase: 'done', items: [], dropped: [], text: '成品正文', edited: false, error: '', route: 'go/m',
+    truncated: false, fallback: false, retried: false, promptSource: 'builtin', itemCount: 1,
+    startedAt: 0, elapsedMs: 1, draftAtStart: '原文', source: '原文', slashPrefix: '',
+  }
+  check('记忆链：上一轮成功 + 草稿变了 → 带上上一版成品',
+    pure.previousForChain(base, '原文，另外加个导出') === '成品正文')
+  check('记忆链：草稿与上一轮原文逐字相同（同文重试）→ 不带',
+    pure.previousForChain(base, '原文') === '')
+  check('记忆链：草稿就是上一轮成品（原样插进去又点一次）→ 不带',
+    pure.previousForChain(base, '成品正文') === '')
+  check('记忆链：上一轮失败/取消 → 不带',
+    pure.previousForChain({ ...base, phase: 'error' }, '新草稿') === ''
+    && pure.previousForChain({ ...base, phase: 'cancelled' }, '新草稿') === '')
+  check('记忆链：没有上一轮 → 不带', pure.previousForChain(null, '新草稿') === '')
+  check('记忆链：上一轮成品是空的 → 不带', pure.previousForChain({ ...base, text: '  ' }, '新草稿') === '')
+}
+
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
 console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {
@@ -1019,6 +1145,8 @@ async function bootHost(options = {}) {
     // `sessions` 才会注册，所以这里让它也能按需注入（不传 ⇒ 与过去完全一样）。
     ...(options.connection === undefined ? {} : { connection: options.connection }),
     ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
+    // 0.12.0：会话上下文走 sessionQuery.readSession（读不到就当没上下文）。
+    ...(options.sessionQuery === undefined ? {} : { sessionQuery: options.sessionQuery }),
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
@@ -1616,6 +1744,96 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
   check('SSE：只有命令没有正文也是 400（不发请求）',
     onlyCmd.captured.status === 400 && /没有正文/.test(json({ captured: { body: onlyCmd.captured.body } }).error),
     onlyCmd.captured.body)
+}
+
+// ══════════════ 5d. 会话上下文与记忆链（宿主半，0.12.0） ═════════════════════
+console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链透传')
+
+{
+  const snapshot = {
+    events: [
+      { type: 'user/message', data: { content: [{ type: 'text', text: '帮我改一下设置页' }], source: { kind: 'user' } } },
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '好了，标题改了' }] } } },
+    ],
+  }
+  const readCalls = []
+  const boot = (extra = {}) => bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    sessionQuery: { readSession: async id => { readCalls.push(id); return snapshot } },
+    ...extra,
+  })
+
+  readCalls.length = 0
+  const withContext = await boot()
+  const res1 = makeRes()
+  await handler0(withContext, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'advanced', sessionId: 's-1' })), res1)
+  const user1 = withContext.llmCalls[0].messages[0].content[0].text
+  check('上下文：送到模型的 user 里有会话往来块',
+    user1.includes('<会话上下文>') && user1.includes('帮我改一下设置页') && user1.includes('工作 AI：好了，标题改了'),
+    user1.slice(0, 120))
+  check('上下文：system 里有"只用于理解、不算依据"那段纪律',
+    withContext.llmCalls[0].system.includes('不算依据'), withContext.llmCalls[0].system.slice(-120))
+  check('上下文：按 sessionId 读会话', readCalls.length === 1 && readCalls[0] === 's-1', JSON.stringify(readCalls))
+  check('上下文：回报带了几个往来（可观测）', json(res1).contextTurns === 2, String(json(res1).contextTurns))
+  check('上下文：原文仍排在最后，引文仍按原文校验',
+    user1.indexOf('</会话上下文>') < user1.indexOf('<原文>') && json(res1).ok === true, JSON.stringify(json(res1).text))
+
+  readCalls.length = 0
+  const off = await boot({ settings: { optimizerContext: false } })
+  const res2 = makeRes()
+  await handler0(off, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'advanced', sessionId: 's-1' })), res2)
+  check('开关关掉：不读会话（连快照都不读）', readCalls.length === 0, JSON.stringify(readCalls))
+  check('开关关掉：提示词里没有上下文块与那段纪律',
+    off.llmCalls[0].messages[0].content[0].text.includes('<会话上下文>') === false
+    && off.llmCalls[0].system.includes('不算依据') === false)
+  check('开关关掉：回报 contextTurns = 0', json(res2).contextTurns === 0, String(json(res2).contextTurns))
+
+  readCalls.length = 0
+  const noSession = await boot()
+  const res3 = makeRes()
+  await handler0(noSession, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res3)
+  check('没送 sessionId：不读会话、照常优化',
+    readCalls.length === 0 && json(res3).ok === true && json(res3).contextTurns === 0, JSON.stringify(json(res3).contextTurns))
+
+  const noService = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  const res4 = makeRes()
+  await handler0(noService, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', sessionId: 's-1' })), res4)
+  check('宿主没有 sessionQuery：按"没有上下文"继续，不失败',
+    json(res4).ok === true && json(res4).contextTurns === 0, res4.captured.body.slice(0, 80))
+
+  const broken = await bootHost({
+    model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+    sessionQuery: { readSession: async () => { throw new Error('log corrupt') } },
+  })
+  const res5 = makeRes()
+  await handler0(broken, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', sessionId: 's-1' })), res5)
+  check('读会话抛错：上下文当没有，优化照常完成',
+    json(res5).ok === true && json(res5).contextTurns === 0, res5.captured.body.slice(0, 80))
+}
+
+{
+  // 记忆链：客户端只在"接着改"时才带 previous；宿主如实透传、并截断到 1500。
+  const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({
+    text: '把那个页面弄好看点，另外加个导出', tier: 'advanced', previous: '上一版成品：把设置页做得好看点',
+  })), res)
+  const user = host.llmCalls[0].messages[0].content[0].text
+  check('记忆链：上一轮成品进了 user 块', user.includes('<上一轮成品>') && user.includes('上一版成品'), user.slice(0, 120))
+  check('记忆链：块里写明"沿用已确认的决策、不要整段重写"',
+    user.includes('沿用其中已经确认的决策'), user.slice(0, 200))
+  check('记忆链：回报 hadPrevious', json(res).hadPrevious === true)
+
+  const noPrev = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), noPrev)
+  check('记忆链：没带就是没有（不凭空造一个空块）',
+    host.llmCalls[1].messages[0].content[0].text.includes('<上一轮成品>') === false && json(noPrev).hadPrevious === false)
+
+  const long = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', previous: 'x'.repeat(2_000) })), long)
+  const block = /<上一轮成品>\n([\s\S]*?)\n<\/上一轮成品>/.exec(host.llmCalls[2].messages[0].content[0].text)
+  check('记忆链：超长上一轮截断到 1500（不让它把草稿挤掉）',
+    block !== null && block[1].length === 1_500, String(block?.[1]?.length))
 }
 
 // ══════════════ 6. 宿主半真实注册的 settings schema ═════════════════════════

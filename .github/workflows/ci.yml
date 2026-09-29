@@ -46,7 +46,8 @@ jobs:
           if [ "$status" -ne 0 ]; then
             # 直接打**日志末尾**（不过滤）：筛过一次发现失败时的关键行恰好不匹配关键字，
             # 而漏掉的恰恰是最需要的那几行。
-            tail -40 test-output.log | while IFS= read -r line; do
+            # 只发 8 行：GitHub 对每个 check run 的**注解有上限**（约 10 条），发 40 行反而只能看到前 10 行。
+            tail -8 test-output.log | while IFS= read -r line; do
               echo "::error::$line"
             done
           fi

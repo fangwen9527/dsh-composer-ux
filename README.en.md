@@ -169,6 +169,40 @@ edited in settings; the JSON output contract is always appended and cannot be ov
   (`connection.requestRejection` — Host/Origin fence and browser token) **before** the request body is read.
 - Settings are stored in DSH's own settings document; quick prompts live in `$DSH_HOME/quick-prompts.json`.
 
+## Evidence and what is *not* verified
+
+> Why this section exists: the upstream project [WestFox-AwA/dsh-prompt-optimizer](https://github.com/WestFox-AwA/dsh-prompt-optimizer)
+> publishes a **verified / not-verified** table and honestly lists *effect* as not verified (their holdout
+> evaluation finished S1 and found "no measurable difference"; even their headline criterion was later
+> declared non-discriminating). That is more honest than dressing design up as capability, so this table
+> follows one rule: **only evidence you can reproduce inside this repository goes in the left table.**
+
+### Verified (reproducible evidence)
+
+| Capability | Evidence |
+|---|---|
+| Result-box persistence: atomic write / corrupt quarantine / version envelope / sanitising | `node test/optimize-state.mjs` (69 checks, incl. a real `GET/POST` round-trip and "too big ⇒ refuse"); mutations DL/DM/DN/DO/DP/DQ |
+| Ledger records metadata only — never your text | `node test/optimize-ledger.mjs` (50 checks) plus the 5e section of `test/quick-commands.mjs`: after a real run, **a unique word from the draft cannot be found in the on-disk ledger** |
+| Ledger reason sanitising (a model-supplied quote can no longer reach disk) | same; mutation DH |
+| Ledger rotation / per-line tolerance / clearing | `node scripts/recap.mjs` in a real process: `--last` / `--session` / `--json` / `--clear` and bad-line counting |
+| Read-only tool fence (including symlinks) / every cap / out-of-bounds rejection | `node test/optimize-tools.mjs` (62 checks against a **real temporary directory**) |
+| Tool-loop message shape / round cap / exceptions must degrade | same file, section 6 (a fake `llm.stream` drives the whole loop; `role:'tool'` and `toolCallId` are asserted) |
+| Tool path: off by default, fires only when enabled, **prose after lookups falls back**, no cwd ⇒ no tool at all | `test/quick-commands.mjs` 5g (13 checks) |
+| Mutation guards really bite, and **the *named* test must be the one going red** | `npm run test:mutations`: **127/127 bite** |
+| Release gates | `npm run gates` (tag target / packed file list / docs drift) |
+| Three-platform CI | GitHub Actions: ubuntu / windows / macos × Node 20 |
+
+### Not verified (design intent, or verified on one machine only)
+
+| Gap | Note |
+|---|---|
+| **Effect (the important one)** | We have **no controlled evaluation at all** — no holdout set, no A/B, no cost baseline. "The model does better after this" has zero evidence in this repository. |
+| **0.13.0 on a real machine** | Persistence, the ledger and the read-only tools were exercised **only by tests and a fake LLM**. Real-machine acceptance waits for a restart (the user restarts DSH). |
+| Benefit and cost of the read-only tools | No data on how many round trips they save, or how many tokens/seconds they add — exactly why they default to off. |
+| Whether a real model respects "tool content is not a quote" | Structurally enforced (`quote` must be a verbatim substring of your own words); behaviourally untested. |
+| Atomicity itself | Not observable in a single-threaded test; only a "no leftover temp file" hygiene assertion exists, with no mutation proof. |
+| Fence portability | Verified on Windows locally; other platforms only run the same tests in CI. |
+
 ## Development
 
 ```sh

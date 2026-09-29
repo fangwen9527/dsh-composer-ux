@@ -304,6 +304,13 @@ export interface OptimizeOutcome {
   readonly promptSource?: string
   /** 0.6.0 起：被 rewrite 覆盖掉的原话字符数。 */
   readonly rewrittenChars?: number
+  /**
+   * 0.12.0 起开始读：true = 篇幅闸门真的动过手（装了必保节仍超预算、省略了可选的节）。
+   *
+   * 此前客户端拿到这个字段却没读（宿主 0.6.0 就在回），结果"成品比原话短"这件事在界面上
+   * 没有解释；结果框会把它显示成一行说明。
+   */
+  readonly truncated?: boolean
 }
 
 /** 把宿主回的 `dropped` 收窄成安全形状（响应体按不可信输入处理）。 */
@@ -326,6 +333,109 @@ function droppedOf(value: unknown): readonly OptimizeDropped[] {
 function warningsOf(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return []
   return value.filter((entry): entry is string => typeof entry === 'string')
+}
+
+/**
+ * 流式里已经通过校验的一条条目（宿主 `{type:'item'}` 事件）。
+ *
+ * 与 {@link OptimizeDropped} 同样按**不可信输入**收窄：宿主与客户端同版本，
+ * 但响应体不该被当成可信数据直接进 React 状态。
+ */
+export interface OptimizeItemView {
+  /** 1 起的序号（与宿主记账的 `item#N` 对齐）。 */
+  readonly index: number
+  readonly id: string
+  readonly kind: string
+  readonly text: string
+  /** 逐字引文；`unknown`/`plan`/`risk` 允许为空。 */
+  readonly quote: string
+  /** 'user' = 引文在你原话里逐字存在；'none' = 模型自己补的（不冒充你说过的话）。 */
+  readonly quoteSource: string
+}
+
+/** 把一个 `{type:'item'}` 事件收窄成 {@link OptimizeItemView}；认不出就返回 undefined。 */
+export function itemViewOf(value: unknown): OptimizeItemView | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const row = value as Record<string, unknown>
+  const text = typeof row.text === 'string' ? row.text : ''
+  if (text === '') return undefined
+  return {
+    index: typeof row.index === 'number' ? row.index : 0,
+    id: typeof row.id === 'string' ? row.id : '',
+    kind: typeof row.kind === 'string' ? row.kind : '',
+    text,
+    quote: typeof row.quote === 'string' ? row.quote : '',
+    quoteSource: typeof row.quoteSource === 'string' ? row.quoteSource : '',
+  }
+}
+
+/**
+ * 把宿主给的结论（旧 JSON 响应体，或流式 `done` 事件的载荷）收窄成 {@link OptimizeOutcome}。
+ *
+ * 两条路径共用这一个函数：字段含义只有一处定义，不必担心"流式少解析了一个字段"。
+ * @param payload - 宿主返回的原始载荷（按不可信输入处理）。
+ * @returns 归一化后的结果。
+ */
+export function outcomeOf(payload: unknown): OptimizeOutcome {
+  const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
+  const retried = record.retried === true
+  if (record.ok !== true) {
+    const message = typeof record.error === 'string' && record.error !== '' ? record.error : '优化失败'
+    return { ok: false, error: message, retried }
+  }
+  const optimized = typeof record.text === 'string' ? record.text.trim() : ''
+  if (optimized === '') return { ok: false, error: '模型没有产出任何内容', retried }
+  return {
+    ok: true,
+    text: optimized,
+    route: `${String(record.provider ?? '')}/${String(record.model ?? '')}`,
+    itemCount: typeof record.itemCount === 'number' ? record.itemCount : 0,
+    dropped: droppedOf(record.dropped),
+    warnings: warningsOf(record.warnings),
+    fallback: record.fallback === true,
+    retried,
+    promptSource: typeof record.promptSource === 'string' ? record.promptSource : '',
+    rewrittenChars: typeof record.rewrittenChars === 'number' ? record.rewrittenChars : 0,
+    truncated: record.truncated === true,
+  }
+}
+
+/**
+ * 切分服务端事件流（SSE）的一段文本。
+ *
+ * 为什么做成纯函数：帧边界会**跨 chunk 落在任意位置**（网络怎么切完全不受控），这是整条
+ * 流式链路里最容易错、又最难在真机上复现的一步，所以它必须能在 node 里逐例钉住。
+ * 只认 `data:` 行：注释行（`:`）、`event:`、`id:` 一律忽略 —— 我们用的是"载荷自带
+ * 一个 type 字段"的单一格式，不需要额外的事件名通道。
+ *
+ * @param buffer - 累积未消费的文本（上一帧剩下的尾巴 + 这一块新数据）。
+ * @returns 完整事件（对象载荷）与**还没凑齐的尾巴**（调用方带着它等下一块）。
+ */
+export function parseSseChunk(buffer: string): { events: readonly Record<string, unknown>[]; rest: string } {
+  const events: Record<string, unknown>[] = []
+  // 先把 CRLF 归一成 LF：我们自己发的是 `\n\n`，但链路上任何一环都可能把它换成 `\r\n\r\n`，
+  // 而 `\n\n` 切不开 `\r\n\r\n`（中间夹着 \r）——那种"一个字都不显示"的故障最难查。
+  // 归一之后再切；跨 chunk 落在 `\r` 与 `\n` 之间也没事：rest 留着 `\r`，下一块补上 `\n` 就成了 CRLF。
+  const text = buffer.replace(/\r\n/g, '\n')
+  const parts = text.split('\n\n')
+  const rest = parts.pop() ?? ''
+  for (const frame of parts) {
+    for (const rawLine of frame.split('\n')) {
+      const line = rawLine.replace(/\r$/, '')
+      if (!line.startsWith('data:')) continue
+      const payload = line.slice(5).trim()
+      if (payload === '') continue
+      try {
+        const value: unknown = JSON.parse(payload)
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          events.push(value as Record<string, unknown>)
+        }
+      } catch {
+        // 坏帧跳过：界面上少一条流水，不该把整轮优化打断（成品仍由 done 事件给）。
+      }
+    }
+  }
+  return { events, rest }
 }
 
 /**
@@ -360,24 +470,103 @@ export async function optimizeDraft(text: string, tier: string): Promise<Optimiz
     return { ok: false, error: '宿主半返回的不是 JSON' }
   }
   const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
-  const retried = record.retried === true
-  if (record.ok !== true) {
-    const message = typeof record.error === 'string' && record.error !== '' ? record.error : '优化失败'
-    return { ok: false, error: message, retried }
+  return outcomeOf(record)
+}
+
+/**
+ * 流式优化的回调（全部可选）。
+ *
+ * 只暴露"发生了什么"，不暴露任何状态：谁在用（结果框）自己决定怎么渲染。
+ * 每条 `item` 都已经过宿主的逐字依据校验 —— 界面不需要、也不该再做一次判断。
+ */
+export interface OptimizeStreamHandlers {
+  /** 又一条条目通过校验（按数组顺序到达）。 */
+  readonly onItem?: (item: OptimizeItemView) => void
+  /** 又一条条目被丢掉（引文对不上原话 / 超上限 / 档位不匹配）。 */
+  readonly onDropped?: (row: OptimizeDropped) => void
+}
+
+/**
+ * 流式跑一次优化（0.12.0 的「边写边看」）。
+ *
+ * 与 {@link optimizeDraft} 的关系：**同一件事的两种送达方式**。宿主按 `Accept` 协商，
+ * 这里明确要 `text/event-stream`；成品与记账仍由最后的 `done` 事件给出，逐条流水只是
+ * "让你提前看到它在核实什么"。失败路径完全一致（预校验失败时宿主回的是普通 JSON + 4xx，
+ * 这里按状态码报错）。
+ *
+ * @param text - 输入框里的原文。
+ * @param tier - 强度档位。
+ * @param handlers - 逐条/丢弃/重置的回调（都可以不传：不传就是"只要最终结果"）。
+ * @param signal - 取消用（Esc 取消 = abort；宿主那边 `res.on('close')` 会跟着中止模型调用）。
+ * @returns 最终结果；网络层失败也归一成 `ok: false` 而不抛。
+ */
+export async function optimizeDraftStream(
+  text: string,
+  tier: string,
+  handlers: OptimizeStreamHandlers = {},
+  signal?: AbortSignal,
+): Promise<OptimizeOutcome> {
+  const body = text.trim()
+  if (body === '') return { ok: false, error: '输入框是空的，先写点什么再优化' }
+  let response: Response
+  try {
+    response = await fetch(OPTIMIZER_API_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({ text: body, tier }),
+      ...(signal === undefined ? {} : { signal }),
+    })
+  } catch (error) {
+    // 取消也是一种"连不上"：如实说成取消，别让用户以为是网络坏了。
+    if (signal?.aborted === true) return { ok: false, error: '已取消' }
+    return { ok: false, error: `连不上宿主半的优化接口：${error instanceof Error ? error.message : String(error)}` }
   }
-  const optimized = typeof record.text === 'string' ? record.text.trim() : ''
-  if (optimized === '') return { ok: false, error: '模型没有产出任何内容', retried }
-  const route = `${String(record.provider ?? '')}/${String(record.model ?? '')}`
-  return {
-    ok: true,
-    text: optimized,
-    route,
-    itemCount: typeof record.itemCount === 'number' ? record.itemCount : 0,
-    dropped: droppedOf(record.dropped),
-    warnings: warningsOf(record.warnings),
-    fallback: record.fallback === true,
-    retried,
-    promptSource: typeof record.promptSource === 'string' ? record.promptSource : '',
-    rewrittenChars: typeof record.rewrittenChars === 'number' ? record.rewrittenChars : 0,
+  if (!response.ok) {
+    // 预校验失败走的是普通 JSON + 状态码（流还没开始）：把宿主那句原因透出来。
+    let detail = ''
+    try {
+      const payload: unknown = await response.json()
+      const row = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
+      if (typeof row.error === 'string') detail = row.error
+    } catch {
+      // 读不出就用状态码本身。
+    }
+    return { ok: false, error: detail === '' ? `宿主半返回 HTTP ${response.status}（插件可能还没重启生效）` : detail }
   }
+  const reader = response.body?.getReader()
+  if (reader === undefined) return { ok: false, error: '宿主半没有返回可读的事件流' }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let outcome: OptimizeOutcome | undefined
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done === true) break
+      buffer += decoder.decode(value, { stream: true })
+      const parsed = parseSseChunk(buffer)
+      buffer = parsed.rest
+      for (const event of parsed.events) {
+        const type = String(event.type ?? '')
+        if (type === 'item') {
+          const item = itemViewOf(event)
+          if (item !== undefined) handlers.onItem?.(item)
+          continue
+        }
+        if (type === 'dropped') {
+          const [row] = droppedOf([event])
+          if (row !== undefined) handlers.onDropped?.(row)
+          continue
+        }
+        if (type === 'done') {
+          outcome = outcomeOf(event)
+          continue
+        }
+      }
+    }
+  } catch (error) {
+    if (signal?.aborted === true) return outcome ?? { ok: false, error: '已取消' }
+    return outcome ?? { ok: false, error: `事件流中断：${error instanceof Error ? error.message : String(error)}` }
+  }
+  if (outcome !== undefined) return outcome
+  return { ok: false, error: '事件流结束了，但宿主没有给出结论（done 事件缺）' }
 }

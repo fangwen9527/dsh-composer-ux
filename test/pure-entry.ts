@@ -27,6 +27,8 @@ export {
   applyPromptsForSend, publishInputBridge, sendButtonOf, withPromptsAppended,
   // 0.11.1：秒表读数、写回前比对、斜杠前缀拼回、两枚按钮的锚点判定 —— 全是纯函数。
   composeOptimizedDraft, elapsedSeconds, elapsedText, sameAnchor, sameDraft,
+  // 0.12.0：流式传输层（帧切分 + 不可信载荷收窄 + 带回调的流式请求）。
+  itemViewOf, optimizeDraftStream, outcomeOf, parseSseChunk,
 } from '../src/client/quick-commands.ts'
 export {
   bookCounts, findPrompt, promptsElsewhere,

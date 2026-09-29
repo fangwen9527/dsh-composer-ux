@@ -451,6 +451,107 @@ console.log('3b. 斜杠命令拆分、秒表读数、写回前比对（纯函数
   check('另一枚按钮（并排的 ✨）→ 换锚点，不关面板', pure.sameAnchor(a, b) === false)
 }
 
+// ══════════════ 3c. 流式传输层（SSE 帧切分 + 载荷收窄 + 假 fetch 端到端） ═════
+console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
+
+{
+  // 帧边界会跨 chunk 落在任意位置（网络怎么切完全不受控）—— 整条链路里最容易错的一步。
+  const first = pure.parseSseChunk('data: {"type":"item","text":"A"}\n\ndata: {"type":"it')
+  check('只切出完整帧，半截尾巴留在 rest 里',
+    first.events.length === 1 && first.events[0].text === 'A' && first.rest.startsWith('data: {"type":"it'),
+    JSON.stringify(first))
+  const second = pure.parseSseChunk(`${first.rest}em","text":"B"}\n\n`)
+  check('拿着上一帧的尾巴能拼出第二条', second.events.length === 1 && second.events[0].text === 'B' && second.rest === '',
+    JSON.stringify(second))
+  check('一个 chunk 里的多帧都收下',
+    pure.parseSseChunk('data: {"type":"a"}\n\ndata: {"type":"b"}\n\n').events.length === 2)
+  check('CRLF 与多余空白不影响切帧', pure.parseSseChunk('data: {"type":"a"}\r\n\r\n').events.length === 1)
+  check('注释行 / event: 行被忽略（我们只认载荷里的 type）',
+    pure.parseSseChunk(': keep-alive\n\nevent: item\ndata: {"type":"a"}\n\n').events.length === 1)
+  check('坏帧跳过，不炸掉整条流',
+    pure.parseSseChunk('data: {不是 JSON}\n\ndata: {"type":"ok"}\n\n').events.length === 1)
+  check('非对象载荷（数组 / 数字）不进事件',
+    pure.parseSseChunk('data: [1,2]\n\ndata: 42\n\n').events.length === 0)
+}
+
+{
+  const view = pure.itemViewOf({ index: 2, id: 'item#2', kind: 'requirement', text: '改完能打开', quote: '弄好看点', quoteSource: 'user' })
+  check('itemViewOf：字段逐个收窄',
+    view?.index === 2 && view.kind === 'requirement' && view.quoteSource === 'user', JSON.stringify(view))
+  check('itemViewOf：没有 text 的事件不当成条目（不显示空行）',
+    pure.itemViewOf({ index: 1, kind: 'x' }) === undefined)
+  check('itemViewOf：非对象一律拒绝', pure.itemViewOf(null) === undefined && pure.itemViewOf('x') === undefined)
+  check('itemViewOf：多余的未知字段不会被带进状态',
+    Object.keys(pure.itemViewOf({ text: 'x', evil: 'payload' }) ?? {}).includes('evil') === false)
+
+  const ok = pure.outcomeOf({ ok: true, text: ' 成品 ', provider: 'go', model: 'm', itemCount: 2, truncated: true })
+  check('outcomeOf：成功时给出成品与路由', ok.ok === true && ok.text === '成品' && ok.route === 'go/m', JSON.stringify(ok))
+  check('outcomeOf：读 truncated（宿主 0.6.0 就在回，此前客户端一直没读）', ok.truncated === true)
+  const bad = pure.outcomeOf({ ok: false, error: '模型没有产出任何内容', retried: true })
+  check('outcomeOf：失败时如实带原因与重试标记',
+    bad.ok === false && bad.error === '模型没有产出任何内容' && bad.retried === true)
+  check('outcomeOf：脏载荷不抛（ok 不是 true 就当失败）', pure.outcomeOf('boom').ok === false)
+}
+
+{
+  const realFetch = globalThis.fetch
+  const frames = [
+    'data: {"type":"item","index":1,"id":"item#1","kind":"rewrite","text":"把设置页做得好看点","quote":"把那个页面弄好看点","quoteSource":"user"}\n\n',
+    'data: {"type":"dropped","id":"item#2","kind":"requirement","reason":"引文不是原话里的逐字片段"}\n\n',
+    'data: {"type":"done","ok":true,"text":"把设置页做得好看点","provider":"go","model":"deepseek-flash","itemCount":1}\n\n',
+  ]
+  // 故意把帧切得很难看：跨帧、一次多帧混着来（模拟真实的网络分块）。
+  const pieces = [frames[0].slice(0, 17), frames[0].slice(17) + frames[1].slice(0, 5), frames[1].slice(5) + frames[2]]
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder()
+      for (const piece of pieces) controller.enqueue(encoder.encode(piece))
+      controller.close()
+    },
+  }), { status: 200 })
+
+  const items = []
+  const dropped = []
+  const outcome = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {
+    onItem: item => items.push(item),
+    onDropped: row => dropped.push(row),
+  })
+  check('端到端：逐条回调收到条目（跨 chunk 切帧也不丢）',
+    items.length === 1 && items[0].text === '把设置页做得好看点', JSON.stringify(items))
+  check('端到端：丢弃回调收到记账',
+    dropped.length === 1 && /引文不是原话/.test(dropped[0].reason), JSON.stringify(dropped))
+  check('端到端：最终结果来自 done 事件',
+    outcome.ok === true && outcome.route === 'go/deepseek-flash' && outcome.itemCount === 1, JSON.stringify(outcome))
+
+  // 预校验失败：宿主回普通 JSON + 400，客户端要把原因透出来（而不是只说 HTTP 400）。
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, error: '输入框是空的，没有可优化的内容' }), { status: 400 })
+  const rejected = await pure.optimizeDraftStream('x', 'advanced')
+  check('端到端：预校验 400 时透出宿主那句原因',
+    rejected.ok === false && rejected.error === '输入框是空的，没有可优化的内容', JSON.stringify(rejected))
+
+  // 流断了却没有 done：如实说"没有结论"，绝不假装成功。
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"item","text":"半截"}\n\n'))
+      controller.close()
+    },
+  }), { status: 200 })
+  const noDone = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {})
+  check('端到端：流结束却没有 done → 如实报错（不假装成功）',
+    noDone.ok === false && /没有给出结论/.test(String(noDone.error)), JSON.stringify(noDone))
+
+  // 取消：signal 已 abort 时如实说"已取消"，不冒充网络故障。
+  globalThis.fetch = async () => { throw new Error('aborted') }
+  const aborter = new AbortController()
+  aborter.abort()
+  const cancelled = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {}, aborter.signal)
+  check('端到端：取消时回报「已取消」（不冒充网络故障）',
+    cancelled.ok === false && cancelled.error === '已取消', JSON.stringify(cancelled))
+
+  globalThis.fetch = realFetch
+  check('端到端：真 fetch 已还原（后面的用例不受影响）', globalThis.fetch === realFetch)
+}
+
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
 console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {

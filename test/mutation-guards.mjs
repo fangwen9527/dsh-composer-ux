@@ -843,6 +843,39 @@ const cases = [
     test: 'test/client-registration.mjs',
     expect: '秒表起点',
   },
+  // ── 0.12.0：结果框的状态机与接线 ─────────────────────────────────────────
+  {
+    name: 'CW 取消时把已生成的条目一起丢掉（用户等了几十秒的东西一键蒸发）',
+    file: 'src/client/optimize-dock.ts',
+    from: "      return { ...state, phase: 'cancelled', startedAt: 0, elapsedMs: elapsed(state.startedAt, event.at), error: '' }",
+    to: "      return { ...state, phase: 'cancelled', items: [], startedAt: 0, elapsedMs: elapsed(state.startedAt, event.at), error: '' }",
+    test: 'test/quick-commands.mjs',
+    expect: 'cancel：保留已经生成的部分',
+  },
+  {
+    name: 'CX 插入不再比对草稿（静默覆盖用户刚写的内容）',
+    file: 'src/client/optimize-dock.ts',
+    from: "  return sameDraft(state.draftAtStart, currentDraft) ? 'insert' : 'confirm'",
+    to: "  return 'insert'",
+    test: 'test/quick-commands.mjs',
+    expect: '先要一次确认',
+  },
+  {
+    name: 'CY Esc 在跑的时候关面板（而不是中止等待）',
+    file: 'src/client/QuickCommandsPanel.tsx',
+    from: '      if (dockRunning) {\n        actions.dockCancel()\n        return\n      }',
+    to: '      if (false) {\n        actions.dockCancel()\n        return\n      }',
+    test: 'test/client-registration.mjs',
+    expect: '取消时面板不关',
+  },
+  {
+    name: 'CZ 完成后不停秒表（读数一直往上涨）',
+    file: 'src/client/optimize-dock.ts',
+    from: '        startedAt: 0,\n        elapsedMs: elapsed(state.startedAt, event.at),',
+    to: '        elapsedMs: elapsed(state.startedAt, event.at),',
+    test: 'test/quick-commands.mjs',
+    expect: '停表',
+  },
 ]
 
 let allBit = true

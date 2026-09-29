@@ -38,8 +38,11 @@ import { OptimizeButton } from './client/OptimizeButton.tsx'
 import { QuickCommandsPanel } from './client/QuickCommandsPanel.tsx'
 import {
   composeOptimizedDraft, currentBlankSession, currentDraft, elapsedText, focusComposer,
-  insertIntoDraft, optimizeDraft, replaceDraft, sameAnchor, sameDraft,
+  insertIntoDraft, optimizeDraftStream, replaceDraft, sameAnchor,
 } from './client/quick-commands.ts'
+import {
+  dockReducer, dockSummary, insertDecision, type OptimizeDockState,
+} from './client/optimize-dock.ts'
 
 export const name = 'composer-ux'
 /**
@@ -87,6 +90,8 @@ export function apply(ctx: any): void {
   const optimizing = createSnapshotStore<boolean>(false)
   /** 这次优化的起始时刻（0 = 没在跑）：面板与工具行按钮的秒表读数都由它算。 */
   const optimizeStartedAt = createSnapshotStore<number>(0)
+  /** 优化结果框（0.12.0）；null = 框收起。 */
+  const dock = createSnapshotStore<OptimizeDockState | null>(null)
   const panelNotice = createSnapshotStore<string>('')
   /**
    * 设置写入的说明行；'' = 正常。渲染在设置卡片顶部（与「重启 DSH」横幅同位置）。
@@ -344,20 +349,74 @@ export function apply(ctx: any): void {
     if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   }, 'composer-ux: quick notice timer')
 
+  /** 结果框那一轮的 AbortController（取消 / 重新优化时中止上一轮）。 */
+  let optimizeAbort: AbortController | undefined
+  /** 「插入输入框」的二次确认标记（输入框在优化期间被改过时用，见 insertDecision）。 */
+  let insertConfirmed = false
+
   /**
-   * 跑一次优化：读草稿 → 拆斜杠命令前缀 → 交给宿主 → 写回输入框。
+   * 跑一轮优化（0.12.0 起是**流式 + 结果框**）。
    *
-   * 三处刻意为之（0.11.1）：
-   *  1. **斜杠命令**：只把命令后面的正文送去模型，写回时把前缀拼回 —— 把 `/goal`
-   *     整段交给模型，它会把命令词一起"优化"掉，那条命令就废了；只有命令没正文时
-   *     直接提示、**不发请求**（省一次调用）。
-   *  2. **写回前比对**：飞行期间用户可能又打了字，整体覆盖会把他新写的内容吃掉，
-   *     所以拿到结果先比一次草稿，不一致就不写回并如实说明。
-   *  3. **秒表**：非流式下唯一能给出的"它还活着"的证据；起点记在信号里，
-   *     面板与工具行那枚按钮共用同一个读数（见 optimize-clock.ts）。
+   * 与 0.11.1 的关键差别：**外部输入框不再被自动改写**。结果进结果框（逐条流水 +
+   * 可编辑成品），由用户点「插入输入框」决定何时写回。四处刻意为之：
+   *  1. **斜杠命令**：只把命令后面的正文送去模型，插入时把前缀拼回；只有命令没正文时
+   *     直接提示、**不发请求**。
+   *  2. **逐条流水**：宿主边收边校验，通过的条目以 `item` 事件到达（见 optimizer-assemble.ts
+   *     的 scanOptimizeStream）—— 界面只显示已校验内容，绝不"先闪一下再消失"。
+   *  3. **取消**：Esc / 取消按钮 → abort；宿主 `res.on('close')` 跟着中止模型调用。
+   *  4. **秒表**：起点写进信号，面板按钮与结果框共用同一个读数（见 optimize-clock.ts）。
+   *
+   * @param input - 这一轮的输入（默认读输入框；「重新优化」用的是框里那一轮的原文）。
    */
-  const runOptimize = (): void => {
+  const startOptimize = (input: { source: string; draftAtStart: string; prefix: string }): void => {
     if (optimizing.getSnapshot()) return
+    const startedAt = Date.now()
+    optimizing.set(true)
+    optimizeStartedAt.set(startedAt)
+    insertConfirmed = false
+    // 上一轮还在飞就先中止它（重新优化时可能发生）；它的回调会因 aborted 直接返回。
+    optimizeAbort?.abort()
+    const controller = new AbortController()
+    optimizeAbort = controller
+    dock.set(dockReducer(dock.getSnapshot(), {
+      type: 'start',
+      source: input.source,
+      draft: input.draftAtStart,
+      prefix: input.prefix,
+      startedAt,
+    }))
+    note('正在优化…：逐条显示在结果框里，跑完点「插入输入框」写回')
+    void optimizeDraftStream(input.source, live.getSnapshot().optimizerTier, {
+      onItem: (item) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'item', item })) },
+      onDropped: (row) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'dropped', row })) },
+    }, controller.signal).then(
+      (result) => {
+        // 取消/被新一轮替换：状态由那两路自己写，这里再写一次会把它覆盖成"失败"。
+        if (controller.signal.aborted) return
+        optimizing.set(false)
+        optimizeStartedAt.set(0)
+        const next = dockReducer(dock.getSnapshot(), { type: 'done', outcome: result, at: Date.now() })
+        dock.set(next)
+        const used = elapsedText(startedAt, Date.now())
+        if (!result.ok) {
+          note(`优化失败（用时 ${used} 秒）：${result.error ?? '未知原因'}`)
+          return
+        }
+        note(`优化完成（${result.route ?? ''}）· ${next === null ? '' : dockSummary(next)} · 用时 ${used} 秒 · 在结果框里点「插入输入框」写回`)
+      },
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        optimizing.set(false)
+        optimizeStartedAt.set(0)
+        const message = error instanceof Error ? error.message : String(error)
+        dock.set(dockReducer(dock.getSnapshot(), { type: 'done', outcome: { ok: false, error: message }, at: Date.now() }))
+        note(`优化失败：${message}`)
+      },
+    )
+  }
+
+  /** 从输入框发起一轮（面板按钮 / 工具行按钮都走这里）。 */
+  const runOptimize = (): void => {
     const draft = currentDraft()
     if (draft.trim() === '') {
       note('输入框是空的：先写点什么，再点优化')
@@ -368,45 +427,11 @@ export function apply(ctx: any): void {
       note(`${slash.prefix} 后面没有正文：命令本身不需要优化`)
       return
     }
-    const source = slash.prefix === '' ? draft : slash.body
-    const startedAt = Date.now()
-    optimizing.set(true)
-    optimizeStartedAt.set(startedAt)
-    note('正在优化…（等待模型响应）')
-    void optimizeDraft(source, live.getSnapshot().optimizerTier).then(
-      (result) => {
-        optimizing.set(false)
-        optimizeStartedAt.set(0)
-        const used = elapsedText(startedAt, Date.now())
-        if (!result.ok) {
-          note(`优化失败（用时 ${used} 秒）：${result.error ?? '未知原因'}`)
-          return
-        }
-        // 写回前比对：不一致就不覆盖。宁可这次结果不写回，也不吃掉用户刚写下的内容。
-        if (!sameDraft(draft, currentDraft())) {
-          note(`输入框在优化期间被改过，这次没有写回（用时 ${used} 秒）：再点一次会以当前内容为准`)
-          return
-        }
-        replaceDraft(composeOptimizedDraft(slash.prefix, result.text ?? ''))
-        focusComposer()
-        // 状态行如实交代这一轮到底发生了什么（0.6.0 起宿主会回报记账信息）：
-        // 用了几个条目、丢了几条、走没走降级/重试 —— 用户据此判断这次优化可不可信。
-        const bits: string[] = []
-        if (result.fallback === true) bits.push('模型没按条目契约输出，已整段照收（未校验依据）')
-        else bits.push(`${String(result.itemCount ?? 0)} 条补全`)
-        const lost = result.dropped?.length ?? 0
-        if (lost > 0) bits.push(`丢弃 ${String(lost)} 条`)
-        if (result.promptSource === 'custom') bits.push('自定义提示词')
-        if (result.retried === true) bits.push('重试过一次')
-        if (slash.prefix !== '') bits.push(`保留命令 ${slash.prefix}`)
-        note(`已写回输入框（${result.route}）· ${bits.join(' · ')} · 用时 ${used} 秒 · Ctrl+Z 可还原`)
-      },
-      (error: unknown) => {
-        optimizing.set(false)
-        optimizeStartedAt.set(0)
-        note(`优化失败：${error instanceof Error ? error.message : String(error)}`)
-      },
-    )
+    startOptimize({
+      source: slash.prefix === '' ? draft : slash.body,
+      draftAtStart: draft,
+      prefix: slash.prefix,
+    })
   }
 
   const quickActions = {
@@ -428,6 +453,61 @@ export function apply(ctx: any): void {
       if (insertIntoDraft(text)) focusComposer()
     },
     optimize: runOptimize,
+    /**
+     * 把结果框里的成品写回输入框。
+     *
+     * 「先问一次」的两步确认（见 insertDecision）：优化是一次往返，期间用户完全可能又打了字，
+     * 直接覆盖会静默吃掉他刚写的内容。所以第一次点只提示，第二次点才覆盖 —— 不用浏览器
+     * `confirm`（那会打断输入、在桌面壳里还可能被拦）。
+     */
+    dockInsert: (): void => {
+      const state = dock.getSnapshot()
+      const decision = insertDecision(state, currentDraft(), insertConfirmed)
+      if (decision === 'empty' || state === null) {
+        note('结果框里还没有成品可插入（等这一轮跑完）')
+        return
+      }
+      if (decision === 'confirm') {
+        insertConfirmed = true
+        note('输入框在优化期间被改过：再点一次「插入输入框」就覆盖它（Ctrl+Z 可还原）')
+        return
+      }
+      insertConfirmed = false
+      if (!replaceDraft(composeOptimizedDraft(state.slashPrefix, state.text))) {
+        note('写回输入框失败：没拿到输入框的控制权（刷新页面再试）')
+        return
+      }
+      focusComposer()
+      note(state.slashPrefix === ''
+        ? '已插入输入框 · Ctrl+Z 可还原'
+        : `已插入输入框（保留命令 ${state.slashPrefix}）· Ctrl+Z 可还原`)
+    },
+    /** 用**框里那一轮的原文**再跑一轮（不是拿输入框现在的内文 —— 那时你多半已经插进去了）。 */
+    dockRetry: (): void => {
+      const state = dock.getSnapshot()
+      if (state === null) return
+      if (state.edited) note('重新优化会覆盖你在结果框里手改的内容')
+      startOptimize({ source: state.source, draftAtStart: currentDraft(), prefix: state.slashPrefix })
+    },
+    /** 中止这一轮并保留已生成的部分（条目流水留着，成品本来就不存在）。 */
+    dockCancel: (): void => {
+      const state = dock.getSnapshot()
+      if (state === null || state.phase !== 'running') return
+      optimizeAbort?.abort()
+      optimizeAbort = undefined
+      optimizing.set(false)
+      optimizeStartedAt.set(0)
+      dock.set(dockReducer(state, { type: 'cancel', at: Date.now() }))
+      note('已取消这一轮：上面是已经生成的部分')
+    },
+    /** 收起结果框（丢弃框里的内容；输入框里已插入的内容不受影响）。 */
+    dockClose: (): void => {
+      dock.set(dockReducer(dock.getSnapshot(), { type: 'clear' }))
+    },
+    /** 用户在框里手改了成品。 */
+    dockEdit: (text: string): void => {
+      dock.set(dockReducer(dock.getSnapshot(), { type: 'edit', text }))
+    },
     /**
      * 工具行那枚独立按钮用的入口：先把面板打开（结果与状态行显示在那儿），再立刻开跑。
      * 两步合成一步是这枚按钮存在的唯一理由（原来是"开面板 → 点面板里的按钮"）。
@@ -522,12 +602,17 @@ export function apply(ctx: any): void {
     name: 'shell.overlay',
     id: 'composer-ux-quick-panel',
     inject: () => ({
-      hooks: { live, panel, busy: optimizing, startedAt: optimizeStartedAt, notice: panelNotice, book, bookStatus },
+      hooks: { live, panel, busy: optimizing, startedAt: optimizeStartedAt, notice: panelNotice, book, bookStatus, dock },
       actions: {
         toggle: quickActions.toggle,
         close: quickActions.close,
         insert: quickActions.insert,
         optimize: quickActions.optimize,
+        dockInsert: quickActions.dockInsert,
+        dockRetry: quickActions.dockRetry,
+        dockCancel: quickActions.dockCancel,
+        dockClose: quickActions.dockClose,
+        dockEdit: quickActions.dockEdit,
         setTier: quickActions.setTier,
         setInsertMode: quickActions.setInsertMode,
         addCategory: bookActions.addCategory,

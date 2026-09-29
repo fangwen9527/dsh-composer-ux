@@ -242,25 +242,64 @@ console.log('2.0b 优化流程的三处护栏（0.11.1）')
   const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8'))
   const button = strip(readFileSync('src/client/OptimizeButton.tsx', 'utf8'))
 
-  check('写回前比对草稿（飞行期间用户改了字就不覆盖）',
-    source.includes('sameDraft(draft, currentDraft())'))
-  check('写回时把斜杠命令前缀拼回', source.includes('composeOptimizedDraft(slash.prefix, result.text'))
+  // 0.12.0 起"写回"不再发生在优化回调里，而是用户点「插入输入框」时由 dockInsert 决定：
+  // 判定本身是纯函数（insertDecision，在 optimize-dock.ts 里单测），这里钉住接线与判据。
+  check('插入前比对草稿（飞行期间用户改了字就先要一次确认）',
+    source.includes('insertDecision(state, currentDraft(), insertConfirmed)'))
+  check('「先问一次」是两步确认，不是静默覆盖',
+    source.includes('再点一次「插入输入框」就覆盖它'))
+  check('写回时把斜杠命令前缀拼回',
+    source.includes('replaceDraft(composeOptimizedDraft(state.slashPrefix, state.text))'))
   check('斜杠命令：只把正文送去优化',
-    source.includes("const source = slash.prefix === '' ? draft : slash.body"))
+    source.includes("source: slash.prefix === '' ? draft : slash.body"))
   check('只有命令没正文 → 提示且不发请求', source.includes('后面没有正文'))
   // 这条曾经写成"数一数 optimizeStartedAt.set( 出现 3 次"——计数对**参数**不敏感，
-  // 变异 CV（把真实起点换成 0）照样能过。所以拆成两条：起点必须是**真时刻**、
-  // 收尾必须是**两次清 0**（成功与失败各一条）。
+  // 变异 CV（把真实起点换成 0）照样能过。所以拆开：起点必须是**真时刻**、
+  // 收尾必须逐条清 0（成功 / 失败 / 取消三条路各一条）。
   check('秒表起点写的是发起时的真实时刻（不是 0）',
     source.includes('optimizeStartedAt.set(startedAt)'))
-  check('秒表收尾：成功与失败两条路都清 0',
-    (source.match(/optimizeStartedAt\.set\(0\)/g) ?? []).length === 2,
+  check('秒表收尾：成功、失败、取消三条路都清 0',
+    (source.match(/optimizeStartedAt\.set\(0\)/g) ?? []).length === 3,
     String((source.match(/optimizeStartedAt\.set\(0\)/g) ?? []).length))
   check('独立按钮与面板显示同一个秒表读数（两处文案一致）',
     button.includes('优化中…（${String(seconds)}s）') && panel.includes('优化中…（${String(seconds)}s）'))
   check('没在跑时不起计时器（读数回到 0）', button.includes('useOptimizeElapsed(busy ? startedAt : 0)')
     && panel.includes('useOptimizeElapsed(busy ? startedAt : 0)'))
   check('独立按钮点击 = 开面板 + 立刻开跑', source.includes('openAndOptimize: (anchor: QuickPanelAnchor)'))
+}
+
+console.log('2.0c 结果框接线（0.12.0）')
+{
+  const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const source = strip(readFileSync('src/client.tsx', 'utf8'))
+  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8'))
+  const dockSource = strip(readFileSync('src/client/OptimizeDock.tsx', 'utf8'))
+
+  check('跑优化走的是流式传输（逐条回调进结果框）',
+    source.includes('optimizeDraftStream(input.source') && source.includes("type: 'item'") && source.includes("type: 'dropped'"))
+  check('取消会真的中止这一轮（abort 交给宿主 res.on(close) 收尾）',
+    source.includes('optimizeAbort?.abort()'))
+  check('被取消/被新一轮替换的回调不再写状态（否则会把"已取消"覆盖成失败）',
+    source.includes('if (controller.signal.aborted) return'))
+  check('重新优化用的是框里那一轮的原文（不是输入框现在的内文）',
+    source.includes('startOptimize({ source: state.source, draftAtStart: currentDraft(), prefix: state.slashPrefix })'))
+  // 这条要卡住的是"Esc 在跑的时候**中止**而不是关面板"这个分支本身 —— 只查 `dockCancel()`
+  // 出现过是不够的：把整段包进 `if (false)` 也照样出现（变异 CY 就是这么干的）。
+  check('取消时面板不关（只是中止等待）',
+    /if \(dockRunning\) \{\s+actions\.dockCancel\(\)/.test(panel) && panel.includes('dockRunning'))
+  check('面板把结果框与五个动作都注入了',
+    panel.includes('<OptimizeDock') && panel.includes('insert: actions.dockInsert')
+    && panel.includes('retry: actions.dockRetry') && panel.includes('cancel: actions.dockCancel')
+    && panel.includes('close: actions.dockClose') && panel.includes('edit: actions.dockEdit'))
+  check('结果框：成品可编辑（textarea 绑到 edit 动作）',
+    dockSource.includes('aria-label="优化后的提示词（可编辑）"') && dockSource.includes('actions.edit(event.target.value)'))
+  check('结果框：没有成品时「插入输入框」点不动',
+    dockSource.includes('const canInsert = state.phase === \'done\' && hasText'))
+  check('结果框：跑的时候给的是「取消」，不是「关闭」',
+    dockSource.includes("running\n          ? (") && dockSource.includes('onClick={actions.cancel}'))
+  check('结果框：复制失败不谎报"已复制"', dockSource.includes('if (!ok) return'))
+  check('结果框：每条流水都显示依据（不冒充用户说过的话）',
+    dockSource.includes('模型自己补的，依据不是你原话'))
 }
 
 console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')

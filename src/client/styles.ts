@@ -455,3 +455,151 @@ export const quickCategoryAdd: CSSProperties = {
   padding: '4px 7px',
   cursor: 'pointer',
 }
+
+// ── 优化结果框（0.12.0）────────────────────────────────────────────────────
+//
+// 放在面板头部与分类行之间：它是"这一轮优化"的现场，比清单更该先被看到。
+
+/** 结果框外框。 */
+export const dockBox: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '8px 10px',
+  borderRadius: 10,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+}
+
+/** 结果框标题行（阶段 + 秒表 + 取消/关闭）。 */
+export const dockHead: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+/** 阶段文案。 */
+export const dockPhase: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  fontWeight: 600,
+}
+
+/** 次要说明（秒表 / 依据 / 记账），可换行。 */
+export const dockMeta: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  lineHeight: 1.5,
+  // 顶到右边：`marginLeft: auto` 让秒表贴着取消按钮。
+  marginLeft: 'auto',
+}
+
+/** 逐条流水列表。 */
+export const dockList: CSSProperties = {
+  margin: 0,
+  padding: 0,
+  listStyle: 'none',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  maxHeight: '18vh',
+  overflowY: 'auto',
+}
+
+/** 一条流水。 */
+export const dockItemRow: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+  fontSize: 12,
+  lineHeight: 1.5,
+}
+
+/** 条目标签（改写 / 补全·要求 …）。 */
+export const dockKind: CSSProperties = {
+  color: 'var(--dsw-alias-brand-primary)',
+  fontSize: 10,
+  fontWeight: 600,
+}
+
+/** 条目正文。 */
+export const dockItemText: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary)',
+  wordBreak: 'break-word',
+}
+
+/** 丢弃记账行。 */
+export const dockDropped: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  lineHeight: 1.5,
+}
+
+/** 失败提示。 */
+export const dockError: CSSProperties = {
+  color: 'var(--dsw-alias-label-error, #d33)',
+  fontSize: 12,
+  lineHeight: 1.5,
+  wordBreak: 'break-word',
+}
+
+/** 成品编辑框。 */
+export const dockEditor: CSSProperties = {
+  width: '100%',
+  minHeight: 88,
+  maxHeight: '30vh',
+  resize: 'vertical',
+  boxSizing: 'border-box',
+  padding: '6px 8px',
+  borderRadius: 8,
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'var(--dsw-specific-menu)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  lineHeight: 1.6,
+  fontFamily: 'inherit',
+}
+
+/** 记账行。 */
+export const dockSummaryLine: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  lineHeight: 1.5,
+  wordBreak: 'break-word',
+}
+
+/** 按钮行。 */
+export const dockButtons: CSSProperties = {
+  display: 'flex',
+  gap: 6,
+  alignItems: 'center',
+}
+
+/** 次要按钮。 */
+export const dockButton: CSSProperties = {
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  borderRadius: 999,
+  padding: '3px 10px',
+  fontSize: 11,
+  lineHeight: 1.6,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+/** 不可用按钮：压暗、去掉手型（"点不动"要一眼可见）。 */
+export const dockButtonDisabled: CSSProperties = {
+  ...dockButton,
+  opacity: 0.45,
+  cursor: 'default',
+}
+
+/** 主按钮（插入输入框）。 */
+export const dockButtonPrimary: CSSProperties = {
+  ...dockButton,
+  background: 'var(--dsw-alias-brand-primary)',
+  borderColor: 'var(--dsw-alias-brand-primary)',
+  color: 'var(--dsw-alias-label-inverse, #fff)',
+  fontWeight: 600,
+}

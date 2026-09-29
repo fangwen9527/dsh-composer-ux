@@ -552,6 +552,103 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
   check('端到端：真 fetch 已还原（后面的用例不受影响）', globalThis.fetch === realFetch)
 }
 
+// ══════════════ 3d. 优化结果框的状态机（0.12.0） ══════════════════════════════
+console.log('3d. 结果框状态机：单轮、取消保留、插入前比对')
+
+{
+  const item = (id, text) => ({ index: Number(id.slice(5)), id, kind: 'requirement', text, quote: '弄好看点', quoteSource: 'user' })
+  const start = (at = 1_000) => pure.dockReducer(null, { type: 'start', source: '把那个页面弄好看点', draft: '把那个页面弄好看点', prefix: '', startedAt: at })
+  const done = (state, at = 4_400, extra = {}) => pure.dockReducer(state, {
+    type: 'done',
+    at,
+    outcome: { ok: true, text: '成品正文', route: 'go/m', itemCount: 2, ...extra },
+  })
+
+  const fresh = start()
+  check('start：开新一轮，流水与成品都清空',
+    fresh.phase === 'running' && fresh.items.length === 0 && fresh.text === '' && fresh.startedAt === 1_000,
+    JSON.stringify(fresh))
+  check('start：记住这一轮的原文与发起时的草稿（插入前比对要用）',
+    fresh.source === '把那个页面弄好看点' && fresh.draftAtStart === '把那个页面弄好看点')
+
+  const withOne = pure.dockReducer(fresh, { type: 'item', item: item('item#1', 'A') })
+  check('item：逐条追加', withOne.items.length === 1 && withOne.items[0].text === 'A')
+  const again = pure.dockReducer(withOne, { type: 'item', item: item('item#1', 'A') })
+  check('item：同一个 id 只收一次（重放/重连不会出现两行）', again.items.length === 1, String(again.items.length))
+  check('dropped：同一 id 也只收一次',
+    ((s) => pure.dockReducer(s, { type: 'dropped', row: { id: 'item#2', kind: 'requirement', reason: 'X' } }))(
+      pure.dockReducer(withOne, { type: 'dropped', row: { id: 'item#2', kind: 'requirement', reason: 'X' } })).dropped.length === 1)
+
+  const finished = done(withOne)
+  check('done：填成品、路由与记账，并停表',
+    finished.phase === 'done' && finished.text === '成品正文' && finished.route === 'go/m'
+    && finished.startedAt === 0 && finished.elapsedMs === 3_400,
+    JSON.stringify({ phase: finished.phase, text: finished.text, elapsedMs: finished.elapsedMs }))
+  check('done：记下宿主的条目数（篇幅闸门可能比流水少）', finished.itemCount === 2)
+  check('done：新一轮把上一轮的手改标记清掉', pure.dockReducer({ ...finished, edited: true }, { type: 'done', at: 5_000, outcome: { ok: true, text: 'X' } }).edited === false)
+
+  const failed = pure.dockReducer(withOne, { type: 'done', at: 2_000, outcome: { ok: false, error: '模型没有产出任何内容', retried: true } })
+  check('done：失败进 error 阶段并留下原因',
+    failed.phase === 'error' && failed.error === '模型没有产出任何内容' && failed.retried === true,
+    JSON.stringify({ phase: failed.phase, error: failed.error }))
+  check('done：失败时不留下半截成品', failed.text === '')
+
+  const cancelled = pure.dockReducer(withOne, { type: 'cancel', at: 3_000 })
+  check('cancel：保留已经生成的部分（条目不蒸发）', cancelled.phase === 'cancelled' && cancelled.items.length === 1)
+  check('cancel：成品留空 —— 取消时它本来就不存在（不假装有）',
+    cancelled.text === '' && cancelled.elapsedMs === 2_000)
+
+  const edited = pure.dockReducer(finished, { type: 'edit', text: '我改过的成品' })
+  check('edit：更新成品并置手改标记', edited.text === '我改过的成品' && edited.edited === true)
+  check('clear：收起结果框', pure.dockReducer(edited, { type: 'clear' }) === null)
+  check('未知状态下的事件不炸（null 上收到 item/done/cancel 都返回 null）',
+    pure.dockReducer(null, { type: 'item', item: item('item#1', 'A') }) === null
+    && pure.dockReducer(null, { type: 'cancel', at: 1 }) === null)
+}
+
+{
+  const state = pure.dockReducer(null, { type: 'start', source: 'X', draft: '把页面弄好看点', prefix: '', startedAt: 1 })
+  const finished = pure.dockReducer(state, { type: 'done', at: 2, outcome: { ok: true, text: '成品' } })
+  check('insertDecision：没成品 → empty', pure.insertDecision(state, '随便', false) === 'empty')
+  check('insertDecision：跑到一半 → empty（没有东西可插）',
+    pure.insertDecision({ ...state, phase: 'running' }, '随便', false) === 'empty')
+  check('insertDecision：输入框没被动过 → 直接插入',
+    pure.insertDecision(finished, '把页面弄好看点', false) === 'insert')
+  check('insertDecision：输入框被动过 → 先要一次确认',
+    pure.insertDecision(finished, '把页面弄好看点，另外加个导出', false) === 'confirm')
+  check('insertDecision：用户点过第二下 → 覆盖',
+    pure.insertDecision(finished, '把页面弄好看点，另外加个导出', true) === 'insert')
+  check('insertDecision：只差首尾空白不算被动过（不白拦一次）',
+    pure.insertDecision(finished, '  把页面弄好看点\n', false) === 'insert')
+  check('insertDecision：框收起时 → empty', pure.insertDecision(null, 'x', true) === 'empty')
+}
+
+{
+  const base = {
+    phase: 'done', items: [], dropped: [], text: 'x', edited: false, error: '', route: 'go/m',
+    truncated: false, fallback: false, retried: false, promptSource: 'builtin', itemCount: 3,
+    startedAt: 0, elapsedMs: 1_000, draftAtStart: '', source: '', slashPrefix: '',
+  }
+  check('dockSummary：条数 + 路由之外的记账齐全',
+    pure.dockSummary(base) === '3 条补全', pure.dockSummary(base))
+  check('dockSummary：降级路径优先说明（不数条数）',
+    pure.dockSummary({ ...base, fallback: true, itemCount: 0 }) === '模型没按条目契约输出，已整段照收（未校验依据）',
+    pure.dockSummary({ ...base, fallback: true, itemCount: 0 }))
+  check('dockSummary：丢弃 / 自定义 / 重试 / 篇幅 / 手改都出声',
+    pure.dockSummary({ ...base, dropped: [{ id: 'a', kind: 'k', reason: 'r' }], promptSource: 'custom', retried: true, truncated: true, edited: true })
+      === '3 条补全 · 丢弃 1 条 · 自定义提示词 · 重试过一次 · 篇幅闸门动过手（省略了可选的节） · 你手改过',
+    pure.dockSummary({ ...base, dropped: [{ id: 'a', kind: 'k', reason: 'r' }], promptSource: 'custom', retried: true, truncated: true, edited: true }))
+  check('dockSummary：取消时按流水条数说（没有宿主记账）',
+    pure.dockSummary({ ...base, phase: 'cancelled', itemCount: 0, items: [{ index: 1, id: 'item#1', kind: 'requirement', text: 'A', quote: '', quoteSource: 'none' }] })
+      === '1 条补全')
+
+  check('dockPhaseText：四个阶段各有一句话',
+    pure.dockPhaseText({ ...base, phase: 'running' }).includes('等待模型响应')
+    && pure.dockPhaseText(base) === '优化完成'
+    && pure.dockPhaseText({ ...base, phase: 'cancelled' }).includes('已取消')
+    && pure.dockPhaseText({ ...base, phase: 'error' }) === '出错了')
+}
+
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
 console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {

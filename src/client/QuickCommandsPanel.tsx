@@ -21,6 +21,8 @@ import { bookCounts } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { useOptimizeElapsed } from './optimize-clock.ts'
+import { OptimizeDock } from './OptimizeDock.tsx'
+import type { OptimizeDockState } from './optimize-dock.ts'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
 import {
   quickAlwaysBox, quickAlwaysLabel, quickCategoryAdd, quickCategoryRow, quickCategoryTab,
@@ -47,6 +49,8 @@ export interface QuickPanelInjected {
     book: SnapshotStore<QuickPromptBook>
     /** '' = 正常；'saving' = 正在写；其余 = 上一次的错误文案。 */
     bookStatus: SnapshotStore<string>
+    /** 优化结果框（0.12.0）；null = 框收起。 */
+    dock: SnapshotStore<OptimizeDockState | null>
   }
   actions: {
     /** 关闭面板。 */
@@ -55,6 +59,16 @@ export interface QuickPanelInjected {
     insert: (text: string) => void
     /** 用当前输入框内容跑一次优化，结果写回输入框。 */
     optimize: () => void
+    /** 把结果框里的成品写回输入框（必要时先要一次确认，见 insertDecision）。 */
+    dockInsert: () => void
+    /** 用同一段原文再跑一轮。 */
+    dockRetry: () => void
+    /** 中止这一轮并保留已生成的部分。 */
+    dockCancel: () => void
+    /** 收起结果框（丢弃框里的内容）。 */
+    dockClose: () => void
+    /** 用户在框里手改了成品。 */
+    dockEdit: (text: string) => void
     /** 切换优化档位。 */
     setTier: (tier: OptimizerTier) => void
     /** 设置某条的插入模式（关 / 每次 / 仅首次；按 id 跨分类找）。 */
@@ -81,7 +95,7 @@ const GAP = 8
 
 /** 展开面板。 */
 export function QuickCommandsPanel({
-  useLive, usePanel, useBusy, useStartedAt, useNotice, useBook, useBookStatus, actions,
+  useLive, usePanel, useBusy, useStartedAt, useNotice, useBook, useBookStatus, useDock, actions,
 }: QuickCommandsPanelProps) {
   const settings = useLive(item => item)
   const anchor = usePanel(item => item)
@@ -90,11 +104,20 @@ export function QuickCommandsPanel({
   const notice = useNotice(item => item)
   const book = useBook(item => item)
   const status = useBookStatus(item => item)
+  const dock = useDock(item => item)
   const ref = useRef<HTMLDivElement | null>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const [activeId, setActiveId] = useState('')
   // 秒表：非流式下能显示的最细阶段就是"等待模型响应"，所以这里只报已等待秒数。
   const seconds = useOptimizeElapsed(busy ? startedAt : 0)
+  /**
+   * 结果框是否正在跑。
+   *
+   * ⚠️ 必须算在 `useEffect` **之前**：下面的 Escape 处理把 `dockRunning` 放进了依赖数组，
+   * 而依赖数组是在渲染期就地求值的 —— 声明在后面会撞上暂时性死区（TDZ）。
+   */
+  const dockRunning = dock !== null && dock.phase === 'running'
+  const dockSeconds = useOptimizeElapsed(dockRunning && dock !== null ? dock.startedAt : 0)
 
   const counts = bookCounts(book)
   const categories = book.categories
@@ -128,6 +151,12 @@ export function QuickCommandsPanel({
       if (event.key !== 'Escape') return
       event.preventDefault()
       event.stopPropagation()
+      // 优化在跑时 Esc = 中止（保留已生成的部分），**不关面板** —— 按 Esc 多半只是想中止
+      // 这次等待，把面板连同现场一起收走就过头了（与对方 0.3.17 的 cancel/close 之分同义）。
+      if (dockRunning) {
+        actions.dockCancel()
+        return
+      }
       actions.close()
     }
     window.addEventListener('pointerdown', onPointerDown, true)
@@ -138,7 +167,7 @@ export function QuickCommandsPanel({
       window.removeEventListener('keydown', onEscape, true)
       window.removeEventListener('resize', actions.close)
     }
-  }, [anchor === null, actions])
+  }, [anchor === null, actions, dockRunning])
 
   if (anchor === null) return null
 
@@ -211,6 +240,22 @@ export function QuickCommandsPanel({
           </button>
         </div>
       </div>
+
+      {dock !== null && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <OptimizeDock
+            state={dock}
+            seconds={dockSeconds}
+            actions={{
+              insert: actions.dockInsert,
+              retry: actions.dockRetry,
+              cancel: actions.dockCancel,
+              close: actions.dockClose,
+              edit: actions.dockEdit,
+            }}
+          />
+        </div>
+      )}
 
       <div style={quickList}>
         {items.length === 0 && (

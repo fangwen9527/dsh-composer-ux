@@ -31,11 +31,17 @@ export {
   itemViewOf, optimizeDraftStream, outcomeOf, parseSseChunk,
 } from '../src/client/quick-commands.ts'
 export {
-  bookCounts, findPrompt, promptsElsewhere,
-  withAlwaysToggled, withCategoryAdded, withCategoryMoved, withCategoryRemoved,
+  bookCounts, findPrompt, promptsElsewhere,  withAlwaysToggled, withCategoryAdded, withCategoryMoved, withCategoryRemoved,
   withCategoryRenamed, withInsertMode, withPromptAdded, withPromptMoved,
   withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from '../src/client/prompt-book.ts'
+/**
+ * 优化结果框的状态机（0.12.0）：单轮语义、取消保留已生成部分、插入前比对草稿 ——
+ * 这些是行为契约，在浏览器里很难逐例复现，所以整组出口在 node 里钉住。
+ */
+export {
+  dockPhaseText, dockReducer, dockSummary, insertDecision,
+} from '../src/client/optimize-dock.ts'
 export {
   OPTIMIZER_SPECS, OPTIMIZER_OUTPUT_CONTRACT, OPTIMIZE_ITEM_KINDS, OPTIMIZE_ITEM_MAX_CHARS,
   OPTIMIZE_MAX_ITEMS,

@@ -34,6 +34,26 @@ dsh plugin --profile <你的profile名> add dsh-composer-ux
 
 > 装完没看到新东西？多半是没重启，或者这一栏的开关没开。见下面「常见问题」。
 
+## 先看看长什么样
+
+**① 输入框下面那行**：左边是你的输入，右下角多了两样东西 —— 一枚「⚡ 快捷指令」按钮，和一行小字（缓存命中 / 这次花了多少）。
+（这一行本来就有的那个 `+`、权限、技能、模型、发送照旧。）
+
+![工具行：只剩一枚「快捷指令」按钮](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-toolrow-0.12.0.png)
+
+**② 点「⚡ 快捷指令」→ 点「✨ 优化提示词」**：它会一条一条地给你看改了什么。
+**注意每条下面那行小字**（写了"依据：…"）—— 那就是模型引用的你自己的原话；引不出原话的建议它不会给你。
+
+![优化结果框：逐条出现 + 每条标出依据](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-done-0.12.0.png)
+
+**③ 觉得可以了，再点「插入输入框」**：成品才会替换你原来打的那句话（`Ctrl+Z` 能撤回）。
+
+![插入之后，输入框里就是成品](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-inserted-0.12.0.png)
+
+**④ 设置页**：想关掉"带上最近几轮对话"就到这里关（默认开着）。
+
+![设置页：优化强度 + 携带会话上下文](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/settings-session-context-0.12.0.png)
+
 ## 每个功能一句话
 
 | 功能 | 说人话 | 什么时候用得上 |

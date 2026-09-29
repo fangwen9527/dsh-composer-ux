@@ -30,6 +30,35 @@ Install with `dsh plugin --profile <name> add dsh-composer-ux`, then **restart D
 enough for host-side changes). The built `lib/` ships in the package **and** in this repository, so there is
 **no build step and no build authorization** at install time.
 
+## Screenshots (0.12.0)
+
+Real screenshots from a live install (dark theme; the published build):
+
+**The tool row carries exactly one plugin button** — 「⚡ 快捷指令」 (Quick commands); the prompt optimizer is
+reached from inside that panel. The standalone 「✨ 优化」 button that 0.11.1 briefly added was removed on request.
+
+![Tool row: a single Quick-commands button](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-toolrow-0.12.0.png)
+
+**Item-by-item streaming**: the result box only ever shows items that have already been closed *and* passed the
+verbatim-quote check (unverified content never appears). The header shows the stopwatch and Cancel, and the
+buttons stay dimmed while it runs.
+
+![Streaming: items arriving one by one](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-streaming-0.12.0.png)
+
+**Done**: every item carries the exact phrase from your own words that it was based on; the finished prompt is
+editable in the box, and 「插入输入框」 (Insert into input) is what writes it back.
+
+![Done: items + verbatim evidence + editable result + Insert button](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-done-0.12.0.png)
+
+**After insert**: the composer holds the optimized prompt (`Ctrl+Z` restores your draft).
+
+![The composer after inserting the result](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/optimize-inserted-0.12.0.png)
+
+**Settings**: the new "carry session context" switch (on by default) — it is used for disambiguation only and
+can never be a source of quotes.
+
+![Settings: optimizer tiers + session-context switch](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.12.0/docs/settings-session-context-0.12.0.png)
+
 ## Install
 
 ```sh

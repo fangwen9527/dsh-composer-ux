@@ -12,7 +12,8 @@
  * 目录内联（可用 env DSH_REPO_PATH 覆盖检出路径）。
  */
 import { build } from 'esbuild'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const dshPluginId = 'dsh-composer-ux'
 const repoPath = (process.env.DSH_REPO_PATH ?? 'D:/DeepSeek Harness').replace(/\\/g, '/')
@@ -29,10 +30,37 @@ const PLATFORM_EXTERNALS = [
   '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
-// Host 半的内联别名（生产依赖从源码检出内联，避免第三方包解析）。
+/**
+ * 宿主半要**内联**的两个包。
+ *
+ * 优先用 DSH 源码检出里的 vendor 副本（本机开发时与正在跑的那个 DSH 逐字节相同），
+ * 检出不在时退到 node_modules 里**同版本**的 npm 包。
+ *
+ * 为什么必须有这条退路：CI（三平台）与任何别的机器上都没有 `D:/DeepSeek Harness`，
+ * 写死路径会让 `npm run build` 在干净检出上直接失败（0.12.0 首次跑 CI 时三个平台一起红）。
+ * 已核对：npm 的 `@deepseek-ai/schemastery@3.18.4` 与 `@deepseek-ai/cosmokit@1.8.5`
+ * 与 DSH 检出里 vendor 的那两份**逐字节相同**，所以两条路产出的 bundle 完全一致。
+ *
+ * @param relative - 相对于检出根的 vendor 路径。
+ * @param installed - node_modules 里的同份文件。
+ * @returns 实际要内联的文件路径（两边都没有就报错说清楚怎么办）。
+ */
+const vendorOf = (relative, installed) => {
+  const fromRepo = `${repoPath}/${relative}`
+  if (existsSync(fromRepo)) return fromRepo
+  // ⚠️ 必须给**绝对路径**：esbuild 的 alias 值按"当前工作目录"解析，写成相对路径
+  // （`node_modules/...`）会直接报 Could not resolve —— CI 三平台一起红的就是这个。
+  const fromInstall = resolve(installed)
+  if (existsSync(fromInstall)) return fromInstall
+  throw new Error(
+    `找不到 ${relative}：既没有 DSH 源码检出（DSH_REPO_PATH=${repoPath}），`
+    + `也没有 ${fromInstall}。二选一：设 DSH_REPO_PATH 指向你的 DSH 检出，或先 npm install。`,
+  )
+}
+
 const HOST_ALIASES = {
-  '@deepseek-ai/schemastery': `${repoPath}/vendor/schemastery/lib/index.mjs`,
-  '@deepseek-ai/cosmokit': `${repoPath}/vendor/cosmokit/lib/index.js`,
+  '@deepseek-ai/schemastery': vendorOf('vendor/schemastery/lib/index.mjs', 'node_modules/@deepseek-ai/schemastery/lib/index.mjs'),
+  '@deepseek-ai/cosmokit': vendorOf('vendor/cosmokit/lib/index.js', 'node_modules/@deepseek-ai/cosmokit/lib/index.js'),
 }
 
 mkdirSync('lib', { recursive: true })
@@ -91,6 +119,32 @@ try {
   failures += 1
 }
 
+/**
+ * 抹平"内联进来的第三方模块"那几行路径注释。
+ *
+ * esbuild 会给每个打包进来的模块加一行 `// <路径>`：走 DSH 检出时是
+ * `// ../../../DeepSeek Harness/vendor/cosmokit/lib/index.js`（**把作者本机的目录结构写进了发布产物**），
+ * 走 npm 包时是 `// node_modules/@deepseek-ai/cosmokit/lib/index.js`。两者只差这几行注释，
+ * 却让"本机构建的产物"与"CI 构建的产物"对不上。统一换成 `// <bundled: 包名>`，
+ * 两条路线从此逐字节相同（也不再泄露本机路径）。
+ *
+ * @param file - 刚构建出来的文件。
+ */
+function normalizeBundledPathComments(file) {
+  const code = readFileSync(file, 'utf8')
+  // ⚠️ 每个字符类都必须排除换行：`[^/]*` 会**跨行**匹配（换行不是 `/`），
+  // 于是正则会从第 1 行的路径注释一路吞到很远的地方，把代码整块替掉
+  // —— 0.12.0 写这条时踩过：产物里 schemastery 的动态分支就这么"消失"了，
+  // 后处理随即报"模式失配"（那正是这个仓库设计成会红的地方，帮上了忙）。
+  // 归一成**同一个标签**（不带上包名）：两条路线的目录层级不同，包名写法也不同
+  // （`vendor/cosmokit/...` vs `node_modules/@deepseek-ai/cosmokit/...`），带上它就对不齐了。
+  const next = code.replace(
+    /^\/\/ [^\n]*?(?:vendor|node_modules)\/[^\n]*$/gm,
+    '// <bundled dependency>',
+  )
+  if (next !== code) writeFileSync(file, next)
+}
+
 // ── 发行后处理：消除第三方库里的动态执行标记 ─────────────────────────────────
 //
 // 市场上的「装前体检」用一条正则在宿主/界面代码里找风险特征：动态生成函数的两个关键字、
@@ -132,6 +186,7 @@ function stripDynamicCode(rule) {
   console.log(`[dsh-composer-ux] 已移除动态执行标记：${rule.note} (${rule.file})`)
 }
 
+for (const file of ['lib/index.js', 'lib/client.js']) normalizeBundledPathComments(file)
 for (const rule of POST_BUILD_RULES) stripDynamicCode(rule)
 
 if (failures > 0) process.exit(1)

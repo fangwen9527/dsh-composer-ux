@@ -1,0 +1,39 @@
+# 三平台 CI（0.12.0 起）：同一份代码在 ubuntu / windows / macos 上都要过
+#   typecheck（tsc --noEmit，类型面在 types/dsh-externals.d.ts 里）→ build → 全量测试。
+#
+# 为什么三平台都要跑：本插件有相当一部分行为与平台相关（默认终端探测、bash 反推、
+# 路径分隔符、重启助手的进程模型），只在 Windows 上验过的代码等于只验了一半。
+#
+# 为什么先 build 再 test：测试打的是**构建产物** `lib/index.js` / `lib/client.js`
+# （与用户实际加载的那份一致）；不重建就会拿旧产物测新源码 —— 那是假绿。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: 安装依赖（npm ci：lockfile 锁定，可复现）
+        run: npm ci --no-audit --no-fund
+      - name: 类型检查
+        run: npm run typecheck
+      - name: 构建
+        run: npm run build
+      - name: 全量测试（18 套件）
+        run: npm test

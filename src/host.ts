@@ -14,7 +14,7 @@
  * 既不重述也不删除用户写在同一个 profile 里的其它字段。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
+import z, { type Schema } from '@deepseek-ai/schemastery'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -398,7 +398,7 @@ async function mirrorHeader(settings: SettingsLike, read: ReadRow): Promise<void
  * 抽成函数是为了让模块级常量 {@link Config} 与旧版的显式注册共用一份真相
  * （0.1.6 及以前必须 `settings.register(NAMESPACE, schema)`）。
  */
-function ownSchema(): z {
+function ownSchema(): Schema {
   return z.object({
     [ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.enabled),
     // 五栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
@@ -511,8 +511,8 @@ function ownSchema(): z {
  * @param node 待标记的 schema 节点（`ownSchema()` 的一个字段）。
  * @returns 带标记的节点（有 `.volatile()` 时是它的克隆，否则是原节点）。
  */
-function markVolatileField(node: z): z {
-  const withMethod = node as unknown as { volatile?: () => z }
+function markVolatileField(node: Schema): Schema {
+  const withMethod = node as unknown as { volatile?: () => Schema }
   if (typeof withMethod.volatile === 'function') return withMethod.volatile()
   const target = node as unknown as { meta?: { volatile?: boolean } }
   if (target.meta !== undefined) target.meta.volatile = true
@@ -532,8 +532,8 @@ function markVolatileField(node: z): z {
  * @param schema `ownSchema()` 的结果。
  * @returns 同一棵 schema（形状不变，只给每个字段补上 volatile 数据）。
  */
-function markVolatile(schema: z): z {
-  const dict = (schema as unknown as { dict?: Record<string, z> }).dict
+function markVolatile(schema: Schema): Schema {
+  const dict = (schema as unknown as { dict?: Record<string, Schema> }).dict
   if (dict === undefined) return schema
   for (const key of Object.keys(dict)) dict[key] = markVolatileField(dict[key]!)
   return schema
@@ -633,7 +633,7 @@ function rejectUntrustedRequest(
  * 0.1.6 没有 volatile：那时 Config 只是一份同形状的 schema，
  * 命名空间仍由 `apply` 里的 `settings.register(NAMESPACE, Config)` 显式注册。
  */
-export const Config: z = markVolatile(ownSchema())
+export const Config: Schema = markVolatile(ownSchema())
 
 /**
  * 注册 durable section；settings 服务缺席（无 provider）时静默跳过。
@@ -2175,7 +2175,8 @@ export function apply(ctx: Context, config?: unknown): void {
         restarting = true
         try {
           const scheduled = scheduleRestart(buildIo(), servingPort(firstHeaderValue(req.headers?.host)))
-          send(202, { ok: true, boot: BOOT_ID, running, ...scheduled })
+          // `ok` 由 `scheduled` 自己带（写在前面的会被展开覆盖 —— typecheck 直接指出来了）。
+          send(202, { boot: BOOT_ID, running, ...scheduled })
         } catch (error: unknown) {
           restarting = false
           send(500, { ok: false, error: error instanceof Error ? error.message : String(error) })

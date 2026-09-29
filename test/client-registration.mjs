@@ -306,6 +306,39 @@ console.log('2.0c 结果框接线（0.12.0）')
     dockSource.includes('模型自己补的，依据不是你原话'))
 }
 
+console.log('2.0d 字段常量必须真的 import 进来（typecheck 抓到的运行时 ReferenceError）')
+{
+  /**
+   * 从源码里收出"import 进来的名字"与"文件里定义的名字"。
+   * 只扫 `import { … } from '…'` 块 + `const/let NAME =`，够用且不依赖解析器。
+   */
+  const importedNamesOf = text => {
+    const names = new Set()
+    for (const match of text.matchAll(/import\s+(?:type\s+)?\{([\s\S]*?)\}\s+from\s+'[^']+'/g)) {
+      for (const raw of match[1].split(',')) {
+        const name = raw.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop()?.trim() ?? ''
+        if (name !== '') names.add(name)
+      }
+    }
+    return names
+  }
+  const definedNamesOf = text => new Set([...text.matchAll(/(?:const|let|function)\s+([A-Za-z_$][\w$]*)/g)].map(m => m[1]))
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+    .filter(line => !/^\s*\/\//.test(line)).join('\n')
+
+  for (const file of ['src/client.tsx', 'src/client/SettingsSection.tsx', 'src/client/CostCard.tsx', 'src/host.ts']) {
+    const text = strip(readFileSync(file, 'utf8'))
+    const imported = importedNamesOf(text)
+    const defined = definedNamesOf(text)
+    const used = new Set(text.match(/\b[A-Z][A-Z0-9_]*_(?:FIELD|PATH)\b/g) ?? [])
+    const missing = [...used].filter(name => !imported.has(name) && !defined.has(name))
+    // 这条就是 0.12.0 引入 typecheck 时抓到的那个真 bug：`PRICE_AUTO_SYNC_FIELD` 没被 import，
+    // 于是设置页「恢复默认」一点就 ReferenceError（界面上表现为"点了没反应"），而 18 套件全绿
+    // —— 因为没有一条用例走过那条路径。类型检查能看见它，测试看不见，所以这里补一条静态护栏。
+    check(`${file}：用到的字段常量都 import/定义过`, missing.length === 0, missing.join(', '))
+  }
+}
+
 console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')
 {
   const stats = byId('composer-ux-stats-line')

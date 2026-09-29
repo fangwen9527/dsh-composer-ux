@@ -1,8 +1,10 @@
 # 依赖与构建中间产物（lib/*.js 为发行所需，随仓库提交，仅忽略 sourcemap）
 node_modules/
 lib/*.map
-package-lock.json
 *.log
+
+# package-lock.json 从 0.12.0 起**随仓库提交**：CI 要用 `npm ci`（三平台矩阵），
+# 而 `npm ci` 强制要求 lockfile 与 package.json 一致。锁上也让 typecheck 的类型包版本可复现。
 
 # 本地路径相关的开发用覆盖层（含本机绝对路径，不随仓库发布）
 cordis.dev.patch.yml

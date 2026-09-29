@@ -913,6 +913,16 @@ const cases = [
     test: 'test/quick-commands.mjs',
     expect: '同文重试',
   },
+  {
+    // 0.12.0 引入 typecheck 时抓到的真 bug 原样复现：常量没 import，用到它的路径一点就
+    // ReferenceError（设置页「恢复默认」），而当时 18 套件全绿 —— 静态护栏补上了这一课。
+    name: 'DE 字段常量少了 import（用到的路径一点就 ReferenceError）',
+    file: 'src/client.tsx',
+    from: '  PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD, PRICE_AUTO_SYNC_FIELD,\n',
+    to: '  PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD,\n',
+    test: 'test/client-registration.mjs',
+    expect: '用到的字段常量都 import/定义过',
+  },
 ]
 
 let allBit = true

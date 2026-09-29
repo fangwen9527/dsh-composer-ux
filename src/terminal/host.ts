@@ -80,7 +80,8 @@ interface CtxLike {
   /** 事件接线；真实 cordis 上下文一定有，测试替身可能没有（没有时降级并在状态行说明）。 */
   on?(event: string, listener: (...args: never[]) => void): unknown
   inject?(deps: string[], callback: (ctx: CtxLike) => void): unknown
-  effect?(callback: () => unknown, label?: string): unknown
+  /** 注册随插件回收的副作用：本文件直接 `ctx.effect(...)`，真 Context 一定有它。 */
+  effect(callback: () => unknown, label?: string): unknown
   webServer: {
     register(route: { kind: 'exact' | 'prefix'; path: string; handler: unknown }): () => void
   }

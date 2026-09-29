@@ -68,7 +68,7 @@
  *    这一条不能简单删：跨了 9-10 调价的会话，浮层上的单价是今天的价、金额却是当时的价，
  *    不说反而是误导。
  */
-import React from 'react'
+import React, { type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-store'
 import {
@@ -406,7 +406,9 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             lineHeight: '18px',
             color: 'var(--dsw-alias-label-secondary)',
             cursor: 'default',
-          }}
+            // 自定义属性（`--dsw-*`）不在 React 的 CSSProperties 里，必须显式断言 ——
+            // 与 styles.ts 里那些样式对象同一做法（那边也是 `as CSSProperties`）。
+          } as CSSProperties}
         >
           <div style={{
             display: 'flex',

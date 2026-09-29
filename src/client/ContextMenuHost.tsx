@@ -33,8 +33,13 @@ export type ContextMenuHostProps =
   PropsRuntime<'shell.overlay'>
   & InjectFace<ContextMenuInjected>
 
-/** 菜单组：与图片一致的三组分隔布局。 */
-const GROUPS: readonly { readonly label: string; readonly shortcut: string; readonly field: MenuField; readonly id: MenuActionId | 'disabledOnly' }[][] = [
+/**
+ * 菜单组：与图片一致的三组分隔布局。
+ *
+ * `id` 刻意**不**再带 `'disabledOnly'` 那个联合：它从没有任何一项用过（只是类型上允许），
+ * 而留着它会让 `onItemClick(item.id)` 在类型上不成立、也就摒掉了"每个 id 都是真动作"这道校验（typecheck 发现）。
+ */
+const GROUPS: readonly { readonly label: string; readonly shortcut: string; readonly field: MenuField; readonly id: MenuActionId }[][] = [
   [
     { label: '撤销', shortcut: 'Ctrl+Z', field: 'menuUndo', id: 'undo' },
     { label: '重做', shortcut: 'Ctrl+Y', field: 'menuRedo', id: 'redo' },

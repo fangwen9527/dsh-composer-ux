@@ -177,10 +177,17 @@ async function writeLocked(book: QuickPromptBook, file: string): Promise<void> {
  * @param file 文件路径。
  * @returns 读盘结果（迁移成功后为 `ok`）。
  */
+/**
+ * `ensureQuickBook` 的返回：**不可能**是 `missing` —— 缺失会在写锁里被就地初始化成
+ * 内置那份（见函数体）。把这个事实写进类型，调用方就不必再判一次 `missing`
+ * （0.12.0 引入 typecheck 时才发现原来那句 `outcome.book` 是"类型上不安全"的）。
+ */
+export type EnsuredOutcome = Exclude<ReadOutcome, { readonly kind: 'missing' }>
+
 export async function ensureQuickBook(
   seed: readonly unknown[] | undefined,
   file: string = quickStorePath(),
-): Promise<ReadOutcome> {
+): Promise<EnsuredOutcome> {
   const current = await readQuickBook(file)
   if (current.kind !== 'missing') return current
 

@@ -143,7 +143,7 @@ function makeRes() {
 }
 const jsonOf = res => JSON.parse(res.captured.body)
 const fileIn = home => join(home, 'quick-prompts.json')
-const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
+const readJson = path => JSON.parse(readFileSync(path, 'utf8').replace(/\r\n/g, '\n'))
 const callGet = async (host) => { const res = makeRes(); await host.route.handler(makeReq('GET'), res); return { res, body: jsonOf(res) } }
 const callPost = async (host, payload) => {
   const res = makeRes()

@@ -941,7 +941,7 @@ for (const item of cases) {
     console.log(`— 跳过（没有源码之外的断言）— ${item.name}`)
     continue
   }
-  const original = readFileSync(item.file, 'utf8')
+  const original = readFileSync(item.file, 'utf8').replace(/\r\n/g, '\n')
   if (!original.includes(item.from)) {
     console.log(`!! 变异点没找到：${item.name}`)
     allBit = false

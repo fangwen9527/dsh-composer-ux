@@ -1214,7 +1214,7 @@ const json = res => JSON.parse(res.captured.body)
   // 0.10.0 起是六条（多了「价目同步」与「余额」）。这条断言的价值就是
   // **新增路由必须在测试里登记**：所以既数总条数（多一条就红），又逐条比对契约里的路径常量
   // （路径改名也红）。绝不放宽成"至少 N 条"——那等于把这道登记关卡拆掉。
-  const contract = readFileSync('src/settings-contract.ts', 'utf8')
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
   const syncPath = /SYNC_API_PATH = '([^']+)'/.exec(contract)?.[1]
   const expectedPaths = [
     pure.OPTIMIZER_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
@@ -1946,7 +1946,7 @@ console.log('7. 样式配对（fill 必须配 label-primary-foreground）')
 // 修法：把手柄 createPortal 到面板内部。下面的断言守住这个修法。
 console.log('8. 设置面板尺寸手柄（挂进面板内部，不比层叠）')
 {
-  const SOURCE = readFileSync('src/client/PanelResizeHandles.tsx', 'utf8')
+  const SOURCE = readFileSync('src/client/PanelResizeHandles.tsx', 'utf8').replace(/\r\n/g, '\n')
 
   check('手柄通过 createPortal 挂进面板', SOURCE.includes('createPortal('))
 
@@ -1980,7 +1980,7 @@ console.log('8. 设置面板尺寸手柄（挂进面板内部，不比层叠）'
   check('描边铺满面板且不吃指针', outline.inset === 0 && outline.pointerEvents === 'none')
 
   // 指针事件的开关方向必须对：层不吃指针、手柄才吃。写反了会让整个面板点不动。
-  const PANEL_SRC = readFileSync('src/client/panel.ts', 'utf8')
+  const PANEL_SRC = readFileSync('src/client/panel.ts', 'utf8').replace(/\r\n/g, '\n')
   const layerRule = PANEL_SRC.match(new RegExp(`\\.\\$\\{RESIZE_LAYER_CLASS\\}[^}]*\\}`))?.[0] ?? ''
   check('手柄层 pointer-events: none（否则整块面板点不动）',
     layerRule.includes('pointer-events: none'), layerRule.replace(/\s+/g, ' ').slice(0, 90))
@@ -2162,7 +2162,7 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
         await new Promise(resolve => { setTimeout(resolve, 100) })
       }
       child.kill()
-      const errText = () => (fsMod.existsSync(err) ? fsMod.readFileSync(err, 'utf8') : '')
+      const errText = () => (fsMod.existsSync(err) ? fsMod.readFileSync(err, 'utf8').replace(/\r\n/g, '\n') : '')
       return { hit, out, errText }
     }
     /** 让"替换进程"留下一个标记文件。 */
@@ -2206,7 +2206,7 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     const badRan = await runHelper(
       { file: join(dir, 'no-such-binary-xyz.exe'), args: [], viaShell: false, detached: false },
       () => fsMod.existsSync(errPath)
-        && fsMod.readFileSync(errPath, 'utf8').includes('could not start the replacement'),
+        && fsMod.readFileSync(errPath, 'utf8').replace(/\r\n/g, '\n').includes('could not start the replacement'),
       8000,
     )
     check('替换进程起不来 → 助手把原因写进 err 日志（会记日志的宿主已经退出了，只能它写）',
@@ -2347,7 +2347,7 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     })
     const guardedReq = makeReq('GET')
     // `syncPath` 是上面那节的块内常量，这里从契约里重读一次（路径改名这条也会跟着红）。
-    const guardedSyncPath = /SYNC_API_PATH = '([^']+)'/.exec(readFileSync('src/settings-contract.ts', 'utf8'))?.[1]
+    const guardedSyncPath = /SYNC_API_PATH = '([^']+)'/.exec(readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n'))?.[1]
     const rejectedOf = (path) => {
       const route = guardedHost.routes.find(item => item.path === path)
       check(`信任关卡：${path} 这条路由挂上了`, route !== undefined, JSON.stringify(guardedHost.routes.map(r => r.path)))
@@ -2453,7 +2453,7 @@ console.log('13. 金额规则失效：写完设置的人自己通知，不靠设
   // 而那条路会真的出网抓官方页（`fetchOfficialPages` 没有注入点，测试不该打网络）。
   // 行为面由 `test/pricing.mjs` / `test/price-sync.mjs` 覆盖，这里只钉住"接线"：
   // 一旦谁把 `invalidateMoney()` 从同步路径里删掉，这条就红。
-  const host = readFileSync('src/host.ts', 'utf8')
+  const host = readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n')
   check('模块级失效注册表 + 通知函数都在（跨 inject 作用域只能这么传）',
     host.includes('const moneyInvalidators = new Set<() => void>()')
     && host.includes('function invalidateMoney(): void {')

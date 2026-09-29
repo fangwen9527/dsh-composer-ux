@@ -29,7 +29,7 @@ let file
 for (const name of CANDIDATES) {
   const candidate = join(home, name)
   try {
-    raw = readFileSync(candidate, 'utf8')
+    raw = readFileSync(candidate, 'utf8').replace(/\r\n/g, '\n')
     file = candidate
     break
   } catch {

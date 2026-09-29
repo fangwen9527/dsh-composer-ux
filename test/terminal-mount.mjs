@@ -46,8 +46,8 @@ function check(label, condition, detail) {
 const SVC = '@deepseek-ai/dsh-terminal'
 const BACKEND = '@deepseek-ai/dsh-terminal-bash'
 const TOOL = '@deepseek-ai/dsh-tool-terminal'
-const patch = readFileSync('cordis.patch.yml', 'utf8')
-const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+const patch = readFileSync('cordis.patch.yml', 'utf8').replace(/\r\n/g, '\n')
+const manifest = JSON.parse(readFileSync('package.json', 'utf8').replace(/\r\n/g, '\n'))
 
 // ── 结构：抠出三行与三条表达式 ───────────────────────────────────────────────
 /** 转义包名里的正则元字符。 */
@@ -402,8 +402,8 @@ check('依赖窗口覆盖两个已验证过的运行时（0.1.7 与 0.2.0 ——
   `实际 ${String(range)}`)
 
 check('没有在 lib 里自己实现这 6 个工具（这一档是官方包提供的）',
-  !readFileSync('lib/index.js', 'utf8').includes('terminal_open')
-  && !readFileSync('lib/client.js', 'utf8').includes('terminal_open'))
+  !readFileSync('lib/index.js', 'utf8').replace(/\r\n/g, '\n').includes('terminal_open')
+  && !readFileSync('lib/client.js', 'utf8').replace(/\r\n/g, '\n').includes('terminal_open'))
 
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

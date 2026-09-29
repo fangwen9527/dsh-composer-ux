@@ -238,9 +238,9 @@ console.log('2.0b 优化流程的三处护栏（0.11.1）')
   // 这三条是**行为契约**，而它们在 node 里跑不到（要走真浏览器与真模型），所以按
   // 源码文本钉住：谁把它们删了，这里就红。注释先剥掉，免得注释里的说明把判据蒙过去。
   const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  const source = strip(readFileSync('src/client.tsx', 'utf8'))
-  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8'))
-  const button = strip(readFileSync('src/client/OptimizeButton.tsx', 'utf8'))
+  const source = strip(readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const button = strip(readFileSync('src/client/OptimizeButton.tsx', 'utf8').replace(/\r\n/g, '\n'))
 
   // 0.12.0 起"写回"不再发生在优化回调里，而是用户点「插入输入框」时由 dockInsert 决定：
   // 判定本身是纯函数（insertDecision，在 optimize-dock.ts 里单测），这里钉住接线与判据。
@@ -271,9 +271,9 @@ console.log('2.0b 优化流程的三处护栏（0.11.1）')
 console.log('2.0c 结果框接线（0.12.0）')
 {
   const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  const source = strip(readFileSync('src/client.tsx', 'utf8'))
-  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8'))
-  const dockSource = strip(readFileSync('src/client/OptimizeDock.tsx', 'utf8'))
+  const source = strip(readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const dockSource = strip(readFileSync('src/client/OptimizeDock.tsx', 'utf8').replace(/\r\n/g, '\n'))
 
   check('跑优化走的是流式传输（逐条回调进结果框）',
     source.includes('optimizeDraftStream(input.source') && source.includes("type: 'item'") && source.includes("type: 'dropped'"))
@@ -327,7 +327,7 @@ console.log('2.0d 字段常量必须真的 import 进来（typecheck 抓到的�
     .filter(line => !/^\s*\/\//.test(line)).join('\n')
 
   for (const file of ['src/client.tsx', 'src/client/SettingsSection.tsx', 'src/client/CostCard.tsx', 'src/host.ts']) {
-    const text = strip(readFileSync(file, 'utf8'))
+    const text = strip(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))
     const imported = importedNamesOf(text)
     const defined = definedNamesOf(text)
     const used = new Set(text.match(/\b[A-Z][A-Z0-9_]*_(?:FIELD|PATH)\b/g) ?? [])
@@ -343,7 +343,7 @@ console.log('2.0e 非浏览器环境下的健壮性（Node 20 没有全局 navig
 {
   const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
     .filter(line => !/^\s*\/\//.test(line)).join('\n')
-  const interceptors = strip(readFileSync('src/client/interceptors.ts', 'utf8'))
+  const interceptors = strip(readFileSync('src/client/interceptors.ts', 'utf8').replace(/\r\n/g, '\n'))
   // Node 22 才把 `navigator`（连剪贴板）补成全局；Node 20 及更早读它就是 ReferenceError。
   // 0.12.0 三平台 CI 里三个平台**同时**在测试步骤崩掉，就是 `prefetchClipboard` 直接读
   // `navigator.clipboard` —— 这条护栏让它在默认（Node 24）本地跑里也能被挡住。
@@ -380,7 +380,7 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
   // 金额必须与统计行读**同一份**官方投影，否则两个数字不同源（一个来自 tokenUsage，另一个
   // 自己抓一遍 DOM 或日志）。这条钉住"只在官方投影上算钱"。剥掉注释再查，免得注释里的说明
   // 把这条判据蒙过去（第 10 节那条 `codeOf` 是块内局部的，这里就地剥一次）。
-  const costSource = readFileSync('src/client/CostChipEntry.tsx', 'utf8')
+  const costSource = readFileSync('src/client/CostChipEntry.tsx', 'utf8').replace(/\r\n/g, '\n')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   check('金额只读官方投影 tokenUsage / modelSelection',
     costSource.includes("project('tokenUsage')") && costSource.includes("project('modelSelection')"))
@@ -394,7 +394,7 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
   // 2026-09-28 真机踩过：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens`，
   // 只认一个就会把未缓存输入读成 0（命中率 100% + 金额少算）。这条钉住"两个名字都认"。
   check('未缓存输入两个键名都认（pricing 层统一处理）',
-    readFileSync('src/pricing.ts', 'utf8').includes('uncachedInputTokens'))
+    readFileSync('src/pricing.ts', 'utf8').replace(/\r\n/g, '\n').includes('uncachedInputTokens'))
   check('金额面板不吃等宽字体（与旁边官方胶囊同为 UI 字体：StatsPills 是 font: inherit）',
     !costSource.includes('--ds-font-family-code'))
   // 2026-09-28 第二次真机反馈："插件输入框下方的字比旁边官方胶囊大"。原因是官方那颗胶囊的
@@ -411,7 +411,7 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
   // 「按 route 分列」只能由宿主半给（session.events 客户端读不到），所以客户端必须
   // **按 sessionId 去问那条路由**（0.9.1 起抽成了 `session-cost.ts`：折叠态胶囊也要这个数字，
   // 而且它得跟着流式用量节流刷新，所以不能只写在"点开"那条路上）。
-  const costFetchSource = readFileSync('src/client/session-cost.ts', 'utf8')
+  const costFetchSource = readFileSync('src/client/session-cost.ts', 'utf8').replace(/\r\n/g, '\n')
   check('按 sessionId 向宿主半取费用',
     costFetchSource.includes('USAGE_API_PATH') && costFetchSource.includes('encodeURIComponent(sessionId)'))
   check('折叠态也走这条取数（把 sessionId 与用量指纹交给它）',
@@ -424,14 +424,14 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
   // **逐笔用量的档位**仍然只能来自宿主半（`isPeakAt` 按每条事件自己的时间判）—— 面板里
   // 「高峰档 / 空闲档」两行读的是 `route.peak`，不是客户端重算的。两条一起钉住才不会
   // 让后来的人以为"客户端既然会算相位，那也能算档位"。
-  const hostSource = readFileSync('src/host.ts', 'utf8')
+  const hostSource = readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n')
   check('逐笔档位仍由宿主半按事件时间判定（客户端只读 route.peak，不自己重构时间线）',
     !costSource.includes('isPeakAt')
     && costSource.includes('route.peak === true')
     && hostSource.includes('isPeakAt(at, { holidays: moneyRules.holidays })'))
   check('峰谷提醒的相位规则与宿主半同源（节假日表由宿主半回给客户端）',
     costSource.includes('usePeakAlert(settings, data?.holidays ?? settings.peakHolidays')
-    && readFileSync('src/client/peak-alert.ts', 'utf8').includes('peakPhaseAt(Date.now()')
+    && readFileSync('src/client/peak-alert.ts', 'utf8').replace(/\r\n/g, '\n').includes('peakPhaseAt(Date.now()')
     && hostSource.includes('holidays: moneyRules.holidays'))
   check('分列与投影对不上时退回投影口径并说明', costSource.includes('agreesWithProjection'))
   // 2026-09-28 命中率显示 100%（旁边官方胶囊 98.206%）的**真因**：`billedInputTokens()` 只认
@@ -467,7 +467,7 @@ console.log('2.2 金额条目：自己的 id、排在统计行之后')
 
 console.log('2.3 宿主半取数（session-cost）：0.10.0 多回的字段')
 {
-  const fetchSource = readFileSync('src/client/session-cost.ts', 'utf8')
+  const fetchSource = readFileSync('src/client/session-cost.ts', 'utf8').replace(/\r\n/g, '\n')
   // 「金额是 0」与「认不出价」是两回事：前者是算出来就是 0，后者界面必须写"未定价"。
   // 所以 unpriced 必须是单独一位，不能靠 cost === 0 反推。
   check('route 行带回价格档 / 生效单价 / 单价来源 / 是否被覆盖 / 是否未定价',
@@ -563,15 +563,15 @@ console.log('6. 右键菜单三档（派发真实 contextmenu，看实际行为�
 
 console.log('7. 抬头那个「GitHub ↗」链接（两处地址不许分叉）')
 {
-  const contract = readFileSync('src/settings-contract.ts', 'utf8')
-  const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8').replace(/\r\n/g, '\n'))
   const declared = /REPO_URL = '([^']+)'/.exec(contract)?.[1]
   const fromPackage = String(pkg.repository?.url ?? '').replace(/\.git$/, '')
   check('契约里的仓库地址与 package.json 的 repository.url 一致',
     declared !== undefined && declared === fromPackage, `${String(declared)} vs ${fromPackage}`)
 
   // 注释里会提到地址，所以剥掉注释再找；链接必须用常量，不许在客户端硬编码第二份。
-  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
   check('抬头用 href={REPO_URL}，且文件里没有硬编码的 https://github.com/',
@@ -580,15 +580,15 @@ console.log('7. 抬头那个「GitHub ↗」链接（两处地址不许分叉）
   check('新标签打开且不带 referrer',
     section.includes('target="_blank"') && /rel="noreferrer[^"]*"/.test(section))
   check('样式表里定义了 .dsh-ux-cardLink（否则链接会难看/看不见）',
-    readFileSync('src/client/settings-style.ts', 'utf8').includes('.dsh-ux-cardLink'))
+    readFileSync('src/client/settings-style.ts', 'utf8').replace(/\r\n/g, '\n').includes('.dsh-ux-cardLink'))
 }
 
 console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号判断重启成功')
 {
-  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n')
     .replace(/\/\*[\s\S]*?\*\//g, '')
-  const style = readFileSync('src/client/settings-style.ts', 'utf8')
-  const bundle = readFileSync('lib/client.js', 'utf8')
+  const style = readFileSync('src/client/settings-style.ts', 'utf8').replace(/\r\n/g, '\n')
+  const bundle = readFileSync('lib/client.js', 'utf8').replace(/\r\n/g, '\n')
 
   // 位置：按钮在 cardActions 里，且在 GitHub 链接**之前**（用源码顺序断言，不看注释）。
   const actionsAt = section.indexOf('dsh-ux-cardActions')
@@ -628,18 +628,18 @@ console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号
   check('产物里带上了重启接口路径', bundle.includes('/composer-ux/restart'))
 
   // 用户已经拍掉的东西不能再回来：可选重启命令 + 那张「维护」卡。
-  const contract = readFileSync('src/settings-contract.ts', 'utf8')
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
   check('设置契约里不再有「可选重启命令」字段', !contract.includes('restartCommand'))
   check('设置页不再渲染那张「维护」折卡', !section.includes('name="维护"'))
   check('老文档里可能留着的 restartCommand 会被「恢复默认」顺手清掉',
-    readFileSync('src/client.tsx', 'utf8').includes("'restartCommand'"))
+    readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n').includes("'restartCommand'"))
 }
 
 console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关搬到标题行 + 默认关')
 {
-  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
-  const style = readFileSync('src/client/settings-style.ts', 'utf8')
-  const bundle = readFileSync('lib/client.js', 'utf8')
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const style = readFileSync('src/client/settings-style.ts', 'utf8').replace(/\r\n/g, '\n')
+  const bundle = readFileSync('lib/client.js', 'utf8').replace(/\r\n/g, '\n')
 
   const cardToggles = (section.match(/checked: sections\.\w+/g) ?? []).length
   check('七张折叠卡各有自己的卡级开关（读 activeSections 的结果）', cardToggles === 7, String(cardToggles))
@@ -682,19 +682,19 @@ console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关�
   }
 
   // 栏开关要真的门控住每一处行为，不是只在界面上画个开关。
-  const interceptors = readFileSync('src/client/interceptors.ts', 'utf8')
+  const interceptors = readFileSync('src/client/interceptors.ts', 'utf8').replace(/\r\n/g, '\n')
   check('键位：拦截器按「键位」栏判断',
     interceptors.includes('activeSections(deps.settings()).keys'))
   check('右键菜单：拦截器按「右键菜单」栏判断',
     interceptors.includes('activeSections(settings).menu'))
   check('快捷指令：入口按钮按栏开关返回 null',
-    readFileSync('src/client/QuickCommandsButton.tsx', 'utf8').includes('activeSections(settings).quick'))
+    readFileSync('src/client/QuickCommandsButton.tsx', 'utf8').replace(/\r\n/g, '\n').includes('activeSections(settings).quick'))
   check('设置面板：尺寸把手按栏开关停用',
-    readFileSync('src/client/PanelResizeHandles.tsx', 'utf8').includes('activeSections(value).panel'))
+    readFileSync('src/client/PanelResizeHandles.tsx', 'utf8').replace(/\r\n/g, '\n').includes('activeSections(value).panel'))
 
   // 「恢复默认」清掉栏开关 = 回到"从没碰过"的样子。五栏那是"关"，而 0.7.0 的统计行
   // 清掉之后是"开"（它的默认就是开）—— 方向相反但各自都对，所以两组都要清。
-  const client = readFileSync('src/client.tsx', 'utf8')
+  const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
   for (const field of ['KEYS_ENABLED_FIELD', 'MENU_ENABLED_FIELD', 'QUICK_ENABLED_FIELD',
     'PANEL_ENABLED_FIELD', 'TERMINAL_ENABLED_FIELD', 'STATS_ENABLED_FIELD']) {
     check(`「恢复默认」清掉 ${field}`, new RegExp(`${field},`).test(client))
@@ -703,9 +703,9 @@ console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关�
 
 console.log('10. 「统计行」的实现约定：窄域、只改文本、可还原')
 {
-  const entry = readFileSync('src/client/StatsLineEntry.tsx', 'utf8')
-  const dom = readFileSync('src/client/stats-dom.ts', 'utf8')
-  const pure = readFileSync('src/client/stats-line.ts', 'utf8')
+  const entry = readFileSync('src/client/StatsLineEntry.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const dom = readFileSync('src/client/stats-dom.ts', 'utf8').replace(/\r\n/g, '\n')
+  const pure = readFileSync('src/client/stats-line.ts', 'utf8').replace(/\r\n/g, '\n')
   /**
    * 去掉注释后再查关键词。
    *
@@ -737,8 +737,8 @@ console.log('10. 「统计行」的实现约定：窄域、只改文本、可还
   check('加宽相关常量已从契约里删干净',
     !pure.includes('WIDEN_MAX_WIDTH') && !pure.includes('WIDEN_EXTRA_PX'))
   check('只剩一个开关，没有同义的子开关',
-    !readFileSync('src/client/SettingsSection.tsx', 'utf8').includes('STATS_PRECISION_FIELD')
-    && !codeOf(readFileSync('src/settings-contract.ts', 'utf8')).includes('statsPrecision'))
+    !readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n').includes('STATS_PRECISION_FIELD')
+    && !codeOf(readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')).includes('statsPrecision'))
   check('关掉时写回官方口径（0 位小数），不是"什么都不写"',
     entryCode.includes('active ? HIT_DIGITS : 0'))
   check('锚点常驻挂载：关掉之后仍要能定位到统计行把官方原样写回去',
@@ -747,10 +747,10 @@ console.log('10. 「统计行」的实现约定：窄域、只改文本、可还
 
 console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不自己造时间线')
 {
-  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8')
-  const card = readFileSync('src/client/CostCard.tsx', 'utf8')
-  const contract = readFileSync('src/settings-contract.ts', 'utf8')
-  const host = readFileSync('src/host.ts', 'utf8')
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const card = readFileSync('src/client/CostCard.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
+  const host = readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n')
 
   check('设置页多了一张「金额」折卡，且内容区是我们自己的组件',
     section.includes('name="金额"') && section.includes('<CostCardBody'))
@@ -775,7 +775,7 @@ console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不�
   check('内置模型常显（0.10.0 起两个：deepseek-flash / deepseek-v4-pro）、可自加任意模型名',
     card.includes('BUILTIN_PRICING_MODELS') && card.includes('customPricingModels'))
   check('「恢复默认」会清掉覆盖价（否则金额还是按旧价算）',
-    readFileSync('src/client.tsx', 'utf8').includes('PRICE_OVERRIDES_FIELD'))
+    readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n').includes('PRICE_OVERRIDES_FIELD'))
   check('契约里登记了这个字段（schemastery 侧才能写）',
     contract.includes("export const PRICE_OVERRIDES_FIELD = 'priceOverrides'"))
   check('宿主半的 schema 收下了这个字段（z.any：键是用户自加的模型名）',
@@ -798,10 +798,10 @@ console.log('11. 「金额」栏（0.9.1）：设置页可改价 + 客户端不�
 
 console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价目同步（界面 + 宿主调用封装）')
 {
-  const card = readFileSync('src/client/CostCard.tsx', 'utf8')
-  const admin = readFileSync('src/client/money-admin.ts', 'utf8')
-  const chip = readFileSync('src/client/CostChipEntry.tsx', 'utf8')
-  const balancePath = /BALANCE_API_PATH = '([^']+)'/.exec(readFileSync('src/balance.ts', 'utf8'))?.[1]
+  const card = readFileSync('src/client/CostCard.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const admin = readFileSync('src/client/money-admin.ts', 'utf8').replace(/\r\n/g, '\n')
+  const chip = readFileSync('src/client/CostChipEntry.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const balancePath = /BALANCE_API_PATH = '([^']+)'/.exec(readFileSync('src/balance.ts', 'utf8').replace(/\r\n/g, '\n'))?.[1]
 
   check('节假日表：一个 textarea + 保存 / 恢复默认 两个按钮',
     card.includes('aria-label="法定节假日日期表"')
@@ -954,7 +954,7 @@ console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻
       }))
     : value
 
-  const field = readFileSync('src/settings-contract.ts', 'utf8')
+  const field = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
   const fieldName = /PRICE_OVERRIDES_FIELD = '([^']+)'/.exec(field)?.[1]
   check('契约里的字段名就是 schema 里的那个键', fieldName === 'priceOverrides')
   check('这个字段是 volatile（否则设置页根本写不进去）',
@@ -1057,7 +1057,7 @@ console.log('14. React 副作用：alive ref 必须在 effect 体里重置（Str
     ['src/client/money-admin.ts', '金额的同步 / 余额两个 hook'],
     ['src/client/session-cost.ts', '会话金额取数（胶囊那个数字）'],
   ]) {
-    const source = readFileSync(file, 'utf8')
+    const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n')
     const refs = (source.match(/React\.useRef\(true\)/g) ?? []).length
     const resets = (source.match(/alive\.current = true/g) ?? []).length
     check(`${label}：每个 alive ref 都有对应的重置（ref ${refs} 个 / 重置 ${resets} 处）`,

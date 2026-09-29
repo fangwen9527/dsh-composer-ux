@@ -889,9 +889,19 @@ console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻
   // 写入校验不在它下面继续挑刺。这三条任何一条不成立，表现都是"改了价、界面没反应"
   // 或者"点了保存没报错但设置文件里什么都没有" —— 都必须在这里挡住。
   const { pathToFileURL } = await import('node:url')
+  const { existsSync } = await import('node:fs')
   const repoPath = (process.env.DSH_REPO_PATH ?? 'D:/DeepSeek Harness').replace(/\\/g, '/')
-  const schemastery = pathToFileURL(`${repoPath}/vendor/schemastery/lib/index.mjs`).href
-  const { default: z } = await import(schemastery)
+  // 两条候选，与 build.mjs 的退路一致：CI 上没有 DSH 检出，但 npm 包里那份与 vendor 那份
+  // **逐字节相同**（0.12.0 核对过），所以这一节在 CI 上跑的是同一代代码。
+  const schemasteryPath = [
+    `${repoPath}/vendor/schemastery/lib/index.mjs`,
+    'node_modules/@deepseek-ai/schemastery/lib/index.mjs',
+  ].find(candidate => existsSync(candidate))
+  if (schemasteryPath === undefined) {
+    // 不静默放水：把话说出来（这句会出现在 CI 日志里），整节跳过。
+    console.log('  — 跳过：找不到 schemastery（既没有 DSH 检出，也没 npm install）—')
+  } else {
+  const { default: z } = await import(pathToFileURL(schemasteryPath).href)
   const { Config } = await import('../lib/index.js')
 
   // 下面两个函数与 DSH 的 `packages/settings/settings/src/schema.ts` 逐行同义。
@@ -957,6 +967,7 @@ console.log('12. 「金额」的覆盖价真的能被设置服务收下（复刻
   }
   validatePaths(current, form)
   check('写入校验放过它（不许在表下面继续挑刺）', rejected === '')
+  }
 }
 
 console.log('13. 「峰谷提醒」纯文案（peakNoticeText）：相位 → 一行中文（跑真函数，不是搜源码）')

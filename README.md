@@ -472,7 +472,10 @@ CI（GitHub Actions，`.github/workflows/ci.yml`）是 **ubuntu / windows / maco
 
 ```sh
 npm ci                            # 按 lockfile 安装（CI 用这条）
-npm run typecheck                 # tsc --noEmit（类型面在 types/dsh-externals.d.ts）
+npm run typecheck                 # tsc --noEmit（类型面在 types/dsh-externals.d.ts，手写）
+npm run sync-types                # 对着 DSH 源码核对本插件依赖的**宿主形状**（只读，需 DSH 检出）
+                                  #   名字沿用社区插件工程面的叫法；我们**不做类型代码生成**：
+                                  #   手写类型面 + 形状核对，比生成一份"跟着版本线漂"的类型更诚实
 node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules

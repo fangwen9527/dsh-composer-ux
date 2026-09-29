@@ -206,6 +206,24 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
 
 优化用的模型**跟随你当前的默认模型**（`agentDefaultModel.currentSelection()`），不额外配置；每次优化会花一次模型调用，但**不占对话轮次、不进会话历史**。
 
+### 逐轮台账（只记元数据，不记原文）
+
+优化跑完只留一句话（"3 条补全 · 丢弃 1 条"），过一会儿就没了；「这轮为什么长这样」也没处查。0.13.0 起每轮往 `$DSH_HOME/composer-ux/optimize-log.jsonl` 追加**一条元数据**：
+
+> 档位 · 草稿字数 · 上下文轮数与字数 · 条目数 · 丢弃条数与**原因** · 是否重试/整段照收 · 耗时 · 路由 · 成败
+
+**一条用户原文都不写**（草稿、成品、逐字引文都不进这个文件）—— 这不是靠自觉，而是模块类型上就没有承载它的字段。还有一处必须说明的坑：装配层那几条丢弃原因的模板里**嵌着模型给的引文**（`引文不是原话里的逐字片段：「…」`，最多 40 字），而引文很可能就是你原话的变体，所以写台账前会**消毒**：刮掉所有成对引号/括号里的内容，只留机器写的固定前缀（`引文不是原话里的逐字片段：`）。
+
+```bash
+node scripts/recap.mjs                # 最近 20 轮（表格）
+node scripts/recap.mjs --last 5       # 最近 5 轮
+node scripts/recap.mjs --session 6f2a # 只看某会话（sessionId 前缀）
+node scripts/recap.mjs --json         # 机器读
+node scripts/recap.mjs --clear        # 清空
+```
+
+台账文件超 512 KB 会从**最旧**的行开始丢（并留一条 `rotated` 标记说明丢了多少行）；坏行逐行跳过并计数，不会因为一行坏掉就把整份台账判成"读不出来"。写台账失败**绝不影响优化本身**（旁路失败只少一条记录，不能拖垮一次已经跑完的调用）。开关在**设置 → 插件 → 输入快捷指令 → 记录每轮优化台账**（默认开：只写数字与原因，所以默认开不冒隐私风险）。
+
 ### 「发送时附加」为什么不自造提交
 
 Enter 那一路沿用既有的合成 Enter 回放；**官方发送按钮**那一路在捕获阶段认下点击、先把附加内容写回编辑器、再用同一个按钮重放一次点击。这样官方对「发送 / 排队 / 打断」的判定原样生效，本插件不做第二套提交语义。发送键与停止键共用同一个位置，靠图形区分——停止渲染 `<rect>`（方块），发送渲染 `<path>`（箭头），与界面文案、语言无关。
@@ -405,6 +423,7 @@ dsh-composer-ux/
 │   ├── prompt-context.ts          # 优化：会话上下文（挑往来 / 收敛预算 / 渲染成块，纯函数；0.12.0）
 │   ├── optimizer-assemble.ts      # 优化：逐字校验 + 装配 + 流式扫描（批处理与流式共用同一份校验）
 │   ├── optimizer-prompt.ts        # 优化：三档系统提示词 + 固定 JSON 契约（自定义提示词不能替换契约）
+│   ├── optimize-ledger.ts         # 优化：逐轮台账（只记元数据 + 原因消毒 + 轮转/容错，0.13.0 新增）
 │   ├── holiday-sync.ts            # 金额：法定节假日自动获取（holiday-cn 今年+明年 → 日期表；补班日不收；到期判定/镜像兜底/失败不改动）
 │   ├── provider-prices.ts         # 金额：内置第三方价目**快照**（生成物，11 provider / 346 模型；由 scripts/gen-provider-prices.mjs 生成）
 │   ├── balance.ts                 # 金额：官方余额响应消毒 + 查询端点白名单（零 import，两半共用）
@@ -427,6 +446,7 @@ dsh-composer-ux/
 │       ├── optimize-clock.ts       # 优化：面板与结果框共用的秒表读数（0.11.1 新增）
 │       ├── OptimizeDock.tsx        # 优化：面板内结果框（逐条流水 + 可编辑成品 + 插入，0.12.0 新增）
 │       ├── optimize-dock.ts        # 优化：结果框的纯函数状态机与文案（0.12.0 新增，可单测）
+│       ├── optimize-ledger.ts      # 优化：逐轮台账（只记元数据 + 原因消毒 + 轮转，0.13.0 新增）
 │       ├── quick-commands.ts       # 快捷指令/优化：输入框桥接、插入与写回、斜杠命令与秒表纯函数
 │       ├── stats-line.ts          # 统计行：小数语义（不撒谎）+ 两个字符串变换（纯逻辑）
 │       ├── stats-dom.ts           # 统计行：定位与改写（DOM 助手，不 import React）
@@ -480,9 +500,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 18 个套件；当前 1943 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
+npm test                          # 19 个套件；当前 2010 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（109 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（113 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

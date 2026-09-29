@@ -1826,6 +1826,94 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
     block !== null && block[1].length === 1_500, String(block?.[1]?.length))
 }
 
+// ══════════════ 5e. 逐轮台账（0.13.0）：真路由跑一轮，磁盘上只有元数据 ══════════════════
+console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据，且搜不到原文')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'composer-ux-ledger-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dir
+  try {
+    const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
+    // 一个**只可能来自草稿**的词：台账里出现它就说明原文泄进去了。
+    const secret = '独角兽紫罗兰七号'
+    const draft = `把那个页面弄好看点：${secret}`
+    const res = makeRes()
+    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 'sess-ledger-1' })), res)
+    check('这一轮成功（假模型吐 2 条）', json(res).ok === true && json(res).itemCount === 2, JSON.stringify(json(res)).slice(0, 90))
+
+    const file = join(dir, 'composer-ux', 'optimize-log.jsonl')
+    check('台账文件写出来了', existsSync(file))
+    const text1 = readFileSync(file, 'utf8')
+    check('落了一条记录', text1.trim().split('\n').length === 1)
+    const record = JSON.parse(text1.trim())
+    check('是成功的 run 记录', record.kind === 'run' && record.ok === true)
+    check('记的是草稿**字数**而不是草稿', record.draftChars === draft.length, `${record.draftChars} vs ${draft.length}`)
+    check('记了条目数/档位/路由',
+      record.items === 2 && record.tier === 'advanced' && record.provider === 'go' && record.model === 'deepseek-flash',
+      JSON.stringify([record.items, record.tier, record.provider, record.model]))
+    check('记了会话与耗时', record.sessionId === 'sess-ledger-1' && Number.isFinite(record.ms))
+    check('❗台账里搜不到草稿里那个独特的词', !text1.includes(secret))
+    check('❗台账里也没有成品的句子', !text1.includes('把设置页做得好看点'))
+
+    // 第二轮：追加而不是覆盖（台账是流水，不是"最后一次状态"）
+    const res2 = makeRes()
+    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic', sessionId: 'sess-ledger-2' })), res2)
+    const lines2 = readFileSync(file, 'utf8').trim().split('\n')
+    check('第二轮是追加', lines2.length === 2 && JSON.parse(lines2[1]).tier === 'basic', String(lines2.length))
+    check('两条记录的 sessionId 各自正确',
+      JSON.parse(lines2[0]).sessionId === 'sess-ledger-1' && JSON.parse(lines2[1]).sessionId === 'sess-ledger-2')
+
+    // 丢弃原因：装配层那条模板里嵌着**模型给的引文**（这里故意让它包含那个独特的词）。
+    // 台账必须只留机器前缀 —— 这是"只记元数据"这条承诺最容易被打破的一处。
+    const dropHost = await bootHost({
+      model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+      chunks: [{
+        type: 'text-delta',
+        index: 0,
+        text: JSON.stringify({
+          items: [
+            { kind: 'rewrite', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
+            // 引文**不是**原话里的逐字片段（多了一个字） ⇒ 整条丢弃，原因里带它前 40 字。
+            { kind: 'rewrite', quote: `${secret}要更好看`, text: '随便写点什么' },
+          ],
+        }),
+      }, { type: 'finish', reason: { kind: 'stop' } }],
+    })
+    const dropRes = makeRes()
+    await handler0(dropHost, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 'sess-ledger-3' })), dropRes)
+    // 注意：路由返回的 `dropped` 是**条目数组**，台账里记的才是条数。
+    check('这条用例真的触发了丢弃', json(dropRes).dropped.length === 1, JSON.stringify(json(dropRes).dropped))
+    const lines3 = readFileSync(file, 'utf8').trim().split('\n')
+    const dropped = JSON.parse(lines3[2])
+    check('台账记了丢弃条数与原因', dropped.dropped === 1 && dropped.droppedReasons.length === 1, JSON.stringify(dropped.droppedReasons))
+    check('❗丢弃原因只剩机器前缀（引文那一段被刮掉）',
+      dropped.droppedReasons[0] === '引文不是原话里的逐字片段：', dropped.droppedReasons[0])
+    check('❗整份台账（含丢弃原因）搜不到那个独特的词', !readFileSync(file, 'utf8').includes(secret))
+
+    // 开关关掉：一条都不写
+    const offHost = await bootHost({
+      model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+      settings: { optimizerLedger: false },
+    })
+    const before = readFileSync(file, 'utf8').trim().split('\n').length
+    await handler0(offHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic' })), makeRes())
+    check('开关关掉后一条都不写', readFileSync(file, 'utf8').trim().split('\n').length === before, String(before))
+
+    // 被官方信任关卡拒掉的请求不该进台账（连 body 都不读，当然也不该记账）
+    const rejectedHost = await bootHost({
+      model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
+      connection: { requestRejection: () => 403 },
+    })
+    await handler0(rejectedHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic' })), makeRes())
+    check('被信任关卡拒掉的请求不进台账',
+      readFileSync(file, 'utf8').trim().split('\n').length === before)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ══════════════ 6. 宿主半真实注册的 settings schema ═════════════════════════
 console.log('6. settings schema（宿主半真实注册的那一个）')
 {

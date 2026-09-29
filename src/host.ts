@@ -29,7 +29,7 @@ import {
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
-  OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
+  OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
@@ -68,6 +68,7 @@ import {
 import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
 import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts'
+import { appendLedger, buildLedgerRun } from './optimize-ledger.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
@@ -448,6 +449,8 @@ function ownSchema(): Schema {
     [OPTIMIZER_TIER_FIELD]: z.string().default(DEFAULT_SETTINGS.optimizerTier),
     // 优化时是否携带当前会话的近期往来（0.12.0；默认开，见契约里的说明）。
     [OPTIMIZER_CONTEXT_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerContext),
+    // 逐轮台账（0.13.0；默认开）。只记元数据，见契约里的说明。
+    [OPTIMIZER_LEDGER_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizerLedger),
     // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
     [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
     [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
@@ -862,6 +865,8 @@ export function apply(ctx: Context, config?: unknown): void {
       // 和**用户的原话**，是"钱 + 数据"两样都碰的接口，必须挡在最前面 ——
       // 位置刻意在读请求体之前：被拒的请求连 body 都不读。
       if (rejectUntrustedRequest(optCtx as never, req, res as never)) return
+      // 台账计时起点：只统计**真正被处理**的请求（被信任关卡挡掉的连 body 都没读）。
+      const startedAt = Date.now()
       let payload: Record<string, unknown>
       try {
         payload = objectOf(JSON.parse(await readBody(req as unknown as AsyncIterable<unknown>)))
@@ -906,6 +911,8 @@ export function apply(ctx: Context, config?: unknown): void {
       // 会话上下文（0.12.0）：设置里默认开；关了、或没送 sessionId、或读不到快照，都按
       // "没有上下文"走（优化本身不依赖它）。
       const contextOn = readOwnFlag(optCtx, config, OPTIMIZER_CONTEXT_FIELD, DEFAULT_SETTINGS.optimizerContext)
+      // 台账开关（默认开）：只记元数据，不记原文；关掉就一条都不写。
+      const ledgerOn = readOwnFlag(optCtx, config, OPTIMIZER_LEDGER_FIELD, DEFAULT_SETTINGS.optimizerLedger)
       const sessionId = textOf(payload.sessionId)
       const contextTurns = contextOn && sessionId !== ''
         ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId)))
@@ -1057,6 +1064,9 @@ export function apply(ctx: Context, config?: unknown): void {
        * 这一轮的最终结果 —— 两条路径共用同一份字段（旧路径一次给 JSON，流式在 done 事件里给），
        * 于是"流式与否"只影响**送达方式**，不影响任何判定。
        */
+      /** 台账要的这几个数字：在 outcome 构造里填；失败分支保持 0/空。 */
+      let summary = { items: 0, droppedReasons: [] as string[], warnings: 0, fallback: false }
+
       const outcome = ((): Record<string, unknown> => {
         if (result.out.trim() === '') {
           return {
@@ -1076,6 +1086,14 @@ export function apply(ctx: Context, config?: unknown): void {
         }
         const optimized = assembled.text.trim()
         if (optimized === '') return { ok: false, error: '装配后是空的（模型没有给出可核实的条目）', retried }
+        // 只有真正装配成功才记条目数与丢弃原因（否则台账会把"模型没产出"记成"0 条"）。
+        summary = {
+          items: assembled.itemCount,
+          // ⚠️ 只收我们自己写的固定短语（reason），**不收**被丢弃条目的 text（那可能是用户原话）。
+          droppedReasons: assembled.dropped.map(item => item.reason),
+          warnings: assembled.warnings.length,
+          fallback: assembled.fallback,
+        }
         return {
           ok: true,
           text: optimized,
@@ -1098,6 +1116,31 @@ export function apply(ctx: Context, config?: unknown): void {
           chars: assembled.chars,
         }
       })()
+
+      // 台账（0.13.0）：只记元数据 —— 字数、条数、丢弃原因、上下文规模、耗时、路由、成败。
+      // 一段用户原文都不进这个文件（类型上就没有承载它的字段）；写失败也只少一条记录。
+      if (ledgerOn) {
+        appendLedger(buildLedgerRun({
+          sessionId,
+          tier,
+          provider: route.provider,
+          model: route.model,
+          draftChars: body.length,
+          contextTurns: contextTurns.length,
+          contextChars: contextText.length,
+          hadPrevious: previous !== '',
+          items: summary.items,
+          dropped: summary.droppedReasons.length,
+          droppedReasons: summary.droppedReasons,
+          warnings: summary.warnings,
+          fallback: summary.fallback,
+          retried,
+          promptSource: optimizePromptSource(customPrompt),
+          ms: Date.now() - startedAt,
+          ok: outcome.ok === true,
+          failure: outcome.ok === true ? undefined : textOf(outcome.error),
+        }))
+      }
 
       if (!wantsStream) {
         sendJson(res, 200, outcome)

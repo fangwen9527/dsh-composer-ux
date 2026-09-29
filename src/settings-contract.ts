@@ -314,6 +314,16 @@ export const OPTIMIZER_TIER_FIELD = 'optimizerTier'
  */
 export const OPTIMIZER_CONTEXT_FIELD = 'optimizerContext'
 
+/**
+ * 逐轮台账开关（0.13.0）。
+ *
+ * 打开后，每轮优化往 `$DSH_HOME/composer-ux/optimize-log.jsonl` 追加**一条元数据**：
+ * 档位、草稿字数、上下文规模、条目数、丢弃条数与原因、是否重试/回落、耗时、路由、成败。
+ * **不记任何用户原文**（模块类型上就没有承载它的字段）—— 它是排查"这轮为什么长这样"用的，
+ * 不是内容日志。用 `node scripts/recap.mjs` 看，`--clear` 清空。
+ */
+export const OPTIMIZER_LEDGER_FIELD = 'optimizerLedger'
+
 /** 上下文里最多各带几条（你的话 / 助手的话）。 */
 export const OPTIMIZER_CONTEXT_TURNS = 4
 
@@ -821,6 +831,7 @@ export type SettingsField =
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
   | typeof OPTIMIZER_CONTEXT_FIELD
+  | typeof OPTIMIZER_LEDGER_FIELD
   | typeof OPTIMIZER_PROMPT_FIELDS.basic
   | typeof OPTIMIZER_PROMPT_FIELDS.advanced
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
@@ -900,6 +911,8 @@ export interface ComposerUxSettings {
   optimizerTier: OptimizerTier
   /** 优化时是否携带当前会话的近期往来（默认开）。 */
   optimizerContext: boolean
+  /** 每轮优化记一条**只含元数据**的台账（见 OPTIMIZER_LEDGER_FIELD）。 */
+  optimizerLedger: boolean
   /**
    * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
    *
@@ -980,6 +993,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   quickPrompts: DEFAULT_QUICK_PROMPTS,
   optimizerTier: DEFAULT_OPTIMIZER_TIER,
   optimizerContext: true,
+  // 台账默认开：只写数字与原因，不写一个字原文，所以默认开不冒隐私风险。
+  optimizerLedger: true,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
   optimizerPromptBasic: '',
   optimizerPromptAdvanced: '',
@@ -1300,6 +1315,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     quickPrompts: asQuickPrompts(),
     optimizerTier: asTier(),
     optimizerContext: asBool(OPTIMIZER_CONTEXT_FIELD),
+    optimizerLedger: asBool(OPTIMIZER_LEDGER_FIELD),
     optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
     optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
     optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),

@@ -53,7 +53,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test:suites": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/terminal-mount.mjs && node test/stats-line.mjs && node test/stats-dom.mjs && node test/pricing.mjs && node test/usage-fold.mjs && node test/price-sync.mjs && node test/official-pricing.mjs && node test/balance.mjs && node test/holiday-sync.mjs && node test/client-registration.mjs && node test/settings-render.mjs && node test/cost-panel-render.mjs && node test/settings-service-adopt.mjs",
+    "test:suites": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/terminal-mount.mjs && node test/stats-line.mjs && node test/stats-dom.mjs && node test/pricing.mjs && node test/usage-fold.mjs && node test/price-sync.mjs && node test/official-pricing.mjs && node test/balance.mjs && node test/holiday-sync.mjs && node test/client-registration.mjs && node test/settings-render.mjs && node test/cost-panel-render.mjs && node test/settings-service-adopt.mjs && node test/optimize-ledger.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:mutations": "node scripts/run-mutations.mjs",
     "typecheck": "tsc --noEmit",

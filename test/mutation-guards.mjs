@@ -943,6 +943,39 @@ const cases = [
     test: 'test/client-registration.mjs',
     expect: '填色与前景是配对令牌',
   },
+  {
+    name: "DH 台账的原因去掉消毒（模型的引文会连带写进磁盘）",
+    file: "src/optimize-ledger.ts",
+    from: "    droppedReasons: [...new Set(input.droppedReasons.map(reason => ledgerSafeReason(reason)).filter(reason => reason !== ''))].slice(0, 8),",
+    to: "    droppedReasons: [...new Set(input.droppedReasons.map(reason => reason).filter(reason => reason !== ''))].slice(0, 8),",
+    test: "test/quick-commands.mjs",
+    expect: "整份台账（含丢弃原因）搜不到那个独特的词",
+  },
+  {
+    name: "DI 台账写失败改成抛错（旁路失败拖垮已经跑完的优化）",
+    file: "src/optimize-ledger.ts",
+    from: "  } catch {\n    return { written: false, rotated: false }\n  }\n}",
+    to: "  } catch (error) {\n    throw error\n  }\n}",
+    test: "test/optimize-ledger.mjs",
+    expect: "路径不可写时返回 written=false 且不抛错",
+  },
+  {
+    name: "DJ 轮转保留最旧的行而不是最新的（台账变成\"最早发生的事\"）",
+    file: "src/optimize-ledger.ts",
+    from: "  const kept = lines.slice(-Math.max(1, target))",
+    to: "  const kept = lines.slice(0, Math.max(1, target))",
+    test: "test/optimize-ledger.mjs",
+    expect: "保留的是最新那几行",
+  },
+  {
+    name: "DK 台账开关的回落值改成关（默认不再记账）",
+    file: "src/host.ts",
+    from: "      const ledgerOn = readOwnFlag(optCtx, config, OPTIMIZER_LEDGER_FIELD, DEFAULT_SETTINGS.optimizerLedger)",
+    to: "      const ledgerOn = readOwnFlag(optCtx, config, OPTIMIZER_LEDGER_FIELD, false)",
+    test: "test/quick-commands.mjs",
+    expect: "台账文件写出来了",
+  },
+
 ]
 
 let allBit = true

@@ -331,6 +331,33 @@ console.log('2.0e 非浏览器环境下的健壮性（Node 20 没有全局 navig
     interceptors.includes("typeof navigator === 'undefined' || navigator.clipboard === undefined"))
 }
 
+console.log('2.0f 主按钮的填色与前景必须成对（深色主题下 brand-primary 是近白）')
+{
+  // 为什么值得单列一节：0.12.0 截图验收时发现结果框那颗「插入输入框」是**白底白字** ——
+  // `--dsw-alias-label-inverse` 这个令牌**根本不存在**（官方叫 label-primary-inverted），
+  // 兜底 #fff 撞上深色主题里 `brand-primary` = 近白。浅色主题下反而正常，
+  // 所以测试、类型检查、浅色截图全都看不见它。
+  const { build } = await import('esbuild')
+  const { join } = await import('node:path')
+  const bundled = await build({
+    bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
+    stdin: { contents: "export { dockButtonPrimary, quickPrimaryButton } from './pure-entry.ts'\n", resolveDir: join(process.cwd(), 'test'), loader: 'ts' },
+  })
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`)
+  for (const [label, style] of [['结果框「插入输入框」', mod.dockButtonPrimary], ['面板「优化提示词」', mod.quickPrimaryButton]]) {
+    check(`${label}：填色与前景是配对令牌`,
+      style?.background === 'var(--dsw-alias-button-primary-fill)'
+      && style?.color === 'var(--dsw-alias-label-primary-foreground)',
+      `${String(style?.background)} / ${String(style?.color)}`)
+  }
+  // 不存在的令牌名会静默走兜底色 —— 深浅主题必有一个方向瞎掉，所以直接禁止这个拼错的名字。
+  // 先剥注释：文件头那条"当初写错了什么"的说明里**故意**留着这个错名字（它是记录），不该被算作违规。
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const files = ['src/client/styles.ts', 'src/client/settings-style.ts', 'src/client/PillChoice.tsx', 'src/client/AddPromptRow.tsx']
+  const offenders = files.filter(file => strip(readFileSync(file, 'utf8')).includes('label-inverse'))
+  check('全仓不出现不存在的令牌名 label-inverse', offenders.length === 0, offenders.join(', '))
+}
+
 console.log('2.1 统计行条目：自己的 id、排在官方 stats 之后')
 {
   const stats = byId('composer-ux-stats-line')

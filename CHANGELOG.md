@@ -39,6 +39,19 @@
   0.12.0 删掉它：工具行只剩一枚「快捷指令」，优化仍是面板里的「✨ 优化提示词」，
   秒表读数就在面板主按钮上（**信息一点没少**）。相关测试、护栏与文档一并改齐。
 
+### 修正（0.12.0 截图验收抓到）
+
+- **结果框主按钮在深色主题下不可见（白底白字）**：`dockButtonPrimary` 原本写的是
+  `background: var(--dsw-alias-brand-primary)` + `color: var(--dsw-alias-label-inverse, #fff)`，
+  而 **`--dsw-alias-label-inverse` 这个令牌根本不存在**（官方叫 `label-primary-inverted`）⇒ 兜底 `#fff`；
+  偏偏深色主题里 `brand-primary` 是**近白**（`--dsw-static-neutral-bluish-50` = rgb(249,250,251)），
+  于是结果框那颗「插入输入框」只剩一个白色胶囊、字看不见。**浅色主题下反而正常**（那时 brand-primary 是墨色），
+  所以测试、类型检查、浅色截图全都放过了它 —— 这是把界面真看一眼（截图验收）才抓到的。
+  修法：改用**配对令牌** `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-foreground`
+  （与面板里那颗「优化提示词」按钮同一对，也是官方 ui-primitives 的成对写法；同文件 0.2.0 的注释里就写着这条教训）。
+  护栏：新增 2.0f 节 3 条 —— 两条**对象级**断言两个主按钮的填色/前景令牌成对，
+  一条禁止全仓再出现 `label-inverse` 这个不存在的名字（注释先剥掉，因为文件头那条"当初写错了什么"的记录里故意留着它）。
+
 ### 工程面（原 0.11.1 计划外，0.12.0 补齐）
 
 - **`npm run typecheck`**（`tsconfig.json` + 手写类型面 `types/dsh-externals.d.ts`，实测 **0 错误**）。
@@ -101,7 +114,7 @@
   中文全版仍是权威；新增一页推广 PPT（`docs/promo/`，生成脚本与产物一起入库）。
 - 类型与 CI：`tsconfig.json` + `types/dsh-externals.d.ts`（手写类型面）+ `npm run typecheck`（0 错误）；
   `.github/workflows/ci.yml` 三平台矩阵（ubuntu / windows / macos × node 20）。
-- 测试：`npm test` 18 套件 **1939 条**（0.11.0：1736 条）；变异 **108 条，全部咬住**。
+- 测试：`npm test` 18 套件 **1943 条**（0.11.0：1736 条）；变异 **108 条，全部咬住**。
 
 ## [0.11.0] — 2026-09-29（节假日自动获取 + 金额浮层瘦身 + 官方价格页 URL 事故修复）
 

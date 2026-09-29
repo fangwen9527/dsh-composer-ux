@@ -595,11 +595,24 @@ export const dockButtonDisabled: CSSProperties = {
   cursor: 'default',
 }
 
-/** 主按钮（插入输入框）。 */
+/**
+ * 主按钮（插入输入框）。
+ *
+ * ⚠️ **填色与前景必须用配对令牌**（与上面 `quickPrimaryButton` 同一条纪律）：
+ * `background` 用 `button-primary-fill`（取自 `brand-primary`，**深色主题下是近白**），
+ * 前景就必须用 `label-primary-foreground`（深色主题下是墨色）。
+ *
+ * 0.12.0 截图验收时抓到的真 bug：这里原本写的是
+ * `background: var(--dsw-alias-brand-primary)` + `color: var(--dsw-alias-label-inverse, #fff)`，
+ * 而 **`--dsw-alias-label-inverse` 这个令牌根本不存在**（官方叫 `label-primary-inverted`）⇒ 兜底成 `#fff`，
+ * 于是深色主题下就是**白底白字**：按钮只剩一个白色胶囊，"插入输入框"这几个字看不见。
+ * 浅色主题下 `brand-primary` 是墨色、白字正好可读，所以这个 bug **只在深色主题出现** ——
+ * 只跑测试与类型检查都发现不了，必须真看一眼界面。
+ */
 export const dockButtonPrimary: CSSProperties = {
   ...dockButton,
-  background: 'var(--dsw-alias-brand-primary)',
-  borderColor: 'var(--dsw-alias-brand-primary)',
-  color: 'var(--dsw-alias-label-inverse, #fff)',
+  background: 'var(--dsw-alias-button-primary-fill)',
+  borderColor: 'var(--dsw-alias-button-primary-fill)',
+  color: 'var(--dsw-alias-label-primary-foreground)',
   fontWeight: 600,
 }

@@ -236,3 +236,9 @@ export {
 export {
   PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
 } from '../src/settings-contract.ts'
+/**
+ * 样式令牌的配对纪律（0.12.0 截图验收抓到白底白字后补）：把样式对象本身出口出来，
+ * 让测试**直接断言令牌名**，而不是去匹配源码文本 —— 令牌写错是"看着像对、实际上瞎"的一类
+ * bug，只有对象级断言才挡得住。
+ */
+export { dockButtonPrimary, quickPrimaryButton } from '../src/client/styles.ts'

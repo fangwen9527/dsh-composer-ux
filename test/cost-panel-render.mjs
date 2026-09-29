@@ -23,22 +23,40 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const REPO = process.cwd()
-const PROFILE_PKG = process.env.CUX_PROFILE
-  ?? 'C:/Users/fangwen/.dsh/profiles/web/package.json'
+/**
+ * 找一份能解析出 react / react-dom 的 package.json。
+ *
+ * 顺序：本仓自己的 node_modules（**0.12.0 起 react/react-dom 是 devDependencies**）
+ * → 环境变量 CUX_PROFILE 指定的 profile → 本机默认 profile（历史路径，保留为兼容）。
+ *
+ * 为什么要改：以前只能向本机 DSH profile 借，于是 CI（三平台、干净检出）
+ * 永远拿不到 react、这两个渲染套件在 CI 上直接 exit 2 —— 0.12.0 首次三平台 CI 就是这么红的。
+ */
+function resolveReact() {
+  const candidates = [
+    join(REPO, 'package.json'),
+    process.env.CUX_PROFILE ?? '',
+    'C:/Users/fangwen/.dsh/profiles/web/package.json',
+  ].filter(candidate => candidate !== '' && existsSync(candidate))
+  const tried = []
+  for (const candidate of candidates) {
+    const req = createRequire(candidate)
+    try {
+      const rdServer = req.resolve('react-dom/server')
+      // 同一份 React：各拿一份就是「Invalid hook call / dispatcher 为 null」。
+      const reactDir = dirname(req.resolve('react', { paths: [dirname(rdServer)] }))
+      return { req, reactDir }
+    } catch (error) {
+      tried.push(`${candidate}（${String(error).split(String.fromCharCode(10))[0]}）`)
+    }
+  }
+  console.error(`借不到 react/react-dom：试过 ${tried.length === 0 ? '（没有可用的 package.json）' : tried.join('；')}`)
+  console.error('（先 npm install，或用 CUX_PROFILE=<某个已装 react 的 package.json> 指一份）')
+  process.exit(2)
+}
 
-if (!existsSync(PROFILE_PKG)) {
-  console.error(`借不到 react/react-dom：找不到 ${PROFILE_PKG}`)
-  process.exit(2)
-}
-const req = createRequire(PROFILE_PKG)
-let reactDir
-try {
-  const rdServer = req.resolve('react-dom/server')
-  reactDir = dirname(req.resolve('react', { paths: [dirname(rdServer)] }))
-} catch (error) {
-  console.error(`借不到 react/react-dom：${String(error)}`)
-  process.exit(2)
-}
+const { req, reactDir } = resolveReact()
+
 const ALIAS = {
   react: reactDir,
   'react/jsx-runtime': join(reactDir, 'jsx-runtime.js'),

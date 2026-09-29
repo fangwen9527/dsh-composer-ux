@@ -421,6 +421,11 @@ dsh-composer-ux/
 
 ## 构建
 
+CI（GitHub Actions，`.github/workflows/ci.yml`）是 **ubuntu / windows / macos × node 20** 三平台矩阵，
+每一步都是 `npm ci` → `typecheck` → `build` → `npm test`；**先 build 再 test** 是刻意的
+（测试打的是构建产物，不重建就是拿旧产物测新源码）。本机也能复现 CI 的两条边界：
+`DSH_REPO_PATH=<不存在的路径>`（走"没有 DSH 检出"的退路）与 `TZ=UTC`（CI 的时区）。
+
 ```sh
 npm ci                            # 按 lockfile 安装（CI 用这条）
 npm run typecheck                 # tsc --noEmit（类型面在 types/dsh-externals.d.ts）
@@ -428,7 +433,7 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 18 个套件；当前 1951 passed, 0 failed（2026-09-29 实测）
+npm test                          # 18 个套件；当前 1951 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
 node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（107 条，须单独跑）
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示、以及"非默认设置"下的「金额」卡（78 条）
 node test/cost-panel-render.mjs   # 已进 npm test：把「金额浮层」真渲染成 HTML，断言分列 / 峰谷行 / 未定价 / 内置快照价 / 明文没混进 markdown 记号（19 条）

@@ -217,25 +217,6 @@ export function composeOptimizedDraft(prefix: string, optimized: string): string
   return prefix === '' ? optimized : `${prefix} ${optimized}`
 }
 
-/**
- * 这次点击是不是落在"面板当前锚着的那枚按钮"上。
- *
- * 0.11.1 起工具行有**两枚**按钮（✨ 优化、快捷指令）共用一个面板：从另一枚点过来时
- * 面板该换个锚点继续开着，而不是关掉（并排两枚按钮，点右边那枚却把面板收起，看起来
- * 像点错了）。浮点矩形不会完全相等，所以给 1px 容差。
- *
- * @param current - 面板当前锚点（null = 面板关着）。
- * @param next - 这次点击的按钮矩形。
- * @returns 是否算同一枚按钮。
- */
-export function sameAnchor(
-  current: { left: number; bottom: number } | null,
-  next: { left: number; bottom: number },
-): boolean {
-  if (current === null) return false
-  return Math.abs(current.left - next.left) < 1 && Math.abs(current.bottom - next.bottom) < 1
-}
-
 /** 把焦点交还输入框（插入/写回之后调用，方便接着打字）。 */
 export function focusComposer(): void {
   const el = document.querySelector(COMPOSER_SELECTOR)

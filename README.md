@@ -19,6 +19,9 @@
 > Install with `dsh plugin --profile <name> add dsh-composer-ux` (npm) — the built `lib/`
 > ships in the package **and** in this repository, so there is **no build step and no build authorization**. License: MIT.
 
+> 看哪一份随你：**小白版**（三步上手 + 常见问题，讲人话）[README.simple.md](README.simple.md) ·
+> **英文版** [README.en.md](README.en.md) · **本页**（中文全版，最详细）。
+
 DeepSeek Harness Web 输入体验增强插件：
 
 ![设置页「输入体验」：顶部总开关 + 六张折叠卡，每张卡的标题行右端各有一个卡级开关](https://raw.githubusercontent.com/fangwen9527/dsh-composer-ux/v0.5.0/docs/settings-panel-0.5.0.png)
@@ -140,8 +143,10 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
   - **0.12.0 起有记忆链**：你把成品插进输入框、改了几处、又点一次优化时，宿主会把**上一版成品**
     一起给模型（截断 1500 字），它只需围绕变化点调整、不必从零重写（你已确认过的地方不会被改回去）。
     不带的三种情况：同一段原文重跑（同文重试）、草稿就是上一轮成品（对成品重跑）、上一轮失败/取消；“重新优化”只在你手改过框里成品时才带。
-  - **0.11.1 起工具行多一枚独立「✨ 优化」按钮**（`conversation.input.right`，order 88 <「快捷指令」的 89 < 官方「展开」的 90）：点一下 = 打开面板 + 立刻开跑。空输入框或只有命令没正文时按钮禁用（压暗、无 hover）。它跟随「快捷指令」那把开关，关着时两枚按钮都不出现。
-  - **秒表**：面板主按钮、工具行按钮与结果框都显示已等待秒数，结束时报「用时 x.x 秒」。**边界如实说**：阶段只能到"等待模型响应" —— 更细的进度由逐条流水本身给出（它就是"它在干活"的证据）。
+  - **优化只从「快捷指令」面板进**（0.12.0 起）：工具行只有一枚「快捷指令」按钮，点开面板再点「✨ 优化提示词」。
+    0.11.1 曾试过在工具行加一枚独立的「✨ 优化」按钮（点一下 = 开面板 + 立刻开跑），用户看到实机后明确否掉 ——
+    「我让你集合到快捷指令里的提示词优化按钮里」，于是 0.12.0 删掉它，回到单一入口。
+  - **秒表**：面板主按钮与结果框都显示已等待秒数，结束时报「用时 x.x 秒」。**边界如实说**：阶段只能到"等待模型响应" —— 更细的进度由逐条流水本身给出（它就是"它在干活"的证据）。
   - **斜杠命令保护**：`/goal 帮我写周报` 只把**命令后面的正文**送去模型，插入时把 `/goal` 原样拼回；只有命令没有正文时直接提示、**不发请求**。`/path/to/file` 这类路径不会被误判成命令（判据 `SLASH_COMMAND_RE`，两端共用）。
   - **推理强度钳最低档**：按路由真实暴露的档位（`llm.resolveModelInfo`）选最省那一档 —— 推理模型不指定档位时会先空转很久；查不到档位表就什么都不传（绝不乱造适配器不认的值）。
   - **客户端断连即中止**：关页面/切走会话时 `res.on('close')` 立即 abort 这次模型调用，不再白烧额度（用 `res` 而非 `req`：`req` 的 close 在请求体读完就触发）。
@@ -347,7 +352,12 @@ dsh-composer-ux/
 ├── cordis.patch.yml              # 组合包层（随包发布）：按包名 dsh-composer-ux 插入插件行
 ├── cordis.dev.patch.yml          # 本地开发覆盖层（file:/// 绝对路径，已 gitignore，不随包发布）
 ├── CHANGELOG.md                  # 版本更新日志
+├── README.en.md                  # 英文版说明（独立可读；中文全版仍是权威）
+├── README.simple.md              # 小白版说明（三步上手 + 常见问题，讲人话）
 ├── build.mjs                     # esbuild 构建：lib/index.js（Host）+ lib/client.js（浏览器），并做发行后处理
+├── tsconfig.json                 # typecheck 配置（只开 strictNullChecks，理由见文件内注释）
+├── types/dsh-externals.d.ts      # @deepseek-ai/* 的手写类型面（不去追那些版本线对不上的包）
+├── .github/workflows/ci.yml      # 三平台 CI：ubuntu / windows / macos × node 20
 ├── scripts/
 │   ├── gen-provider-prices.mjs   # 从 models.dev 的 api.json 生成 src/provider-prices.ts（内置第三方价目快照）
 │   ├── live-smoke.mjs            # 手动联网复核：官方页 / models.dev / 余额端点 / 节假日数据源（只读；不进 npm test）
@@ -361,6 +371,8 @@ dsh-composer-ux/
 │   ├── official-pricing.ts        # 金额：官方价格页 HTML → 人民币/美元两列价（真页面夹具逐项钉住，零 import）
 │   ├── price-sync.ts              # 金额：抓官方两页合成价格档 + models.dev 压成第三方价目 + 落盘 + autoSyncDue（宿主半，允许 node API）
 │   ├── prompt-context.ts          # 优化：会话上下文（挑往来 / 收敛预算 / 渲染成块，纯函数；0.12.0）
+│   ├── optimizer-assemble.ts      # 优化：逐字校验 + 装配 + 流式扫描（批处理与流式共用同一份校验）
+│   ├── optimizer-prompt.ts        # 优化：三档系统提示词 + 固定 JSON 契约（自定义提示词不能替换契约）
 │   ├── holiday-sync.ts            # 金额：法定节假日自动获取（holiday-cn 今年+明年 → 日期表；补班日不收；到期判定/镜像兜底/失败不改动）
 │   ├── provider-prices.ts         # 金额：内置第三方价目**快照**（生成物，11 provider / 346 模型；由 scripts/gen-provider-prices.mjs 生成）
 │   ├── balance.ts                 # 金额：官方余额响应消毒 + 查询端点白名单（零 import，两半共用）
@@ -380,8 +392,7 @@ dsh-composer-ux/
 │       ├── ContextMenuHost.tsx    # shell.overlay 右键菜单
 │       ├── QuickCommandsButton.tsx # 快捷指令：工具行入口按钮（order 89）
 │       ├── QuickCommandsPanel.tsx  # 快捷指令：展开面板（分类两级 + 条目 + 优化入口）
-│       ├── OptimizeButton.tsx      # 优化：工具行独立按钮（order 88，0.11.1 新增）
-│       ├── optimize-clock.ts       # 优化：两处按钮共用的秒表读数（0.11.1 新增）
+│       ├── optimize-clock.ts       # 优化：面板与结果框共用的秒表读数（0.11.1 新增）
 │       ├── OptimizeDock.tsx        # 优化：面板内结果框（逐条流水 + 可编辑成品 + 插入，0.12.0 新增）
 │       ├── optimize-dock.ts        # 优化：结果框的纯函数状态机与文案（0.12.0 新增，可单测）
 │       ├── quick-commands.ts       # 快捷指令/优化：输入框桥接、插入与写回、斜杠命令与秒表纯函数
@@ -395,6 +406,7 @@ dsh-composer-ux/
 │       ├── CostCard.tsx           # 金额：设置页那一栏（单价 / 节假日 / 峰谷提醒 / 余额 / 同步价目）
 │       └── styles.ts              # --dsw-* 令牌内联样式
 ├── docs/settings-panel-0.5.0.png  # README 顶部那张设置页截图（用 tag 固定的 raw 链接引用，不进 npm 包）
+├── docs/promo/                    # 一页推广 PPT（生成脚本 + 产物；不进 npm 包）
 ├── test/
 │   ├── host-header-mirror.mjs          # 请求头镜像的行为测试（假 settings 驱动构建产物）
 │   ├── host-settings-generations.mjs   # 宿主半两代设置服务（0.1.6 的 get/register 与 0.1.7 的 describe）
@@ -433,8 +445,8 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 18 个套件；当前 1951 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
-node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（107 条，须单独跑）
+npm test                          # 18 个套件；当前 1939 passed, 0 failed（2026-09-29 实测；CI 三平台同样全绿）
+node test/mutation-guards.mjs     # 手动跑：变异测试，证明那套护栏真的在咬人（108 条，须单独跑）
 node test/settings-render.mjs     # 已进 npm test：把设置页真渲染成 HTML，断言版式与互斥显示、以及"非默认设置"下的「金额」卡（78 条）
 node test/cost-panel-render.mjs   # 已进 npm test：把「金额浮层」真渲染成 HTML，断言分列 / 峰谷行 / 未定价 / 内置快照价 / 明文没混进 markdown 记号（19 条）
 node scripts/live-smoke.mjs       # 手动跑：**联网复核**（官方页 vs 写死的价目表逐格对比 / models.dev vs 内置快照逐条对比 / 余额端点白名单与状态码）；只读，不写任何文件

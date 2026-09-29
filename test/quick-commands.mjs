@@ -450,16 +450,6 @@ console.log('3b. 斜杠命令拆分、秒表读数、写回前比对（纯函数
     pure.sameDraft('把页面弄好看点', '') === false)
 }
 
-{
-  // 两枚按钮共用一个面板：同一枚再点收起，从另一枚点过来换锚点继续开着。
-  const a = { left: 100, bottom: 200 }
-  const b = { left: 180, bottom: 200 }
-  check('面板关着 → 不算同一枚（这次要打开）', pure.sameAnchor(null, a) === false)
-  check('同一枚按钮（矩形一致）→ 收起', pure.sameAnchor(a, { left: 100, bottom: 200 }) === true)
-  check('同一枚按钮但差 0.4px（浮点矩形）→ 仍算同一枚', pure.sameAnchor(a, { left: 100.4, bottom: 200 }) === true)
-  check('另一枚按钮（并排的 ✨）→ 换锚点，不关面板', pure.sameAnchor(a, b) === false)
-}
-
 // ══════════════ 3c. 流式传输层（SSE 帧切分 + 载荷收窄 + 假 fetch 端到端） ═════
 console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
 

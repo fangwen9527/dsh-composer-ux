@@ -34,11 +34,10 @@ import { SettingsSection } from './client/SettingsSection.tsx'
 import { StatsLineEntry } from './client/StatsLineEntry.tsx'
 import { CostChipEntry } from './client/CostChipEntry.tsx'
 import { QuickCommandsButton, type QuickPanelAnchor } from './client/QuickCommandsButton.tsx'
-import { OptimizeButton } from './client/OptimizeButton.tsx'
 import { QuickCommandsPanel } from './client/QuickCommandsPanel.tsx'
 import {
   composeOptimizedDraft, currentBlankSession, currentDraft, elapsedText, focusComposer,
-  insertIntoDraft, optimizeDraftStream, replaceDraft, sameAnchor,
+  insertIntoDraft, optimizeDraftStream, replaceDraft,
 } from './client/quick-commands.ts'
 import {
   dockReducer, dockSummary, insertDecision, previousForChain, type OptimizeDockState,
@@ -438,8 +437,8 @@ export function apply(ctx: any): void {
 
   const quickActions = {
     toggle: (anchor: { left: number; bottom: number; width: number }): void => {
-      // 同一枚按钮再点一次 = 收起；从另一枚按钮（✨ 优化）点过来 = 换个锚点继续开着。
-      if (sameAnchor(panel.getSnapshot(), anchor)) {
+      // 同一枚按钮再点一次 = 收起。
+      if (panel.getSnapshot() !== null) {
         panel.set(null)
         panelNotice.set('')
         return
@@ -515,15 +514,6 @@ export function apply(ctx: any): void {
     dockEdit: (text: string): void => {
       dock.set(dockReducer(dock.getSnapshot(), { type: 'edit', text }))
     },
-    /**
-     * 工具行那枚独立按钮用的入口：先把面板打开（结果与状态行显示在那儿），再立刻开跑。
-     * 两步合成一步是这枚按钮存在的唯一理由（原来是"开面板 → 点面板里的按钮"）。
-     */
-    openAndOptimize: (anchor: QuickPanelAnchor): void => {
-      panelNotice.set('')
-      panel.set(anchor)
-      runOptimize()
-    },
     setTier: (tier: OptimizerTier): void => { setField(OPTIMIZER_TIER_FIELD, tier) },
     /**
      * 设置某条的插入模式（关 / 每次 / 仅首次）。
@@ -578,19 +568,6 @@ export function apply(ctx: any): void {
     id: 'composer-ux-panel-resize',
     inject: () => ({ hooks: { live }, actions: { setField } }),
   }, PanelResizeHandles))
-
-  // 「优化提示词」独立按钮：紧挨「快捷指令」按钮的**左侧**
-  // （order 88 < 快捷指令的 89 < 官方「展开」的 90）。
-  slots.inject('conversation.input.right', () => slots.register({
-    name: 'conversation.input.right',
-    id: 'composer-ux-optimize',
-    order: 88,
-    label: '优化提示词',
-    inject: () => ({
-      hooks: { live, busy: optimizing, startedAt: optimizeStartedAt },
-      actions: { openAndOptimize: quickActions.openAndOptimize },
-    }),
-  }, OptimizeButton))
 
   // 「快捷指令」入口按钮：与官方「展开」按钮同排（order 89 < 展开的 90）。
   slots.inject('conversation.input.right', () => slots.register({

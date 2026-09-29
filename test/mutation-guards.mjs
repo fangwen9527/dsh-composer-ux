@@ -830,12 +830,12 @@ const cases = [
     expect: '写回时把斜杠命令前缀拼回',
   },
   {
-    name: 'CU 优化按钮挪到官方「展开」右侧（order 88 → 95）',
+    name: 'CU 「快捷指令」按钮挪到官方「展开」右侧（order 89 → 95）',
     file: 'src/client.tsx',
-    from: "    id: 'composer-ux-optimize',\n    order: 88,",
-    to: "    id: 'composer-ux-optimize',\n    order: 95,",
+    from: "    id: 'composer-ux-quick',\n    order: 89,",
+    to: "    id: 'composer-ux-quick',\n    order: 95,",
     test: 'test/client-registration.mjs',
-    expect: '在快捷指令按钮左侧',
+    expect: '按钮 order = 89',
   },
   {
     name: 'CV 秒表起点不写（面板与按钮永远显示 0s，看不出它是不是还活着）',

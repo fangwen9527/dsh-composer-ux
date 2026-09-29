@@ -288,8 +288,14 @@ console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六�
     card !== '' && textOf(headerOf(card)).includes('按官方刊例价估算'), textOf(headerOf(card)))
   check('说清只影响本插件估算、留空＝沿用官方价',
     text.includes('只是本插件显示的费用估算') && text.includes('留空＝沿用官方价'))
-  check('说清峰谷按"每笔用量发生的时间"判定（不是看面板的时刻）',
-    text.includes('每笔用量真正发生的时间') && text.includes('北京时间'))
+  // 0.11.0：这三句从金额胶囊的明细浮层搬进设置页（用户要求"浮层只留数字"），所以在这里钉住。
+  // ⚠️ `textOf` 把标签换成 ` | `，所以跨元素断开的句子要拆开查（逐字查整句会假红）。
+  check('新增「计价说明」块：刊例价快照日期 + 价格档 + 峰谷判定 + 非 DeepSeek 口径',
+    text.includes('计价说明')
+    && text.includes('刊例价快照：') && text.includes('2026-09-29')
+    && text.includes('按每笔用量') && text.includes('发生时刻') && text.includes('生效的档结算')
+    && text.includes('不含法定节假日') && text.includes('全天谷价')
+    && text.includes('未含中转加价') && text.includes('实际扣费以各家账单为准'))
   // 0.10.0 的 PRICE_TABLE 只剩两个内置模型（flash / v4-pro），每个两档六格：
   // 12 格单价 + 1 个「新增模型名」+ 峰谷提醒 5 个控件 + 余额开关 1 个 + 自动同步 1 个 = 20。
   check('单价框数 = 2 个内置模型 × 6 格（峰谷两档）', priceInputs.length === 2 * 6, String(priceInputs.length))
@@ -317,13 +323,21 @@ console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六�
   check('内置行的按钮是「恢复官方价」（每行一枚）',
     (text.match(/恢复官方价/g) ?? []).length >= 2)
 
-  // ── 0.10.0 新增的四段：节假日 / 峰谷提醒 / 余额 / 价目同步 ──────────────────
-  check('节假日区：一个 textarea + 保存 / 恢复内置 + 当前生效条数（默认内置 10 天）',
+  // ── 0.10.0 新增的四段：节假日 / 峰谷提醒 / 余额 / 同步（0.11.0 起含节假日获取）────
+  check('节假日区：一个 textarea + 保存 / 恢复默认 + 当前生效来源（默认=内置 10 天）',
     (body.match(/<textarea[^>]*>/g) ?? []).length === 1
     && body.includes('aria-label="法定节假日日期表"')
     && text.includes('法定节假日（北京日期，一行一个）')
-    && text.includes('保存') && text.includes('恢复内置')
-    && text.includes('当前生效：10 个日期（内置）'))
+    && text.includes('保存') && text.includes('恢复默认')
+    && text.includes('10 个日期') && text.includes('来源：内置（国务院办公厅 2026 年安排）'))
+  // 0.11.0：留空 = 用自动获取那份；文本框里**不该**再预填别的（否则"保存"会把自动那份冻成手填）
+  check('0.11.0：节假日文本框默认是空的（留空 = 用自动获取 / 内置），灰字说清这件事',
+    /<textarea[^>]*placeholder="留空 = 用自动获取的那份（没取到就用内置）"/.test(body)
+    && /<textarea[^>]*>\s*<\/textarea>/.test(body))
+  check('0.11.0：没开自动同步时，卡里明说"打开后插件会自己取次年安排"',
+    text.includes('打开下面「同步价目」里的自动同步后，插件会自己取次年安排'))
+  check('0.11.0：生效日期可以展开看（details/summary，默认收起）',
+    body.includes('<details') && text.includes('看当前生效的日期'))
   const boxes = inputs.filter(input => input.includes('type="checkbox"'))
   check('峰谷提醒：4 个复选框（默认 启用/进峰前/离峰前 开、系统通知关）+ 提前量默认 5 分钟',
     boxes.length === 6
@@ -332,19 +346,21 @@ console.log('\n7. 「金额」卡（0.10.0）：两个内置模型 × 峰谷六�
     && boxes.some(box => box.includes('aria-label="离开高峰前提醒"') && box.includes('checked'))
     && boxes.some(box => box.includes('aria-label="额外发浏览器通知"') && !box.includes('checked'))
     && /aria-label="提前多少分钟提醒"[^>]*value="5"/.test(body))
-  // 0.10.0 后补：自动同步官方价（默认**关** —— 会自己出网的开关不该默认开）
-  check('价目同步区：自动同步复选框默认关 + 说清每天一次',
-    boxes.some(box => box.includes('aria-label="自动同步官方价"') && !box.includes('checked'))
-    && text.includes('自动同步官方价（每天一次）'))
+  // 0.10.0 后补：自动同步（默认**关** —— 会自己出网的开关不该默认开）；0.11.0 起它**也管节假日**
+  check('同步区：自动同步复选框默认关 + 说清两件事的频率',
+    boxes.some(box => box.includes('aria-label="自动同步官方价与节假日"') && !box.includes('checked'))
+    && text.includes('自动同步（价格每天一次、节假日每 30 天复核）'))
   check('说清"没同步过时用内置快照价"（并带快照日期，免得看着像实时价）',
     text.includes('内置快照价') && /models\.dev 快照 20\d\d-\d\d-\d\d/.test(text))
   check('余额：复选框默认开 + 「刷新」按钮（关掉时禁用）+ 说清 Key 只在宿主半读',
     boxes.some(box => box.includes('aria-label="启用余额查询"') && box.includes('checked'))
     && text.includes('刷新') && text.includes('API Key 只在宿主半读取'))
-  check('价目同步：两个独立按钮（官方价 / 第三方价目），初始都可点',
-    text.includes('同步官方价') && text.includes('同步第三方价目')
-    && (body.match(/<button[^>]*>同步[^<]*<\/button>/g) ?? []).every(button => !button.includes('disabled'))
-    && text.includes('抓失败不会覆盖本地价'))
+  check('同步区：三个独立按钮（官方价 / 第三方价目 / 法定节假日），初始都可点',
+    text.includes('同步官方价') && text.includes('同步第三方价目') && text.includes('获取法定节假日')
+    && (body.match(/<button[^>]*>(同步|获取)[^<]*<\/button>/g) ?? []).every(button => !button.includes('disabled'))
+    && text.includes('抓失败不会覆盖本地数据'))
+  check('0.11.0：同步区状态行列出"法定节假日上次获取：从没同步过"',
+    text.includes('法定节假日上次获取：从没同步过'))
 }
 
 console.log('\n7.1 「金额」卡：有覆盖价时（实填值 + 自定义行只一档）')
@@ -383,8 +399,11 @@ console.log('\n7.2 「金额」卡：自定义节假日 + 同步过第三方价�
   const head = textOf(headerOf(card))
   check('标题行概览把"自定义节假日"与"第三方价目条数"都说出来',
     head.includes('自定义节假日 2 天') && head.includes('第三方价目 123 个模型'), head)
-  check('节假日区带出当前生效的那份（自定义，不再是内置）',
-    text.includes('当前生效：2 个日期（自定义）') && body.includes('2026-10-01'))
+  check('节假日区带出当前生效的那份（用户手填，不再是内置）',
+    text.includes('2 个日期') && text.includes('你上面填的那份（自定义')
+    && body.includes('2026-10-01'))
+  check('0.11.0：手填时也如实报告"自动获取那份有 N 个日期，现在不参与"',
+    text.includes('自动获取那份有 0 个日期，现在不参与'))
   check('第三方价目同步过之后就报条数，不再写"从没同步过"',
     text.includes('（123 个模型）') && !text.includes('第三方价目上次同步：从没同步过'))
 }
@@ -420,13 +439,14 @@ console.log('\n7.3 「金额」卡：一个"长期用下来"的非默认设置�
   const inputs = body.match(/<input[^>]*>/g) ?? []
   const boxes = inputs.filter(input => input.includes('type="checkbox"'))
 
-  check('卡还在、五块的关键文案都在',
+  check('卡还在、"金额"这一域各块的关键文案都在',
     text.includes('高峰（元 / 1M）') && text.includes('法定节假日（北京日期，一行一个）')
-    && text.includes('峰谷提醒') && text.includes('余额') && text.includes('同步价目'))
-  check('自定义节假日带出三行（不再显示"内置 10 天"）',
-    text.includes('当前生效：3 个日期（自定义）') && body.includes('2026-10-03'))
+    && text.includes('峰谷提醒') && text.includes('余额') && text.includes('同步') && text.includes('计价说明'))
+  check('自定义节假日带出三行（当前生效 3 天、来源是手填）',
+    text.includes('3 个日期') && text.includes('你上面填的那份（自定义')
+    && body.includes('2026-10-03'))
   check('自动同步开着时复选框是勾上的（默认那条只验了"默认关"）',
-    boxes.some(box => box.includes('aria-label="自动同步官方价"') && box.includes('checked')))
+    boxes.some(box => box.includes('aria-label="自动同步官方价与节假日"') && box.includes('checked')))
   check('余额关着时复选框不勾 + 「刷新」按钮禁用',
     boxes.some(box => box.includes('aria-label="启用余额查询"') && !box.includes('checked'))
     && /<button[^>]*disabled[^>]*>刷新<\/button>/.test(body))
@@ -438,6 +458,45 @@ console.log('\n7.3 「金额」卡：一个"长期用下来"的非默认设置�
     text.includes('平坦价（元 / 1M）'))
   check('内置行仍然是峰/谷两档', (body.match(/高峰（元 \/ 1M）/g) ?? []).length >= 1)
   check('渲染文本里没有 markdown 记号（沿用浮层那条纪律）', !text.includes('**'))
+}
+
+console.log('\n7.4 「金额」卡：自动获取到节假日之后（0.11.0）')
+{
+  // 没手填、但后台自动取回了一份：概览要报"节假日自动 N 天"，生效行要说清来源与获取时间。
+  const auto = render('official', '', undefined, {
+    syncedPrices: {
+      fetchedAt: Date.parse('2026-10-01T00:00:00Z'),
+      holidaysAt: Date.parse('2026-10-02T00:00:00Z'),
+      holidays: ['2026-10-01', '2026-10-02', '2027-01-01'],
+      holidayYears: [2026, 2027],
+    },
+  })
+  const card = cardOf(auto, '金额')
+  const head = textOf(headerOf(card))
+  const text = textOf(bodyOf(card))
+  const body = bodyOf(card)
+  check('概览写出"节假日自动 3 天"（按自动那份算，不是并集后的总数）',
+    head.includes('节假日自动 3 天'), head)
+  check('没手填时概览不说"自定义节假日"', !head.includes('自定义节假日'), head)
+  check('生效行说清来源是自动获取 + 获取时间 + 自动那份有多少天',
+    text.includes('自动获取（') && text.includes('共 3 个日期'), text.slice(0, 200))
+  check('并集后的天数也写出来（内置 10 ∪ 自动 3 = 11 天）',
+    text.includes('与内置表取并集后是 11 个'), (text.match(/与内置表[^）]*）/) ?? [''])[0])
+  check('自动那份**不进**手填框（留空才代表"用自动获取的"）',
+    /<textarea[^>]*>\s*<\/textarea>/.test(body))
+  check('同步状态行写出"已有 2026、2027 年"',
+    text.includes('法定节假日上次获取：') && text.includes('（已有 2026、2027 年）'))
+  check('自动同步开关没开时仍提示"打开后插件会自己取次年安排"（提示看的是开关，不是有没有数据）',
+    text.includes('插件会自己取次年安排'))
+  const on = render('official', '', undefined, {
+    priceAutoSync: true,
+    syncedPrices: { holidaysAt: Date.parse('2026-10-02T00:00:00Z'), holidays: ['2027-01-01'] },
+  })
+  check('开关打开后这条提示消失',
+    !textOf(bodyOf(cardOf(on, '金额'))).includes('插件会自己取次年安排'))
+  check('开关打开时同步区那个复选框是勾上的',
+    (bodyOf(cardOf(on, '金额')).match(/<input[^>]*aria-label="自动同步官方价与节假日"[^>]*>/g) ?? [])
+      .some(tag => tag.includes('checked')))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

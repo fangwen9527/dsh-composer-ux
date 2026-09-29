@@ -36,19 +36,20 @@ import {
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
   SYNC_API_PATH,
-  BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD, PRICE_AUTO_SYNC_FIELD,
-  SYNCED_PRICES_FIELD,
+  BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
+  PRICE_AUTO_SYNC_FIELD, SYNCED_PRICES_FIELD, parseHolidayYears,
   type QuickPromptBook,
 } from './settings-contract.ts'
 import {
-  DEFAULT_PEAK_HOLIDAYS, costBucketsOf, costPartsOf, eraAt, eraIdAt, isDeepSeekRoute, isPeakAt,
-  parseHolidays, parsePriceEras, parsePriceOverrides, resolvePrice,
+  DEFAULT_PEAK_HOLIDAYS, costBucketsOf, costPartsOf, effectiveHolidays, eraAt, eraIdAt, isDeepSeekRoute, isPeakAt,
+  parsePriceEras, parsePriceOverrides, resolvePrice,
   type PriceEra, type PriceOverrideTable, type ProviderPriceTable,
 } from './pricing.ts'
 import {
   AUTO_SYNC_STALE_MS, autoSyncDue, eraFromOfficial, fetchModelsDevPrices, fetchOfficialPages,
   readPriceFile, samePriceTable, writePriceFile,
 } from './price-sync.ts'
+import { fetchHolidayYears, holidaySyncDue, holidayYearsWanted, mergeHolidayDays } from './holiday-sync.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
@@ -1086,8 +1087,11 @@ export function apply(ctx: Context, config?: unknown): void {
     const readMoneySettings = (): void => {
       try {
         const row = readOwn(NAMESPACE)
-        moneyRules.holidays = parseHolidays(row?.[PEAK_HOLIDAYS_FIELD]) ?? DEFAULT_PEAK_HOLIDAYS
         const synced = row?.[SYNCED_PRICES_FIELD] as Record<string, unknown> | undefined
+        // 节假日（0.11.0）：**手填 > 自动获取 ∪ 内置**。并集那一步的理由见
+        // `pricing.ts` 的 `effectiveHolidays`：拿自动那份替换内置表会在跨年后丢掉老年份，
+        // 让旧会话被重新按高峰价显示（2 倍）。
+        moneyRules.holidays = effectiveHolidays(row?.[PEAK_HOLIDAYS_FIELD], synced?.holidays).days
         moneyRules.eras = parsePriceEras(synced?.eras) ?? []
       } catch {
         moneyRules.holidays = DEFAULT_PEAK_HOLIDAYS
@@ -1434,12 +1438,109 @@ export function apply(ctx: Context, config?: unknown): void {
     }
 
     /**
+     * **获取一次法定节假日**（0.11.0）：每年一个 JSON，只取 `isOffDay:true` 的日期。
+     *
+     * 纪律（与 `holiday-sync.ts` 文件头一致）：
+     *  · **补班日不参与**（`isOffDay:false` 的条目直接丢掉）—— 官方公告说的是"周六、周日
+     *    全天谷价"，补班日仍是周六/周日（2026-09-29 用户拍板）；
+     *  · **抓不到就什么都不改**（年份全失败 = `ok:false`，本地表原样不动）；
+     *  · **"还没公布"不是失败**（次年那份文件现在只有 `{"year":2027}`），界面上要说成
+     *    "还没公布"，不能让用户以为网络坏了；
+     *  · **年份只增不减**（并进已有表，见 `mergeHolidayDays`）。
+     *
+     * 到期判定交给纯函数 `holidaySyncDue`（"该不该出网"必须能单独钉住）：自动这条路
+     * **只有开关真开着**且该年份没数据 / 距上次获取够 30 天才会发请求；用户在设置页点
+     * 「立即获取」走 `force`，因为那一年可能刚公布而复核窗口还没到。
+     *
+     * @param options.force 忽略到期判定，强制抓"今年 + 明年"（设置页按钮 / 同步接口）。
+     * @returns 直接可以回给界面的结果对象（`message` 是给用户看的一句话）。
+     */
+    const syncHolidays = async (options: { force?: boolean } = {}): Promise<{
+      ok: boolean
+      changed?: boolean
+      days?: number
+      years?: readonly number[]
+      fetchedAt?: number
+      saved?: boolean
+      message: string
+      error?: string
+    }> => {
+      const synced = readSynced()
+      const have = parseHolidayYears(synced.holidayYears) ?? []
+      const now = Date.now()
+      let years: readonly number[]
+      if (options.force === true) {
+        years = holidayYearsWanted(now)
+      } else {
+        let enabled: unknown = false
+        try {
+          enabled = readOwn(NAMESPACE)?.[PRICE_AUTO_SYNC_FIELD]
+        } catch {
+          /* 设置读不到 = 当没开（绝不在"读不到开关"时出网） */
+        }
+        years = holidaySyncDue({ enabled, nowMs: now, yearsHave: have, lastAt: synced.holidaysAt })
+      }
+      if (years.length === 0) {
+        return { ok: true, changed: false, message: '节假日表刚获取过，这次不用再拉' }
+      }
+      const result = await fetchHolidayYears(years)
+      // 纪律 2：一年都没拿到（网络不可达、响应形状不对、两个入口都失败）→ 什么都不改。
+      if (result.fetched.length === 0 && result.unpublished.length === 0) {
+        return {
+          ok: false,
+          message: '抓取节假日失败',
+          error: `抓取 ${years.join('、')} 年的节假日失败（两个数据源都没拿到），本地节假日表未改动`,
+        }
+      }
+      const merged = mergeHolidayDays(synced.holidays, result.days)
+      const yearsNext = [...new Set([...have, ...result.fetched])].sort((left, right) => left - right).slice(-12)
+      const fetchedAt = Date.now()
+      const saved = await writeSynced({
+        ...synced,
+        ...(merged === undefined ? {} : { holidays: merged }),
+        holidaysAt: fetchedAt,
+        holidayYears: yearsNext,
+      })
+      if (!saved) {
+        // 写不进去 = 生效表其实没变，不能报成功（否则界面上"已获取"是假的）。
+        return {
+          ok: false,
+          message: '设置服务不可写',
+          error: '设置服务不可写，节假日表没有保存（本地节假日表未改动）',
+        }
+      }
+      invalidateMoney()
+      const parts: string[] = []
+      if (result.fetched.length > 0) {
+        parts.push(`已获取 ${result.fetched.join('、')} 年的法定节假日（当前生效 ${merged?.length ?? 0} 个日期，来源 ${HOLIDAY_SOURCE_LABEL}）`)
+      }
+      if (result.unpublished.length > 0) {
+        parts.push(`${result.unpublished.join('、')} 年的安排还没公布（国务院年底才发，之后会自动再取）`)
+      }
+      if (result.failed.length > 0) {
+        parts.push(`${result.failed.join('、')} 年没取到（网络或数据源问题，下次复核再试）`)
+      }
+      return {
+        ok: true,
+        changed: result.fetched.length > 0,
+        days: merged?.length ?? 0,
+        years: yearsNext,
+        fetchedAt,
+        saved,
+        message: parts.join('；'),
+      }
+    }
+
+    /**
      * **自动同步官方价**（0.10.0，默认关）：每天最多一次。
      *
      * 节奏：进程启动时先查一次，之后每 {@link AUTO_SYNC_CHECK_MS} 分钟查一次
      * "距上次成功同步是否够 {@link AUTO_SYNC_STALE_MS}"。为什么不是"设一个 24 小时的定时器"：
      * 桌面版随时可能被关掉/重启，定时器会永远等不到点火；按"到期就补"的写法，
      * 无论进程活了多久，只要开了开关且距上次同步超过一天，下一次检查就会补上。
+     *
+     * 0.11.0 起同一个 tick 里还管**节假日**（`syncHolidays`，每个年份最多 30 天复核一次）：
+     * 两件事共用一把开关（"这个插件可以自己出网"），也共用同一次检查。
      *
      * 失败只写日志：界面上仍显示"上次成功同步的时间"，不会因为一次网络抖动假装同步过。
      */
@@ -1455,19 +1556,27 @@ export function apply(ctx: Context, config?: unknown): void {
           nowMs: Date.now(),
           staleMs: AUTO_SYNC_STALE_MS,
         })
-        if (!due) return
-        const result = await syncOfficial()
-        console.log(`[composer-ux] 自动同步官方价${result.ok ? '成功' : '失败'}：${result.message}`)
+        if (due) {
+          const result = await syncOfficial()
+          console.log(`[composer-ux] 自动同步官方价${result.ok ? '成功' : '失败'}：${result.message}`)
+        }
       } catch (error: unknown) {
         // 自动同步绝不能让插件炸掉：这一轮失败，下一轮（30 分钟后）再来。
         console.warn('[composer-ux] 自动同步官方价异常', error)
+      }
+      // 节假日单独一段 try：它失败不该吞掉上面那次价格同步的结果，反之亦然。
+      try {
+        const holiday = await syncHolidays()
+        if (holiday.changed === true) console.log(`[composer-ux] 自动获取节假日：${holiday.message}`)
+      } catch (error: unknown) {
+        console.warn('[composer-ux] 自动获取节假日异常', error)
       }
     }
     syncCtx.effect(() => {
       const timer = setInterval(() => { void autoSyncIfDue() }, AUTO_SYNC_CHECK_MS)
       void autoSyncIfDue()
       return () => { clearInterval(timer) }
-    }, 'composer-ux: 官方价自动同步（默认关）')
+    }, 'composer-ux: 官方价与节假日自动同步（默认关）')
 
     const handle = (
       req: { method?: string; url?: string } & AsyncIterable<unknown>,
@@ -1498,12 +1607,17 @@ export function apply(ctx: Context, config?: unknown): void {
         } catch {
           /* 请求体不是 JSON：按 target 为空处理，下面如实报错 */
         }
-        if (target !== 'official' && target !== 'modelsDev') {
-          sendJson(res, 400, { ok: false, error: 'target 必须是 official 或 modelsDev' })
+        if (target !== 'official' && target !== 'modelsDev' && target !== 'holidays') {
+          sendJson(res, 400, { ok: false, error: 'target 必须是 official、modelsDev 或 holidays' })
           return
         }
-        // 两条路各一个函数（自动同步走的是同一个 `syncOfficial`），这里只负责回话。
-        const result = target === 'modelsDev' ? await syncModelsDev() : await syncOfficial()
+        // 三条路各一个函数（自动同步走的是同一个 `syncOfficial` / `syncHolidays`），
+        // 这里只负责回话。节假日那条是用户点的，所以走 `force`（不看 30 天的复核窗口）。
+        const result = target === 'modelsDev'
+          ? await syncModelsDev()
+          : target === 'holidays'
+            ? await syncHolidays({ force: true })
+            : await syncOfficial()
         sendJson(res, 200, { target, ...result })
       })()
     }

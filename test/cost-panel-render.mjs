@@ -201,8 +201,19 @@ console.log('1. 分列到手时：浮层画出的东西')
     /峰谷\s*(高峰档|空闲档)/.test(text), (/(高峰档|空闲档)[^ ]*/.exec(text) ?? [''])[0])
   check('两档单价都列出来（每 1M）',
     text.includes('高峰单价（每 1M）') && text.includes('空闲单价（每 1M）'))
-  check('价格历史档说明写出来（官方调价不改历史金额）',
-    text.includes('按各自发生时刻的价格档结算') && text.includes('官方调价不会改动历史金额'))
+  /**
+   * 0.11.0（用户 2026-09-29 拍板"浮层只留数字"）：那三行说明的去留不同 ——
+   *  · **价格档说明**改成"只在非默认时出现"，本夹具是**单档且就是当前档**，所以不许出现；
+   *  · **刊例价快照行**整行搬去设置页；
+   *  · **峰谷判定段**设置页本来就有，纯去重。
+   * 这三条一起构成"点开胶囊更简洁"这个需求的可验收判据，所以逐条断言。
+   */
+  check('单档（且就是当前档）会话里不出现「价格档说明」——默认不占行',
+    !text.includes('按各自发生时刻的价格档结算') && !text.includes('官方调价不会改动历史金额'))
+  check('刊例价快照行已搬去设置页（浮层不再印快照日期）',
+    !text.includes('刊例价快照'))
+  check('峰谷判定段已从浮层移走（设置页「金额」里有同一份）',
+    !text.includes('峰谷按每笔用量发生的时间判定') && !text.includes('未含中转加价'))
   check('内置快照价被标出来（并写快照日期）',
     /内置快照价（models\.dev 快照 20\d\d-\d\d-\d\d）/.test(text), text.match(/内置快照价[^。]*/)?.[0])
   check('未定价的那一行显示「未定价」而不是 ¥0.00',
@@ -212,11 +223,34 @@ console.log('1. 分列到手时：浮层画出的东西')
     && text.includes('同步第三方价目'), text.match(/有 1 行[^。]*/)?.[0])
   check('渲染文本里**没有 markdown 记号**（`note()` 不是 markdown，写 `**加粗**` 会原样显示）',
     !text.includes('**'), (text.match(/\*\*[^*]{0,20}\*\*/) ?? [''])[0])
-  check('说明里写清 token 口径与「未含中转加价」',
-    text.includes('峰谷按每笔用量发生的时间判定') && text.includes('未含中转加价'))
   check('「合计」就是宿主给的数（没被本地估算顶掉）', text.includes('合计') && text.includes('¥4.08'))
   check('分项三行合计 4.08 恰好等于合计（与 README 的承诺一致）',
     Math.abs(2.0 + 0.08 + 2.0 - 4.08) < 1e-9)
+}
+
+console.log('1.1 非默认时才多出来的两样（跨价档说明 / 覆盖价小标）')
+{
+  /** 把某条 route 换成旧价档：`erasUsed` 就不再是"只有当前档"。 */
+  const withEras = eras => ({
+    ...FIXTURE,
+    routes: FIXTURE.routes.map(route => (route.era === '' ? route : { ...route, era: eras.shift() ?? 'legacy' })),
+  })
+  const multi = visible(render(withEras(['legacy', 'peak-2026-08'])))
+  check('跨了两个价档的会话：价格档说明**出现**（浮层上的单价是今天的价、金额是当时的价）',
+    multi.includes('按各自发生时刻的价格档结算') && multi.includes('官方调价不会改动历史金额'))
+  check('说明里点名了用到的那几档（两个旧档的中文名）',
+    multi.includes('峰谷制之前（单一档价）') && multi.includes('峰谷两档（2026-08 价）'),
+    (multi.match(/这批用量[^（]*/) ?? [''])[0])
+  const singleOld = visible(render(withEras(['legacy'])))
+  check('整段跑在旧档上（只有一个档、但不是当前档）也算非默认',
+    singleOld.includes('按各自发生时刻的价格档结算'))
+  const overridden = visible(render(FIXTURE, {
+    priceOverrides: { 'deepseek-flash': { peak: { miss: 3, hit: 0.3, out: 9 } } },
+  }))
+  check('覆盖价生效时，单价行带「已自定义」小标（不丢"这份价是你填的"）',
+    overridden.includes('高峰单价（每 1M · 已自定义）'), (overridden.match(/高峰单价[^ ]*/) ?? [''])[0])
+  const plain = visible(render(FIXTURE))
+  check('没覆盖过价时小标不出现（默认不占字）', !plain.includes('已自定义'))
 }
 
 console.log('2. 宿主数据还没到手 / 认不出价时：不许显示 ¥0.00')

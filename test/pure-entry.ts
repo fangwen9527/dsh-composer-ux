@@ -175,8 +175,23 @@ export {
 export {
   AUTO_SYNC_STALE_MS, MODELS_DEV_URL, OFFICIAL_PRICING_URLS, autoSyncDue, compactModelsDev,
   eraFromOfficial, samePriceTable,
-  fetchModelsDevPrices, fetchOfficialPages, fetchText, priceStorePath, readPriceFile, writePriceFile,
+  fetchModelsDevPrices, fetchOfficialPages, fetchText, officialPricingCandidates, priceStorePath,
+  readPriceFile, writePriceFile,
 } from '../src/price-sync.ts'
+/**
+ * 「法定节假日自动获取」（0.11.0）的纯逻辑：响应解析、到期判定、并集、以及"手填 > 自动 ∪
+ * 内置"的优先级。
+ *
+ * 这块能力的错法都很安静：补班日混进"放假"会让那两天的金额**翻倍**、北京年判成 UTC 年会让
+ * 某一年**永远不再抓**、覆盖语义写反会让用户手填的表被后台悄悄改掉。所以逐条钉。
+ */
+export {
+  HOLIDAY_MAX_DAYS, HOLIDAY_STALE_MS, HOLIDAY_YEAR_TIMEOUT_MS, fetchHolidayYear, fetchHolidayYears,
+  holidaySyncDue, holidayYearUrls, holidayYearsWanted, mergeHolidayDays, parseHolidayYear,
+} from '../src/holiday-sync.ts'
+/** 「手填 > 自动获取 ∪ 内置」这条优先级（宿主半与设置页共用同一份）。 */
+export { effectiveHolidays } from '../src/pricing.ts'
+export { HOLIDAY_SOURCE_LABEL, parseHolidayYears } from '../src/settings-contract.ts'
 /**
  * 「官方价格页解析」（0.10.0）：真页面快照 → 人民币/美元两列价格。
  * 夹具是 2026-09-29 抓的真实页面（`test/fixtures/official-pricing.{zh,en}.html`）。

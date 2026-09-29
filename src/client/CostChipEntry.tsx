@@ -55,12 +55,24 @@
  * `{ inputTokens: buckets.miss, … }` —— 于是分母少了整块未缓存输入，命中率恒等于 100%。
  * 结论：键名这件事在**每一处传值**都要对，不能只在一个函数里修。现在调用处传
  * `uncachedInputTokens`，并由 `test/client-registration.mjs` 钉住这一条。
+ *
+ * ## 0.11.0：浮层只留"数字 + 状态"，说明挪去设置页
+ *
+ * 用户 2026-09-29 的原话是"图里这些说明放到设置页面，使点开胶囊变得更简洁"。浮层原来的
+ * 最后三行（刊例价快照行、价格档段、峰谷判定段）去留不同：
+ *
+ *  · **峰谷判定段**：设置页「金额」里本来就有一份同义文字，删掉是纯去重；
+ *  · **刊例价快照行**：整行搬去设置页的「计价说明」；其中"这份价是你自己填的"这一点
+ *    缩成单价行上的 `· 已自定义` 小标 —— 它只在**你覆盖过价**时出现，默认不占字；
+ *  · **价格档段**：改成**只在非默认时出现**（本会话用到的档 ≠ 当前生效的档）。
+ *    这一条不能简单删：跨了 9-10 调价的会话，浮层上的单价是今天的价、金额却是当时的价，
+ *    不说反而是误导。
  */
 import React from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-store'
 import {
-  DEFAULT_PEAK_HOLIDAYS, PRICE_VERIFIED_AT, costBucketsOf, costPartsOf, eraById, formatMoney,
+  DEFAULT_PEAK_HOLIDAYS, costBucketsOf, costPartsOf, eraById, eraIdAt, formatMoney,
   formatTokens, isDeepSeekRoute, overrideTierOf, resolvePrice,
 } from '../pricing.ts'
 import type { ComposerUxSettings } from '../settings-contract.ts'
@@ -465,23 +477,24 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             )}
             {detail('缓存命中率', viewHitRate === null ? '—' : `${viewHitRate}%`)}
             {detail('峰谷', peakText)}
-            {detail('高峰单价（每 1M）', peakPrice.unpriced ? '未定价' : priceText(peakPrice.prices))}
-            {detail('空闲单价（每 1M）', offPrice.unpriced ? '未定价' : priceText(offPrice.prices))}
-            {note((model === undefined || model === '' ? '未知模型（按默认模型计价）' : model)
-              + ` · 刊例价快照 ${PRICE_VERIFIED_AT}`
-              + (overridden ? ' · 已用你在设置页「金额」里填的价' : ''))}
+            {/* 单价两行**留在浮层**（2026-09-29 用户拍板）：它们回答"现在按什么价算"，
+                而且改完覆盖价立刻能在这里看到数字变化 —— 这正是 0.10.0 的卖点。
+                `已自定义` 是个小标：只在这一行的价来自用户覆盖价时出现，默认不占字。 */}
+            {detail(`高峰单价（每 1M${overridden ? ' · 已自定义' : ''}）`, peakPrice.unpriced ? '未定价' : priceText(peakPrice.prices))}
+            {detail(`空闲单价（每 1M${overridden ? ' · 已自定义' : ''}）`, offPrice.unpriced ? '未定价' : priceText(offPrice.prices))}
             {viewUnpriced
               ? note('这个模型不是 DeepSeek 系、同步来的第三方价目里也没有它，所以金额给不出来。'
                 + '去设置页「金额」点一次「同步第三方价目」，或给这个模型直接填一行单价。', '__unpriced__')
               : null}
-            {erasUsed.length === 0
-              ? null
-              : note('这批用量按各自发生时刻的价格档结算：'
+            {/* 价格档说明（0.11.0 起**只在非默认时出现**）：这一行原本是"这批用量按各自发生
+                时刻的价格档结算：…"，常显会让浮层多一行静态文字。所谓"非默认"= 这个会话用到的
+                档与**当前生效**的档不一致（跨了 9-10 调价的会话、或整段跑在旧档上的会话）——
+                那种情况下浮层上的单价是今天的价、金额却是当时的价，不说明反而是误导。 */}
+            {erasUsed.length > 0 && (erasUsed.length > 1 || erasUsed[0] !== eraIdAt(Date.now(), eras))
+              ? note('这批用量按各自发生时刻的价格档结算：'
                 + erasUsed.map(id => eraById(id, eras).label).join(' · ')
-                + '（官方调价不会改动历史金额）', '__eras__')}
-            {note('峰谷按每笔用量发生的时间判定（工作日 09:00–12:00、14:00–18:00 为高峰，'
-              + '法定节假日与周末全天谷价）；非 DeepSeek 路由按同步来的第三方价目算，'
-              + '未含中转加价，实际扣费以各家账单为准。')}
+                + '（官方调价不会改动历史金额）', '__eras__')
+              : null}
           </div>
         </div>,
         document.body,

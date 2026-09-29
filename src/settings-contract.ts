@@ -51,8 +51,9 @@ export const USAGE_API_PATH = '/composer-ux/usage'
  * 「金额」栏（0.10.0）：价目同步接口。
  *
  * 出网必须在宿主半：浏览器侧发不出跨域请求，也不该让 API Key/页面内容经过前端逻辑。
- * 请求体是一个 `{ target: 'official' | 'modelsDev' }`，两条路分别对应"官方价格页"
- * （两页约 24 KB）与"models.dev 注册表"（5.2 MB，故意做成独立按钮）。
+ * 请求体是一个 `{ target: 'official' | 'modelsDev' | 'holidays' }`，三条路分别对应"官方价格页"
+ * （两页约 24 KB）、"models.dev 注册表"（5.2 MB，故意做成独立按钮）与"法定节假日日期表"
+ * （0.11.0 新增，每年一个几 KB 的 JSON，见 `holiday-sync.ts`）。
  */
 export const SYNC_API_PATH = '/composer-ux/sync-prices'
 
@@ -116,14 +117,24 @@ export const PRICE_OVERRIDES_FIELD = 'priceOverrides'
 /**
  * 「金额」栏（0.10.0）：节假日表 —— **北京日历日**的 `YYYY-MM-DD` 数组，命中的一天全天按谷价。
  *
- * `undefined` = 用内置那份（`pricing.ts` 的 `DEFAULT_PEAK_HOLIDAYS`，来源是国务院办公厅
- * 2026 年安排）。为什么要让用户能改：国务院每年底才公布次年安排，而内置表只跟我们的发版走；
- * 官方临时调整放假安排、或到了下一年而我们还没发版时，他不该干等。
+ * `undefined` = 用自动获取那份（0.11.0；没拉过就用内置那份 `DEFAULT_PEAK_HOLIDAYS`，
+ * 来源是国务院办公厅 2026 年安排）。为什么要让用户能改：国务院每年底才公布次年安排，
+ * 官方临时调整放假安排、或自动获取还没跑到时，他不该干等。
+ *
+ * 填了就**整份覆盖**（自动获取那份与内置表都不再参与，见 `pricing.ts` 的 `effectiveHolidays`）。
  *
  * 与 `priceOverrides` 不同，这一项是**普通数组字段**（键固定，不是动态键），所以声明得出来，
  * 官方设置页的表单也能直接读写它。
  */
 export const PEAK_HOLIDAYS_FIELD = 'peakHolidays'
+
+/**
+ * 「金额」（0.11.0）：自动获取节假日的数据源名字。
+ *
+ * 放在**共享契约**而不是 `holiday-sync.ts`：那个模块要 `node:fs`/`fetch`，客户端半不能 import
+ * 它；而设置页要原样显示这个名字（"当前生效：27 个日期（自动获取 · holiday-cn…）"）。
+ */
+export const HOLIDAY_SOURCE_LABEL = 'holiday-cn（数据取自国务院办公厅通知）'
 
 /** 「金额」栏（0.10.0）：峰谷提醒的开关与提前量。 */
 export const PEAK_ALERT_FIELD = 'peakAlert'
@@ -135,6 +146,10 @@ export const PEAK_ALERT_FIELD = 'peakAlert'
  * "距上次同步是否够 24 小时"。默认关的理由：这是个会**自己出网**的开关，不该由插件替用户
  * 决定；而"抓失败绝不覆盖本地价"那条纪律对自动同步同样成立（失败只写日志，界面上仍显示
  * 上次成功的时间）。
+ *
+ * 0.11.0 起**同一把开关**还管「法定节假日自动获取」（每个年份最多 30 天复核一次，见
+ * `holiday-sync.ts`）：用户的选择是"这个插件可以自己出网"，没必要为同一个语义再给一个开关；
+ * 而且两件事共用一次 tick，不会出现"价格同步开了、节假日却说没开"的解释成本。
  */
 export const PRICE_AUTO_SYNC_FIELD = 'priceAutoSync'
 
@@ -184,6 +199,19 @@ export interface SyncedPrices {
   readonly modelsDevAt?: number
   /** 那次同步拿到多少条第三方模型价。 */
   readonly modelsDevCount?: number
+  /**
+   * 自动获取到的**法定节假日日期表**（北京日历日，0.11.0）。
+   *
+   * 为什么放在设置里而不是像第三方价目那样落盘：它**很小**（一年十来个日期，两年不到
+   * 1 KB），而设置文档正好是"宿主半与界面都能立刻看到"的那份共享状态 —— 落盘的话，
+   * 设置页要显示"当前生效的是自动获取那份"就得再开一条读文件的接口，还会多出
+   * "文件里有、设置里没有"的不一致状态。
+   */
+  readonly holidays?: readonly string[]
+  /** 最近一次成功获取节假日的时刻（毫秒）。 */
+  readonly holidaysAt?: number
+  /** 已经拿到过数据的年份（决定要不要再为某年出网，见 `holiday-sync.ts`）。 */
+  readonly holidayYears?: readonly number[]
 }
 
 /** 键位字段名。 */
@@ -1088,13 +1116,36 @@ export function parseSyncedPrices(raw: unknown): SyncedPrices | undefined {
   const modelsDevAt = stamp('modelsDevAt')
   const modelsDevCount = count('modelsDevCount')
   const eras = parsePriceEras(row.eras)
+  const holidays = parseHolidays(row.holidays)
+  const holidaysAt = stamp('holidaysAt')
+  const holidayYears = parseHolidayYears(row.holidayYears)
   const out: SyncedPrices = {
     ...(fetchedAt === undefined ? {} : { fetchedAt }),
     ...(eras === undefined ? {} : { eras }),
     ...(modelsDevAt === undefined ? {} : { modelsDevAt }),
     ...(modelsDevCount === undefined ? {} : { modelsDevCount }),
+    ...(holidays === undefined ? {} : { holidays }),
+    ...(holidaysAt === undefined ? {} : { holidaysAt }),
+    ...(holidayYears === undefined ? {} : { holidayYears }),
   }
   return Object.keys(out).length > 0 ? out : undefined
+}
+
+/**
+ * 消毒"已经拿到数据的年份"（0.11.0）：只认 2000–2100 的整数，去重升序，最多 12 个。
+ *
+ * 为什么范围卡这么死：它唯一的用途是回答"这一年的放假安排抓过没有"。一个手抖写进来的
+ * `20260` 会让那一年**永远**被判成"早就有数据"、于是永远不再抓 —— 静默且难查。
+ *
+ * @param raw 线上值。
+ * @returns 年份数组；一个都收不到就是 `undefined`。
+ */
+export function parseHolidayYears(raw: unknown): readonly number[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const years = [...new Set(raw.filter(
+    (item): item is number => typeof item === 'number' && Number.isInteger(item) && item >= 2000 && item <= 2100,
+  ))].sort((left, right) => left - right)
+  return years.length === 0 ? undefined : years.slice(0, 12)
 }
 
 /** 设置数据净化：把线上值收窄为安全形状（防脏数据）。 */

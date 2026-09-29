@@ -49,20 +49,20 @@ interface BalanceResponse {
 
 /** 价目同步的状态。 */
 export interface SyncState {
-  readonly busy: 'official' | 'modelsDev' | null
+  readonly busy: 'official' | 'modelsDev' | 'holidays' | null
   /** 最近一次同步的结果（成功/失败都如实显示）。 */
   readonly note: string
   readonly ok: boolean
 }
 
 /**
- * 价目同步：两条独立的路（官方价 vs models.dev），每次点只同步一条。
+ * 同步：三条独立的路（官方价 / models.dev / 法定节假日），每次点只同步一条。
  *
  * @param onDone 同步成功后的回调（宿主会写设置，但设置推送有延迟；调用方通常用它触发一次重读）。
  * @returns 当前状态与 `sync()`。
  */
-export function usePriceSync(onDone?: () => void): SyncState & { readonly sync: (target: 'official' | 'modelsDev') => void } {
-  const [busy, setBusy] = React.useState<'official' | 'modelsDev' | null>(null)
+export function usePriceSync(onDone?: () => void): SyncState & { readonly sync: (target: 'official' | 'modelsDev' | 'holidays') => void } {
+  const [busy, setBusy] = React.useState<'official' | 'modelsDev' | 'holidays' | null>(null)
   const [note, setNote] = React.useState('')
   const [ok, setOk] = React.useState(true)
   const alive = React.useRef(true)
@@ -76,11 +76,15 @@ export function usePriceSync(onDone?: () => void): SyncState & { readonly sync: 
     return () => { alive.current = false }
   }, [])
 
-  const sync = React.useCallback((target: 'official' | 'modelsDev'): void => {
+  const sync = React.useCallback((target: 'official' | 'modelsDev' | 'holidays'): void => {
     if (busyRef.current) return
     busyRef.current = true
     setBusy(target)
-    setNote(target === 'official' ? '正在抓官方价格页…' : '正在抓 models.dev（约 5 MB，稍等）…')
+    setNote(target === 'official'
+      ? '正在抓官方价格页…'
+      : target === 'holidays'
+        ? '正在抓法定节假日（每年一个几 KB 的 JSON）…'
+        : '正在抓 models.dev（约 5 MB，稍等）…')
     setOk(true)
     void fetch(SYNC_API_PATH, {
       method: 'POST',

@@ -686,6 +686,90 @@ const cases = [
     test: 'test/cost-panel-render.mjs',
     expect: '没有 markdown 记号',
   },
+  // ── 法定节假日自动获取（0.11.0）────────────────────────────────────────────
+  //
+  // 这一组的每一处都能把某两天的金额算错 2 倍，或者让插件在用户没同意时联网。
+  {
+    name: 'CD 补班日（isOffDay:false）被当成放假（2026-10-10 那个周六的金额会变）',
+    file: 'src/holiday-sync.ts',
+    from: '    if (entry.isOffDay !== true) continue',
+    to: '    if (entry.isOffDay === undefined) continue',
+    test: 'test/holiday-sync.mjs',
+    expect: '补班日 2026-10-10（周六）不在表里',
+  },
+  {
+    name: 'CE 北京年判成 UTC 年（跨年那几天算错，且某一年会永远不再抓）',
+    file: 'src/holiday-sync.ts',
+    from: '  const year = Number(new Date(safe + 8 * 3_600_000).toISOString().slice(0, 4))',
+    to: '  const year = Number(new Date(safe).toISOString().slice(0, 4))',
+    test: 'test/holiday-sync.mjs',
+    expect: '北京年边界',
+  },
+  {
+    name: 'CF 节假日获取不看开关（用户没同意也自己联网）',
+    file: 'src/holiday-sync.ts',
+    from: '  if (options.enabled !== true) return []',
+    to: '  if (false) return []',
+    test: 'test/holiday-sync.mjs',
+    expect: '开关 undefined',
+  },
+  {
+    name: 'CG 生效表用"替换"而不是"并集"（跨年后旧年份的节假日丢失，旧会话被按高峰算）',
+    file: 'src/pricing.ts',
+    from: '  const merged = [...new Set([...DEFAULT_PEAK_HOLIDAYS, ...autoDays])].sort().slice(-400)',
+    to: '  const merged = [...new Set(autoDays)].sort().slice(-400)',
+    test: 'test/holiday-sync.mjs',
+    expect: '取并集',
+  },
+  {
+    name: 'CH 用户手填不再优先（后台抓回来的表把用户那张盖掉）',
+    file: 'src/pricing.ts',
+    from: "  if (manualCount > 0) {\n    return { days: manualDays, source: 'manual', autoCount, manualCount }",
+    to: "  if (false) {\n    return { days: manualDays, source: 'manual', autoCount, manualCount }",
+    test: 'test/holiday-sync.mjs',
+    expect: '手填非空',
+  },
+  {
+    name: 'CI 节假日同步完不通知金额规则失效（后台取回新表后峰谷仍按旧表判）',
+    file: 'src/host.ts',
+    from: '      invalidateMoney()\n      const parts: string[] = []',
+    to: '      const parts: string[] = []',
+    test: 'test/holiday-sync.mjs',
+    expect: '写完之后生效表就是并集那份',
+  },
+  {
+    name: 'CJ 抓不到也照写设置（纪律"抓不到就什么都不改"失效）',
+    file: 'src/host.ts',
+    from: '      if (result.fetched.length === 0 && result.unpublished.length === 0) {',
+    to: '      if (false) {',
+    test: 'test/holiday-sync.mjs',
+    expect: '设置里一个字都没写',
+  },
+  {
+    name: 'CK 去掉 jsDelivr 镜像兜底（GitHub raw 一抽就永远拉不到节假日）',
+    file: 'src/holiday-sync.ts',
+    from: '  for (const url of [urls.primary, urls.mirror]) {',
+    to: '  for (const url of [urls.primary]) {',
+    test: 'test/holiday-sync.mjs',
+    expect: '退镜像',
+  },
+  // ── 官方价格页 URL 形状（2026-09-29 真机事故）──────────────────────────────
+  {
+    name: 'CL 官方页候选兜底只剩一个（站点换形状时"同步官方价"又会整块失败）',
+    file: 'src/price-sync.ts',
+    from: '  return [canonical, alternate]',
+    to: '  return [canonical]',
+    test: 'test/price-sync.mjs',
+    expect: '退到另一个候选',
+  },
+  {
+    name: 'CM 英文价格页 URL 去掉结尾斜杠（事故原样复现：不带斜杠那页没有价格表）',
+    file: 'src/price-sync.ts',
+    from: "  usd: 'https://api-docs.deepseek.com/quick_start/pricing/',",
+    to: "  usd: 'https://api-docs.deepseek.com/quick_start/pricing',",
+    test: 'test/price-sync.mjs',
+    expect: '都以 / 结尾',
+  },
 ]
 
 let allBit = true

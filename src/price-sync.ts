@@ -32,11 +32,35 @@ import { dirname, join } from 'node:path'
 import { parseOfficialPricingPage, type OfficialPricePage } from './official-pricing.ts'
 import type { ModelPrice, PriceEra, PriceTriple, ProviderPriceTable } from './pricing.ts'
 
-/** 官方价格页（中文页给人民币列、英文页给美元列，两页同构）。 */
+/**
+ * 官方价格页（中文页给人民币列、英文页给美元列，两页同构）。
+ *
+ * ⚠️ **结尾斜杠是必须的**（2026-09-29 真机事故）：英文页在**去掉结尾斜杠**的路径上开始返回
+ * 另一页 —— 200 OK、4.8 万字节的「快速开始」内容、**没有价格表**，于是 `parseOfficialPricingPage`
+ * 返回 `undefined`，"一键同步官方价"直接报失败（好在纪律是"失败不覆盖本地价"，所以只是同步
+ * 不工作，没有把价算错）。中文页那边是 302 跳到带斜杠的路径，两者形状不一致。
+ * 兜底见 {@link officialPricingCandidates}：带斜杠的排在前面，旧形状仍会被试一次。
+ */
 export const OFFICIAL_PRICING_URLS = {
-  cny: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing',
-  usd: 'https://api-docs.deepseek.com/quick_start/pricing',
+  cny: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/',
+  usd: 'https://api-docs.deepseek.com/quick_start/pricing/',
 } as const
+
+/**
+ * 某个语言页要依次尝试的 URL（**顺序就是优先级**）。
+ *
+ * 为什么要两个而不是一个：2026-09-29 那次事故里，站点把"带斜杠 / 不带斜杠"两个路径指向了
+ * 不同内容，而两个路径都返回 200（**没有跳转**可依赖，`fetch` 跟不到正确的那一页）。多试一个
+ * 候选的代价是失败时多一次请求（几百毫秒），换来的是"站点把两者对调时不用改代码"。
+ *
+ * @param kind `'cny'` 中文页（人民币列）或 `'usd'` 英文页（美元列）。
+ * @returns 候选 URL 数组；第一个是当前已知可用的形状。
+ */
+export function officialPricingCandidates(kind: 'cny' | 'usd'): readonly string[] {
+  const canonical = OFFICIAL_PRICING_URLS[kind]
+  const alternate = canonical.endsWith('/') ? canonical.slice(0, -1) : `${canonical}/`
+  return [canonical, alternate]
+}
 
 /** 第三方价目来源（models.dev 的公开注册表，无需 key）。 */
 export const MODELS_DEV_URL = 'https://models.dev/api.json'
@@ -271,17 +295,25 @@ export async function fetchText(
   }
 }
 
-/** 抓官方两页并解析（任一页失败就是失败）。 */
+/**
+ * 抓官方两页并解析（任一页失败就是失败）。
+ *
+ * 每一页都按 {@link officialPricingCandidates} 的顺序试：**解析成功才算这一页到手**
+ * （只在"抓不到"或"解析不出"时换下一个候选，绝不会拿半份数据凑合）。
+ */
 export async function fetchOfficialPages(
   options: { fetcher?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<{ cny: OfficialPricePage; usd: OfficialPricePage } | undefined> {
-  const [cnyText, usdText] = await Promise.all([
-    fetchText(OFFICIAL_PRICING_URLS.cny, { ...options, minLength: 500 }),
-    fetchText(OFFICIAL_PRICING_URLS.usd, { ...options, minLength: 500 }),
-  ])
-  if (cnyText === undefined || usdText === undefined) return undefined
-  const cny = parseOfficialPricingPage(cnyText)
-  const usd = parseOfficialPricingPage(usdText)
+  const fetchOne = async (kind: 'cny' | 'usd'): Promise<OfficialPricePage | undefined> => {
+    for (const url of officialPricingCandidates(kind)) {
+      const text = await fetchText(url, { ...options, minLength: 500 })
+      if (text === undefined) continue
+      const page = parseOfficialPricingPage(text)
+      if (page !== undefined) return page
+    }
+    return undefined
+  }
+  const [cny, usd] = await Promise.all([fetchOne('cny'), fetchOne('usd')])
   if (cny === undefined || usd === undefined) return undefined
   return { cny, usd }
 }

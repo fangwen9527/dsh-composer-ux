@@ -62,6 +62,17 @@ check('官方两页 URL 都在 api-docs.deepseek.com',
   ours.OFFICIAL_PRICING_URLS.cny.startsWith('https://api-docs.deepseek.com/')
   && ours.OFFICIAL_PRICING_URLS.usd.startsWith('https://api-docs.deepseek.com/'))
 check('中文页与英文页不是同一个 URL', ours.OFFICIAL_PRICING_URLS.cny !== ours.OFFICIAL_PRICING_URLS.usd)
+/**
+ * 2026-09-29 真机事故回归：英文页**去掉结尾斜杠**的路径开始返回「快速开始」内容（200 OK、
+ * 没有价格表），于是同步直接失败。这两条把"必须带斜杠"和"候选顺序"钉住 —— 站点以后再对调
+ * 两个形状时，兜底候选会把同步救回来，而不用等我们发版。
+ */
+check('两个官方页 URL 都以 / 结尾（2026-09-29 事故：不带斜杠的英文页返回了没有价格表的另一页）',
+  ours.OFFICIAL_PRICING_URLS.cny.endsWith('/') && ours.OFFICIAL_PRICING_URLS.usd.endsWith('/'))
+check('每个语言页都有"带斜杠 → 不带斜杠"两个候选（顺序即优先级）',
+  JSON.stringify(ours.officialPricingCandidates('usd'))
+    === JSON.stringify([ours.OFFICIAL_PRICING_URLS.usd, ours.OFFICIAL_PRICING_URLS.usd.slice(0, -1)])
+  && ours.officialPricingCandidates('cny').length === 2)
 check('models.dev 注册表 URL', ours.MODELS_DEV_URL === 'https://models.dev/api.json')
 check('价目文件落在 storages/composer-ux 下', ours.priceStorePath().replace(/\\/g, '/').endsWith('/storages/composer-ux/prices.json'))
 
@@ -185,6 +196,41 @@ check('只有一页成功 → undefined（缺一边就不猜）',
   (await ours.fetchOfficialPages({ fetcher: fakeFetch(url => (url.includes('/zh-cn/') ? okResponse(ZH_HTML) : { ok: false, status: 500, text: async () => '' })) })) === undefined)
 check('正文是垃圾 HTML → undefined（解析不出来）',
   (await ours.fetchOfficialPages({ fetcher: fakeFetch(() => okResponse('<html>' + 'x'.repeat(2000) + '</html>')) })) === undefined)
+/**
+ * 「候选 URL 兜底」——2026-09-29 事故的回归：站点把"带斜杠"与"不带斜杠"指向不同内容，
+ * 而且两个都返回 200（`fetch` 跟不到正确那一页）。所以每一页都要按候选顺序试到**解析成功**为止。
+ */
+{
+  /** 复刻事故当天英文页返回的那一类内容：够长、有表格，但**没有价格列**。 */
+  const TABLELESS = '<html><body><table><thead><tr><th>PARAM</th><th>VALUE</th></tr></thead>'
+    + '<tbody><tr><td>base_url</td><td>https://api.deepseek.com</td></tr>'
+    + '<tr><td>model</td><td>deepseek-flash</td></tr></tbody></table>'
+    + `<p>${'x'.repeat(1200)}</p></body></html>`
+  check('夹具本身确实"解析不出版格"（否则下面那条是假通过）',
+    ours.parseOfficialPricingPage(TABLELESS) === undefined)
+  const tried = []
+  const recovered = await ours.fetchOfficialPages({
+    fetcher: fakeFetch(url => {
+      tried.push(String(url))
+      // 规范候选（带斜杠）给事故内容；另一个候选给真页面 —— 兜底必须把同步救回来。
+      return okResponse(String(url).endsWith('/') ? TABLELESS : (String(url).includes('/zh-cn/') ? ZH_HTML : EN_HTML))
+    }),
+  })
+  check('规范候选返回"没有价格表"的页面时，自动退到另一个候选（同步不会因此一直失败）',
+    recovered !== undefined && recovered.usd.table['deepseek-flash'] !== undefined)
+  check('两个候选都试过了',
+    tried.some(url => url.endsWith('/pricing')) && tried.some(url => url.endsWith('/pricing/')),
+    JSON.stringify(tried))
+  const onlyCanonical = []
+  const direct = await ours.fetchOfficialPages({
+    fetcher: fakeFetch(url => {
+      onlyCanonical.push(String(url))
+      return okResponse(String(url).includes('/zh-cn/') ? ZH_HTML : EN_HTML)
+    }),
+  })
+  check('规范候选就能解析时**不会**多花一次请求（兜底不是每次都跑）',
+    direct !== undefined && onlyCanonical.length === 2, JSON.stringify(onlyCanonical))
+}
 check('models.dev 正常 → 压成表',
   (await ours.fetchModelsDevPrices({ fetcher: fakeFetch(() => okResponse(JSON.stringify(registry))) })) !== undefined)
 check('payload 本身够长（否则上面那条是被长度保险放过去的假通过）',

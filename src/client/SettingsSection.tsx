@@ -39,7 +39,10 @@ import { CostCardBody } from './CostCard.tsx'
 import { OptimizerPromptEditor } from './OptimizerPromptEditor.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { PillChoice } from './PillChoice.tsx'
-import { HIT_DIGITS } from './stats-line.ts'
+import {
+  HIT_DIGITS,
+} from './stats-line.ts'
+import { effectiveHolidays } from '../pricing.ts'
 import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
@@ -1047,13 +1050,23 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
   const costSummary = (() => {
     const models = settings.priceOverrides === undefined ? [] : Object.keys(settings.priceOverrides)
     const price = models.length === 0 ? '按官方刊例价估算' : `已覆盖 ${models.length} 个模型的单价`
-    const holidays = settings.peakHolidays === undefined ? '' : ` · 自定义节假日 ${settings.peakHolidays.length} 天`
+    /**
+     * 节假日（0.11.0 有三种来源）：概览只报**非默认**的那两种 ——
+     * 手填 → "自定义节假日 N 天"；自动获取 → "节假日自动 N 天"；
+     * 默认（内置表）不占字，与金额浮层那条"只在非默认时出现"同一个态度。
+     */
+    const holidays = effectiveHolidays(settings.peakHolidays, settings.syncedPrices?.holidays)
+    const holidayText = holidays.source === 'manual'
+      ? ` · 自定义节假日 ${holidays.days.length} 天`
+      : holidays.source === 'auto'
+        ? ` · 节假日自动 ${holidays.autoCount} 天`
+        : ''
     const synced = settings.syncedPrices
     const count = synced?.modelsDevCount
     const sync = count === undefined
       ? (synced?.eras === undefined || synced.eras.length === 0 ? '' : ` · 已同步 ${synced.eras.length} 个价格档`)
       : ` · 第三方价目 ${count} 个模型`
-    return `${price}${holidays}${sync}`
+    return `${price}${holidayText}${sync}`
   })()
 
   return (

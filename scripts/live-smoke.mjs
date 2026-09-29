@@ -8,7 +8,8 @@
  *
  *   [1] 官方价格页两页 → 解析 → 与我们**写死的现役档**逐格对比（这一条等于每天给价目表对账）；
  *   [2] models.dev 注册表 → 压缩 → 与**内置快照**逐条对比，并确认 `deepseek` 整块被丢掉；
- *   [3] 余额端点的白名单与真实状态码（用**假 Key**，只打印状态码，绝不打印 Key）。
+ *   [3] 余额端点的白名单与真实状态码（用**假 Key**，只打印状态码，绝不打印 Key）；
+ *   [4] 法定节假日数据源（holiday-cn）→ 解析 → 与内置表对比，并确认补班日不在表里。
  *
  * 只读：**不写** `$DSH_HOME` 下任何文件（`fetchModelsDevPrices` 只返回表，落盘是调用方的事）。
  * 需要网络；失败会如实打印 ✗，不代表插件坏了，只代表这一次没复核成。
@@ -19,7 +20,7 @@ import { mkdirSync } from 'node:fs'
 const OUT = 'test/.build/live-smoke'
 mkdirSync(OUT, { recursive: true })
 await build({
-  entryPoints: ['src/price-sync.ts', 'src/pricing.ts', 'src/balance.ts'],
+  entryPoints: ['src/price-sync.ts', 'src/pricing.ts', 'src/balance.ts', 'src/holiday-sync.ts'],
   outdir: OUT,
   bundle: true,
   format: 'esm',
@@ -32,6 +33,7 @@ await build({
 const sync = await import(`../${OUT}/price-sync.mjs`)
 const pricing = await import(`../${OUT}/pricing.mjs`)
 const balance = await import(`../${OUT}/balance.mjs`)
+const holidays = await import(`../${OUT}/holiday-sync.mjs`)
 
 let failures = 0
 const line = (label, ok, detail) => {
@@ -141,6 +143,39 @@ try {
     `HTTP ${res.status} · ${text.slice(0, 100)}`)
 } catch (error) {
   line('端点可达', false, error instanceof Error ? error.message : String(error))
+}
+
+// ── [4] 法定节假日数据源（holiday-cn）───────────────────────────────────────
+console.log('\n[4] 法定节假日数据源（真实网络；只要今年与明年）')
+{
+  const wanted = holidays.holidayYearsWanted(Date.now())
+  const result = await holidays.fetchHolidayYears(wanted)
+  line(`今年 + 明年的入口都能到达（${wanted.join('、')}）`,
+    result.failed.length === 0,
+    `拿到 ${result.fetched.join('、') || '(无)'}；未公布 ${result.unpublished.join('、') || '(无)'}；失败 ${result.failed.join('、') || '(无)'}`)
+  const current = wanted[0]
+  const fromCurrent = result.days.filter(date => date.slice(0, 4) === String(current))
+  line(`${current} 年拿到了放假日期（${fromCurrent.length} 天）`, fromCurrent.length > 0)
+  /** 补班日必须**不在**表里：2026 年的 09-20 / 10-10 是调休上班的周末。 */
+  const known = current === 2026 ? ['2026-09-20', '2026-10-10'] : []
+  line('补班日没有混进"放假"表里（否则那两天的金额会差 2 倍）',
+    known.every(date => !result.days.includes(date)), `检查了 ${known.join('、') || '(这一年没有已知补班日)'}`)
+  /** 内置表那份（2026 中秋/国庆）必须被数据源覆盖或包含，否则说明数据源口径变了。 */
+  if (current === 2026) {
+    const builtin = pricing.DEFAULT_PEAK_HOLIDAYS
+    line('内置表那 10 天在数据源里同样标为放假（两边口径一致）',
+      builtin.every(date => result.days.includes(date)),
+      builtin.filter(date => !result.days.includes(date)).join('、'))
+  } else {
+    line('今年不是 2026，跳过"与内置表对比"（内置表只覆盖 2026）', true, `今年 = ${current}`)
+  }
+  /**
+   * 生效表 = 手填 > 自动 ∪ 内置。这里模拟"没有手填"的情形，确认并集不会把内置那 10 天弄丢。
+   */
+  const effective = pricing.effectiveHolidays(undefined, result.days)
+  line('生效表把自动那份与内置表并起来（来源标 auto）',
+    effective.source === 'auto' && pricing.DEFAULT_PEAK_HOLIDAYS.every(date => effective.days.includes(date)),
+    `来源 ${effective.source} · 自动 ${effective.autoCount} 天 · 生效 ${effective.days.length} 天`)
 }
 
 console.log(`\n${failures === 0 ? '全部复核通过' : `${failures} 项没通过`}（本次只读：没有写 $DSH_HOME 下任何文件）`)

@@ -126,6 +126,10 @@ export const WEEKEND_OFFPEAK_AT_MS = Date.parse('2026-08-22T16:00:00Z')
  *
  * ⚠️ 国务院每年底才公布次年安排，这份表**必须跟着发版更新**；用户也能在设置里整份覆盖
  * （见 `settings-contract.ts` 的 `peakHolidays`），所以官方改安排时不必等我们发版。
+ *
+ * 0.11.0 起多了一条**自动获取**的路（设置页「金额」→「自动同步官方价与节假日」）：抓回来的
+ * 日期不会替换这份表，而是与它**取并集**（见 {@link effectiveHolidays}）—— 因为自动获取只
+ * 覆盖"今年 + 明年"，拿它替换会把更早年份的日期弄丢，让旧会话的历史金额被重新按高峰算。
  */
 export const DEFAULT_PEAK_HOLIDAYS: readonly string[] = [
   '2026-09-25', '2026-09-26', '2026-09-27',
@@ -158,6 +162,56 @@ export function parseHolidays(raw: unknown): readonly string[] | undefined {
   const dates = [...new Set(raw.filter(isDayKey))].sort()
   if (dates.length === 0) return undefined
   return dates.slice(0, 400)
+}
+
+/** 「当前生效的节假日表」是怎么来的。 */
+export type HolidaySource = 'manual' | 'auto' | 'builtin'
+
+/** {@link effectiveHolidays} 的结果。 */
+export interface EffectiveHolidays {
+  /** 真正参与峰谷判定的日期表（北京日历日，已排序去重）。 */
+  readonly days: readonly string[]
+  /** 这份表从哪来：用户手填 / 自动获取 / 内置。 */
+  readonly source: HolidaySource
+  /** 自动获取那份的天数（0 = 没有自动获取的数据）。 */
+  readonly autoCount: number
+  /** 用户手填那份的天数（0 = 没手填）。 */
+  readonly manualCount: number
+}
+
+/**
+ * 合成"当前生效的节假日表"（0.11.0）：**手填 > 自动获取 ∪ 内置**。
+ *
+ * 三条规则，每条都有理由：
+ *
+ * 1. **手填优先**，而且**完全覆盖**自动获取的那份（不是合并）。手填是用户显式表达的意思，
+ *    后台悄悄抓回来的表不该盖过它 —— 这也是 0.10.0 的语义（那时是"手填覆盖内置"）。
+ * 2. **自动获取那份与内置表取并集**，而不是替换。理由在"历史账"：自动获取的表只保留
+ *    "今年 + 明年"（见 `holiday-sync.ts` 的 `holidayYearsWanted`），到了 2027 年 1 月，
+ *    2026 年中秋/国庆那几天就不在里面了 —— 若拿它替换内置表，**2026 年 9 月的旧会话会被
+ *    重新按高峰价显示，整整 2 倍**（折叠是按事件时刻判档的）。并集保证内置表钉住的那几天
+ *    永远还在，而多出来的日期只会把峰价改成谷价。
+ * 3. 两边都没有 → 内置表（插件永远有一份能用的表，离线也不瞎算）。
+ *
+ * @param manual 设置里的 `peakHolidays`（未消毒的线上值）。
+ * @param auto 同步来的节假日（`syncedPrices.holidays`，同样是线上值）。
+ * @returns 生效日期表与它的来源（界面照这个显示"当前生效：N 个日期（来源）"）。
+ */
+export function effectiveHolidays(manual: unknown, auto: unknown): EffectiveHolidays {
+  const manualDays = parseHolidays(manual) ?? []
+  const autoDays = parseHolidays(auto) ?? []
+  const manualCount = manualDays.length
+  const autoCount = autoDays.length
+  if (manualCount > 0) {
+    return { days: manualDays, source: 'manual', autoCount, manualCount }
+  }
+  if (autoCount === 0) {
+    return { days: DEFAULT_PEAK_HOLIDAYS, source: 'builtin', autoCount, manualCount }
+  }
+  // 并集后按**升序**排、只保留最后 400 条（= 最近的那些年份）：越界时丢掉的是最早的历史日期，
+  // 而不是刚抓回来的新一年安排。
+  const merged = [...new Set([...DEFAULT_PEAK_HOLIDAYS, ...autoDays])].sort().slice(-400)
+  return { days: merged, source: 'auto', autoCount, manualCount }
 }
 
 /**

@@ -8,10 +8,13 @@
  * 非 DeepSeek 定价。于是这一张卡变成"金额"这一域的唯一入口，分四段：
  *
  *   1. **单价**：内置 DeepSeek 两个模型（峰谷两档）+ 用户自己加的行；
- *   2. **节假日**：北京日期表，命中即全天谷价（默认用内置那份）；
- *   3. **同步**：官方价 / 第三方价目两个独立按钮（代价差两个数量级，见 `price-sync.ts`）；
+ *   2. **节假日**：北京日期表，命中即全天谷价（0.11.0 起由插件自动获取，手填则整份覆盖）；
+ *   3. **同步**：官方价 / 第三方价目 / 法定节假日三个独立按钮（代价差两个数量级，
+ *      见 `price-sync.ts` 与 `holiday-sync.ts`）；
  *   4. **余额**：DeepSeek 官方余额（Key 只在宿主半读，浏览器拿不到）。
  *   5. **峰谷提醒**：进峰/离峰前多久提醒、要不要发系统通知。
+ *   6. **计价说明**（0.11.0）：刊例价快照日期、价格档机制、峰谷判定、非 DeepSeek 口径 ——
+ *      这几句原本印在金额胶囊的明细浮层里，用户 2026-09-29 要求"浮层只留数字，说明挪到设置页"。
  *
  * ## 三件容易做错的事（0.9.1 就在处理，别改坏）
  *
@@ -32,14 +35,14 @@
  */
 import React from 'react'
 import {
-  BUILTIN_PRICING_MODELS, CNY_PER_USD, DEFAULT_PEAK_HOLIDAYS, MODEL_ALIASES, PRICE_FIELDS,
-  customPricingModels, isDayKey, isDeepSeekRoute, isKnownModel, officialTripleOf, overrideValueOf,
-  parsePriceText, withOverrideValue, withoutPricingModel,
+  BUILTIN_PRICING_MODELS, CNY_PER_USD, MODEL_ALIASES, PRICE_FIELDS, PRICE_VERIFIED_AT,
+  customPricingModels, effectiveHolidays, isDayKey, isDeepSeekRoute, isKnownModel, officialTripleOf,
+  overrideValueOf, parsePriceText, withOverrideValue, withoutPricingModel,
   type PriceField, type PriceOverrideTable,
 } from '../pricing.ts'
 import {
-  BALANCE_ENABLED_FIELD, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD, PRICE_AUTO_SYNC_FIELD,
-  PRICE_OVERRIDES_FIELD,
+  BALANCE_ENABLED_FIELD, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
+  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD,
   type ComposerUxSettings, type SettingsField,
 } from '../settings-contract.ts'
 import { PROVIDER_PRICES_SNAPSHOT_AT } from '../provider-prices.ts'
@@ -119,8 +122,8 @@ export function CostCardBody(props: {
   const [addNote, setAddNote] = React.useState('')
   /** 刚加进来、还没填任何数字的行（填了第一格就落进覆盖价表，不再需要它）。 */
   const [pending, setPending] = React.useState<readonly string[]>([])
-  /** 节假日文本框（一行一个北京日期）。 */
-  const [holidayText, setHolidayText] = React.useState(() => (settings.peakHolidays ?? DEFAULT_PEAK_HOLIDAYS).join('\n'))
+  /** 节假日文本框（一行一个北京日期）——**只放用户手填的那份**，自动获取的不进这里。 */
+  const [holidayText, setHolidayText] = React.useState(() => (settings.peakHolidays ?? []).join('\n'))
   const [holidayNote, setHolidayNote] = React.useState('')
   /** 最近一次写进设置的那份表（用来识别回声）。 */
   const lastWritten = React.useRef<PriceOverrideTable | undefined>(settings.priceOverrides)
@@ -150,7 +153,7 @@ export function CostCardBody(props: {
   // ⚠️ 依赖必须是**内容字符串**而不是数组引用：设置一被写入，`settings.peakHolidays` 就是一个
   // 新数组，按引用做依赖会让这个 effect 在**任何**设置写入后都跑一遍 —— 用户在文本框里敲了
   // 半天还没点保存，随手勾一下"余额开关"就把他的输入清掉了。
-  const savedHolidayText = (settings.peakHolidays ?? DEFAULT_PEAK_HOLIDAYS).join('\n')
+  const savedHolidayText = (settings.peakHolidays ?? []).join('\n')
   React.useEffect(() => {
     setHolidayText(savedHolidayText)
   }, [savedHolidayText])
@@ -281,6 +284,13 @@ export function CostCardBody(props: {
 
   const synced = settings.syncedPrices
   const alert = settings.peakAlert
+  /**
+   * 当前**真正生效**的节假日表（0.11.0）：手填 > 自动获取 ∪ 内置。
+   *
+   * 与宿主半共用同一个纯函数（`pricing.ts` 的 `effectiveHolidays`）——两边各算一遍迟早分叉，
+   * 而分叉的后果是"设置页说 27 天、峰谷提醒却按 10 天算"，用户完全无法解释。
+   */
+  const holidayInfo = effectiveHolidays(settings.peakHolidays, synced?.holidays)
 
   return (
     <div>
@@ -289,12 +299,31 @@ export function CostCardBody(props: {
         <strong>留空＝沿用官方价</strong>（输入框里的灰字就是官方价），填了才算覆盖。
         单位是<strong>元 / 1M tokens</strong>；DeepSeek 高峰价是空闲价的 2 倍。
       </p>
-      <p style={hintInfo}>
-        峰谷按<strong>每笔用量真正发生的时间</strong>判定（官方规则：北京时间工作日
-        09:00–12:00、14:00–18:00 为高峰，<strong>不含法定节假日</strong>；周末与节假日全天谷价），
-        而且按<strong>当时生效的价格档</strong>结算 —— 官方 2026-09-10 调过一次 Flash 的价，
-        所以 8 月跑的会话永远按 8 月的价算，不会因为你今天同步了新价而变。
-      </p>
+
+      {/* ── 计价说明（0.11.0）──────────────────────────────────────────────
+          这几句原本是金额胶囊明细浮层里的最后三行。用户 2026-09-29 拍板"浮层只留数字
+          （峰谷状态 + 两行单价），说明挪到设置页"—— 于是这里多一段，浮层那边少三行。
+          动态信息（本会话跨了哪些价档、这份价是不是你填的）留在浮层，静态说明只此一份。 */}
+      <div style={{ ...row, alignItems: 'flex-start', marginTop: 6 }}>
+        <div style={rowText}>
+          <div style={rowTitle}>计价说明</div>
+          <div style={rowDesc}>
+            <strong>刊例价快照：</strong>{PRICE_VERIFIED_AT}
+            （官方价格页的核对日期；你填了覆盖价就以你填的为准）。
+            <br />
+            <strong>价格档：</strong>按每笔用量<strong>发生时刻</strong>生效的档结算 —— 官方
+            2026-09-10 调过一次 Flash 的价，所以 8 月跑的会话永远按 8 月的价算，不会因为你今天
+            同步了新价而变。跨了档的会话在金额胶囊里会多一行"按各自发生时刻"的说明。
+            <br />
+            <strong>峰谷：</strong>北京时间工作日 09:00–12:00、14:00–18:00 为高峰（
+            <strong>不含法定节假日</strong>）；周末与法定节假日<strong>全天谷价</strong>。
+            <br />
+            <strong>非 DeepSeek：</strong>按同步来的第三方价目算，未含中转加价，
+            <strong>实际扣费以各家账单为准</strong>；价目里没有的模型会显示「未定价」（按 0 计），
+            点下面「同步第三方价目」或直接给那一行填价即可。
+          </div>
+        </div>
+      </div>
 
       {rows.map(key => {
         const builtin = BUILTIN_PRICING_MODELS.includes(key)
@@ -388,21 +417,27 @@ export function CostCardBody(props: {
       </div>
       {addNote !== '' && <p style={hintError}>{addNote}</p>}
 
-      {/* ── 节假日（0.10.0）────────────────────────────────────────────── */}
+      {/* ── 节假日（0.10.0，0.11.0 起自动获取）──────────────────────────── */}
       <div style={{ ...row, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 6 }}>
         <div style={rowText}>
           <div style={rowTitle}>法定节假日（北京日期，一行一个）</div>
           <div style={rowDesc}>
             命中的一天<strong>全天按谷价</strong>。官方规则把中国法定节假日排除在高峰之外，
-            不算的话国庆那种日子会把工作日的高峰两段当峰价——<strong>整整 2 倍</strong>。
-            留空就用内置那份（2026 中秋 09-25～27、国庆 10-01～07）。
+            不算的话国庆那种日子会把工作日的高峰两段按峰价算——<strong>整整 2 倍</strong>。
             <br />
-            注：调休上班的周末<strong>仍然按谷价</strong>（官方说的是"周末全天谷价"）。
+            <strong>留空 = 用自动获取的那份</strong>（{HOLIDAY_SOURCE_LABEL}，每次取"今年 +
+            明年"，国务院年底一公布次年安排就会被取回）；没取到过就用<strong>内置</strong>那份
+            （2026 中秋 09-25～27、国庆 10-01～07）。这里填了则<strong>整份覆盖</strong>
+            自动获取与内置那两份。
+            <br />
+            注：<strong>调休补班的周末仍按谷价</strong>（官方说的是"周六、周日全天谷价"，
+            2026-10-10 那个周六也算谷价），所以自动获取只收"放假"的那几天。
           </div>
         </div>
         <textarea
           style={{ ...textInput, width: 260, height: 96, flex: 'none', fontFamily: 'monospace' }}
           aria-label="法定节假日日期表"
+          placeholder="留空 = 用自动获取的那份（没取到就用内置）"
           value={holidayText}
           onChange={event => setHolidayText(event.target.value)}
           spellCheck={false}
@@ -412,15 +447,27 @@ export function CostCardBody(props: {
           <button
             type="button"
             style={pill}
-            onClick={() => { clearField(PEAK_HOLIDAYS_FIELD); setHolidayNote('已恢复为内置那份节假日表') }}
-          >恢复内置</button>
+            onClick={() => { clearField(PEAK_HOLIDAYS_FIELD); setHolidayNote('已清空 = 用自动获取的那份节假日表') }}
+          >恢复默认</button>
         </div>
       </div>
       {holidayNote !== '' && <p style={hintInfo}>{holidayNote}</p>}
       <p style={hintInfo}>
-        当前生效：{(settings.peakHolidays ?? DEFAULT_PEAK_HOLIDAYS).length} 个日期
-        {settings.peakHolidays === undefined ? '（内置）' : '（自定义）'}
+        当前生效：<strong>{holidayInfo.days.length} 个日期</strong> —— 来源：
+        {holidayInfo.source === 'manual'
+          ? <>你上面填的那份（自定义；自动获取那份有 {holidayInfo.autoCount} 个日期，现在不参与）</>
+          : holidayInfo.source === 'auto'
+            ? <>自动获取（{stampText(synced?.holidaysAt)}，共 {holidayInfo.autoCount} 个日期；
+              与内置表取并集后是 {holidayInfo.days.length} 个）</>
+            : <>内置（国务院办公厅 2026 年安排）</>}
+        {holidayInfo.source !== 'manual' && settings.priceAutoSync !== true
+          ? '；打开下面「同步价目」里的自动同步后，插件会自己取次年安排'
+          : ''}
       </p>
+      <details style={{ ...rowDesc, cursor: 'pointer' }}>
+        <summary>看当前生效的日期</summary>
+        <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{holidayInfo.days.join('、')}</span>
+      </details>
 
       {/* ── 峰谷提醒（0.10.0）──────────────────────────────────────────── */}
       <div style={{ ...row, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 6 }}>
@@ -531,14 +578,16 @@ export function CostCardBody(props: {
         </div>
       </div>
 
-      {/* ── 价目同步（0.10.0）──────────────────────────────────────────── */}
+      {/* ── 同步（0.10.0 价目 / 0.11.0 节假日）──────────────────────────── */}
       <div style={{ ...row, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 6 }}>
         <div style={rowText}>
-          <div style={rowTitle}>同步价目</div>
+          <div style={rowTitle}>同步</div>
           <div style={rowDesc}>
             「官方价」抓官方价格页两页（约 24 KB）：<strong>有变化才新增一个价格档</strong>，
             历史用量仍按发生时刻的旧档结算。「第三方价目」抓 models.dev（约 5 MB，
-            压缩后约 450 KB 落盘），给非 DeepSeek 模型用。<strong>抓失败不会覆盖本地价。</strong>
+            压缩后约 450 KB 落盘），给非 DeepSeek 模型用。「法定节假日」抓
+            {HOLIDAY_SOURCE_LABEL}（每年一个几 KB 的 JSON，只收"放假"那几天）。
+            <strong>三个都是抓失败不会覆盖本地数据。</strong>
             <br />
             没点过「同步第三方价目」时，非 DeepSeek 模型会用<strong>内置快照价</strong>
             （models.dev 快照 {PROVIDER_PRICES_SNAPSHOT_AT}，11 个 provider / 346 个模型，
@@ -552,15 +601,18 @@ export function CostCardBody(props: {
           <button type="button" style={pill} disabled={sync.busy !== null} onClick={() => sync.sync('modelsDev')}>
             {sync.busy === 'modelsDev' ? '同步中…' : '同步第三方价目'}
           </button>
+          <button type="button" style={pill} disabled={sync.busy !== null} onClick={() => sync.sync('holidays')}>
+            {sync.busy === 'holidays' ? '获取中…' : '获取法定节假日'}
+          </button>
           <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
               type="checkbox"
               checked={settings.priceAutoSync}
-              aria-label="自动同步官方价"
+              aria-label="自动同步官方价与节假日"
               onChange={event => setField(PRICE_AUTO_SYNC_FIELD, event.target.checked)}
             />
-            <span title="打开后宿主半每天最多自动抓一次官方价格页；抓失败只写日志，不会改本地价">
-              自动同步官方价（每天一次）
+            <span title="打开后宿主半每天最多自动抓一次官方价格页，并每 30 天复核一次法定节假日；抓失败只写日志，不会改本地数据">
+              自动同步（价格每天一次、节假日每 30 天复核）
             </span>
           </label>
         </div>
@@ -568,6 +620,10 @@ export function CostCardBody(props: {
           官方价上次同步：{stampText(synced?.fetchedAt)}；
           第三方价目上次同步：{stampText(synced?.modelsDevAt)}
           {typeof synced?.modelsDevCount === 'number' ? `（${synced.modelsDevCount} 个模型）` : ''}
+          ；法定节假日上次获取：{stampText(synced?.holidaysAt)}
+          {Array.isArray(synced?.holidayYears) && synced.holidayYears.length > 0
+            ? `（已有 ${synced.holidayYears.join('、')} 年）`
+            : ''}
           {typeof synced?.eras?.length === 'number' && synced.eras.length > 0 ? `；已累积 ${synced.eras.length} 个同步来的价格档` : ''}
         </div>
       </div>

@@ -665,10 +665,24 @@ console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价�
   const chip = readFileSync('src/client/CostChipEntry.tsx', 'utf8')
   const balancePath = /BALANCE_API_PATH = '([^']+)'/.exec(readFileSync('src/balance.ts', 'utf8'))?.[1]
 
-  check('节假日表：一个 textarea + 保存 / 恢复内置 两个按钮',
+  check('节假日表：一个 textarea + 保存 / 恢复默认 两个按钮',
     card.includes('aria-label="法定节假日日期表"')
-    && card.includes('onClick={saveHolidays}') && card.includes('恢复内置')
+    && card.includes('onClick={saveHolidays}') && card.includes('恢复默认')
     && card.includes('clearField(PEAK_HOLIDAYS_FIELD)'))
+  // 0.11.0：节假日改成"自动获取 + 手填覆盖"，所以多了获取按钮与生效来源那行
+  check('0.11.0 节假日：第三个同步按钮「获取法定节假日」走 sync.sync(\'holidays\')',
+    card.includes("sync.sync('holidays')") && card.includes('获取法定节假日'))
+  check('0.11.0 节假日：文本框只放**手填**那份（自动获取的不进输入框，留空=用自动/内置）',
+    card.includes('(settings.peakHolidays ?? []).join')  // initial + savedHolidayText 两处
+    && !card.includes('(settings.peakHolidays ?? DEFAULT_PEAK_HOLIDAYS).join'))
+  check('0.11.0 节假日：当前生效那行说的是**生效表**的来源与天数（与宿主同一份函数）',
+    card.includes('effectiveHolidays(settings.peakHolidays, synced?.holidays)')
+    && card.includes('HOLIDAY_SOURCE_LABEL')
+    && card.includes('holidayInfo.days.length'))
+  check('0.11.0 节假日：自动获取的那份与内置取并集（浮层/宿主/设置页三处同源）',
+    card.includes('与内置表取并集后是'))
+  check('0.11.0：卡里新增「计价说明」块，把浮层那三行静态说明接过来',
+    card.includes('计价说明') && card.includes('PRICE_VERIFIED_AT') && card.includes('价格档：'))
   check('节假日只收 YYYY-MM-DD，坏行逐条点名（不静默丢）',
     card.includes('isDayKey(item)') && card.includes('这些不是合法日期'))
   check('峰谷提醒一组控件（启用 / 提前分钟 / 进峰前 / 离峰前 / 系统通知）',
@@ -688,8 +702,8 @@ console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价�
     && card.includes('disabled={sync.busy !== null}'))
   check('同步结果如实显示（失败走失败态样式，不谎报"已同步"）',
     card.includes('style={sync.ok ? hintInfo : hintError}'))
-  check('卡内显式标出"抓失败不会覆盖本地价"',
-    card.includes('抓失败不会覆盖本地价'))
+  check('卡内显式标出"抓失败不会覆盖本地数据"',
+    card.includes('抓失败不会覆盖本地数据'))
   check('第三方模型行只有一档（平坦价），DeepSeek 行才两档',
     card.includes('const twoTier = isDeepSeekRoute(provider, model)')
     && card.includes('(twoTier ? [true, false] : [false])'))
@@ -714,13 +728,30 @@ console.log('11.1 「金额」0.10.0：节假日 / 峰谷提醒 / 余额 / 价�
     String(balancePath))
   check('余额与同步都不往设置里写值（余额是账户事实，不进设置文档）',
     !admin.includes('setField'))
-  // 0.10.0 后补：自动同步开关（默认关）与"内置快照价"的如实标注
-  check('自动同步官方价：卡里一个复选框，写的是 PRICE_AUTO_SYNC_FIELD',
-    card.includes('aria-label="自动同步官方价"')
+  // 0.10.0 后补：自动同步开关（默认关）与"内置快照价"的如实标注；0.11.0 起这把开关
+  // **也管节假日**（同一个语义"这个插件可以自己出网"，没必要两个开关）。
+  check('自动同步：卡里一个复选框，写的是 PRICE_AUTO_SYNC_FIELD',
+    card.includes('aria-label="自动同步官方价与节假日"')
     && card.includes('setField(PRICE_AUTO_SYNC_FIELD, event.target.checked)')
     && card.includes('checked={settings.priceAutoSync}'))
-  check('自动同步说清"每天一次"，不是含糊的"自动更新"',
-    card.includes('自动同步官方价（每天一次）'))
+  check('自动同步说清两件事的频率（价格每天一次、节假日每 30 天复核）',
+    card.includes('自动同步（价格每天一次、节假日每 30 天复核）'))
+  check('同步区状态行如实列出"节假日上次获取"与已有年份',
+    card.includes('法定节假日上次获取：') && card.includes('synced.holidayYears.join'))
+  // 0.11.0：面板瘦身 —— 那三行说明的去留（用户 2026-09-29 要求"点开胶囊更简洁"）
+  check('0.11.0 面板：快照行与峰谷判定段已从浮层移走（设置页留一份）',
+    // ⚠️ 这里只查"代码里还在不在"：文件头的注释里刻意留着"刊例价快照行"这个说法（记录改动），
+    // 拿它当判据会假红 —— 所以查 import 与那两处 JSX 文本。
+    !chip.includes('PRICE_VERIFIED_AT')
+    && !chip.includes('刊例价快照 ${PRICE_VERIFIED_AT}')
+    && !chip.includes("note('峰谷按每笔用量发生的时间判定"))
+  check('0.11.0 面板：价格档说明改成"只在非默认时出现"（跨档才提，单档不占行）',
+    chip.includes('erasUsed.length > 1 || erasUsed[0] !== eraIdAt(Date.now(), eras)'))
+  check('0.11.0 面板：覆盖价用「已自定义」小标，不再整行说明',
+    chip.includes("overridden ? ' · 已自定义' : ''"))
+  check('0.11.0 同步封装：三条路（官方价 / 第三方价目 / 节假日）',
+    admin.includes("readonly busy: 'official' | 'modelsDev' | 'holidays' | null")
+    && admin.includes("sync: (target: 'official' | 'modelsDev' | 'holidays')"))
   check('说清没同步过时用内置快照价，并把快照日期写出来（不假装是实时价）',
     card.includes('内置快照价') && card.includes('PROVIDER_PRICES_SNAPSHOT_AT'))
   check('明细页也标明"有 N 行用的是内置快照价"（并指向同步按钮）',

@@ -25,6 +25,13 @@ import {
 
 /** 条目种类的中文名（与成品里的节标题同一套说法）。 */
 const KIND_LABEL: Record<string, string> = {
+  // 0.14.0（上游本体）六类
+  user_requirement: '你要的',
+  quality_interpretation: '质量解读',
+  observed_fact: '已核实',
+  implementation_option: '可逆细节',
+  proposal: '建议',
+  // 0.13.x 旧本体（装配仍认，标签保留）
   rewrite: '改写',
   requirement: '补全·要求',
   quality: '补全·质量',

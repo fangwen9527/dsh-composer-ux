@@ -21,7 +21,10 @@
  *   ② 只丢不编 —— 补不出的东西不会出现在成品里；
  *   ③ 降级要出声 —— 省略多少条、为什么，成品与面板都要看得见。
  */
-import { OPTIMIZE_ITEM_MAX_CHARS, OPTIMIZE_MAX_ITEMS, OPTIMIZE_ITEM_KINDS, OPTIMIZE_UNKNOWN_CLASSES } from './optimizer-prompt.ts'
+import {
+  OPTIMIZE_CANDIDATE_MAX_CHARS, OPTIMIZE_CANDIDATES_MAX, OPTIMIZE_ITEM_KINDS, OPTIMIZE_ITEM_MAX_CHARS,
+  OPTIMIZE_MAX_ITEMS, OPTIMIZE_RATIONALE_MAX_CHARS, OPTIMIZE_UNKNOWN_CLASSES,
+} from './optimizer-prompt.ts'
 import { OPTIMIZE_OUTPUT_MAX } from './settings-contract.ts'
 
 /** 条目种类。 */
@@ -51,6 +54,12 @@ export interface OptimizeItem {
   readonly quoteSource?: 'user' | 'none'
   readonly unknownClass?: OptimizeUnknownClass
   readonly blocking?: boolean
+  /** 质量解读的依据说明（0.14.0：`quality_interpretation` 必填）。 */
+  readonly rationale?: string
+  /** 事实的来源（0.14.0：`observed_fact` 必填；只列过目录不算）。 */
+  readonly sourceRefs?: readonly string[]
+  /** 并列候选（0.14.0：只允许 `unknown` + `user_preference`，最多 3 个）。 */
+  readonly candidates?: readonly { readonly id: string; readonly text: string; readonly impact?: string }[]
 }
 
 /** 一条被丢掉的条目（记账用：面板会显示条数与原因）。 */
@@ -111,9 +120,10 @@ const TIER_BUDGET: Record<string, { readonly factor: number; readonly floor: num
 const TIER_KINDS: Record<string, readonly OptimizeItemKind[]> = {
   // `off` 档不调用模型（宿主半会拦），空数组只是防御。
   off: [],
-  light: ['rewrite', 'unknown'],
-  standard: ['rewrite', 'requirement', 'quality', 'unknown'],
-  heavy: ['rewrite', 'requirement', 'quality', 'unknown', 'plan', 'risk'],
+  light: ['rewrite', 'unknown', 'user_requirement'],
+  standard: ['rewrite', 'requirement', 'quality', 'unknown', 'user_requirement', 'quality_interpretation', 'implementation_option'],
+  heavy: ['rewrite', 'requirement', 'quality', 'unknown', 'plan', 'risk',
+    'user_requirement', 'quality_interpretation', 'implementation_option', 'observed_fact', 'proposal'],
 }
 
 /**
@@ -317,7 +327,45 @@ export function validateRawItem(
     }
   }
 
+  // ── 0.14.0（上游硬规则）：这几类的必填字段各不相同，缺了就**只丢这一条**并记账 ──
+  const rationale = typeof row.rationale === 'string' ? row.rationale.trim() : ''
+  if (kind === 'quality_interpretation' && rationale === '') {
+    return { kind: 'dropped', dropped: { id, kind, reason: '缺少 rationale（质量解读要说清它来自原话哪几个字）' }, warnings }
+  }
+  const sourceRefs = Array.isArray(row.sourceRefs)
+    ? row.sourceRefs.filter(value => typeof value === 'string' && value.trim() !== '').map(value => String(value).trim())
+    : []
+  if (kind === 'observed_fact' && sourceRefs.length === 0) {
+    return { kind: 'dropped', dropped: { id, kind, reason: '缺少 sourceRefs（只有真读到才算事实；只列过目录不算）' }, warnings }
+  }
+  // 候选（上游：只允许 unknown + user_preference，最多 3 个、每个 text ≤200 字）——
+  // 它不是新增要求、也不构成授权，所以给错地方就当没有，并如实记一句警告。
+  const rawCandidates = Array.isArray(row.candidates) ? row.candidates : []
+  const candidates: { id: string; text: string; impact?: string }[] = []
+  if (rawCandidates.length > 0 && !(kind === 'unknown' && (row.unknownClass ?? 'user_preference') === 'user_preference')) {
+    warnings.push(`${id}：candidates 只允许用在 unknown + user_preference 上，已忽略`)
+  } else {
+    for (const entry0 of rawCandidates) {
+      if (typeof entry0 !== 'object' || entry0 === null) continue
+      const row0 = entry0 as Record<string, unknown>
+      const cid = typeof row0.id === 'string' ? row0.id.trim() : ''
+      const ctext = typeof row0.text === 'string' ? row0.text.trim() : ''
+      if (cid === '' || ctext === '') continue
+      if (candidates.length >= OPTIMIZE_CANDIDATES_MAX) {
+        warnings.push(`${id}：候选超过 ${OPTIMIZE_CANDIDATES_MAX} 个，多的已忽略`)
+        break
+      }
+      const impact = typeof row0.impact === 'string' ? row0.impact.trim() : ''
+      candidates.push({
+        id: cid,
+        text: ctext.length > OPTIMIZE_CANDIDATE_MAX_CHARS ? ctext.slice(0, OPTIMIZE_CANDIDATE_MAX_CHARS) : ctext,
+        ...(impact === '' ? {} : { impact }),
+      })
+    }
+  }
+
   const needsQuote = kind === 'rewrite' || kind === 'requirement' || kind === 'quality'
+    || kind === 'user_requirement'
   const quote = typeof row.quote === 'string' ? row.quote.trim() : ''
   if (needsQuote) {
     if (quote === '') {
@@ -339,7 +387,16 @@ export function validateRawItem(
       }
       seenRewrite.add(key)
     }
-    return { kind: 'item', item: { id, kind: kind as OptimizeItemKind, text, quote, span, quoteSource: 'user' }, warnings }
+    return {
+      kind: 'item',
+      item: {
+        id, kind: kind as OptimizeItemKind, text, quote, span, quoteSource: 'user',
+        ...(rationale === '' ? {} : { rationale: rationale.slice(0, OPTIMIZE_RATIONALE_MAX_CHARS) }),
+        ...(sourceRefs.length === 0 ? {} : { sourceRefs }),
+        ...(candidates.length === 0 ? {} : { candidates }),
+      },
+      warnings,
+    }
   }
 
   // unknown / plan / risk：引文可选。给了但对不上就如实记成"模型自己补的"，条目照常保留。
@@ -353,6 +410,10 @@ export function validateRawItem(
       id, kind: kind as OptimizeItemKind, text, quoteSource: span === undefined ? 'none' : 'user',
       ...(span === undefined ? {} : { span, quote }),
       ...(kind === 'unknown' ? { unknownClass: unknownClassOf(row.unknownClass), blocking: row.blocking === true } : {}),
+      // 0.14.0：这几类不走引文那条路径，但它们各自的必填字段要带上（否则成品里就丢了依据）。
+      ...(rationale === '' ? {} : { rationale: rationale.slice(0, OPTIMIZE_RATIONALE_MAX_CHARS) }),
+      ...(sourceRefs.length === 0 ? {} : { sourceRefs }),
+      ...(candidates.length === 0 ? {} : { candidates }),
     },
     warnings,
   }
@@ -553,6 +614,12 @@ export function scanOptimizeStream(buffer: string, original: string, tier: strin
 }
 
 /** 节的顺序即渲染顺序；`required` 的节**永不**因篇幅被丢（对方 compiler.js 的同一条纪律）。 */const SECTIONS: readonly { readonly key: OptimizeItemKind; readonly label: string; readonly required: boolean }[] = [
+  // 0.14.0（上游本体）：装配按 kind 分桶，所以"支持一类"就等于在这里加一节的标签。
+  { key: 'user_requirement', label: '你要的（每条都指回你原话里的某句）', required: true },
+  { key: 'quality_interpretation', label: '对质量词的理解', required: false },
+  { key: 'observed_fact', label: '已核实的事实（来自你项目里的文件）', required: false },
+  { key: 'implementation_option', label: '可逆的实现选择（不是你的要求，工作 AI 可自行调整）', required: false },
+  { key: 'proposal', label: '建议（可能不被采纳）', required: false },
   { key: 'requirement', label: '补全要求（每条都指回你原话里的某句）', required: true },
   { key: 'quality', label: '对质量词的理解', required: false },
   { key: 'plan', label: '分阶段执行计划', required: false },
@@ -561,7 +628,10 @@ export function scanOptimizeStream(buffer: string, original: string, tier: strin
 ]
 
 /** 超预算时的丢弃顺序：越靠前越先丢（与渲染顺序相反：越"附加"的越先丢）。 */
-const DROP_ORDER: readonly OptimizeItemKind[] = ['risk', 'plan', 'quality', 'unknown']
+const DROP_ORDER: readonly OptimizeItemKind[] = [
+  'proposal', 'implementation_option', 'observed_fact', 'quality_interpretation',
+  'risk', 'plan', 'quality', 'unknown',
+]
 
 /** 未决项的分类后缀：把对方 0.6 的三分类语义直接写进成品，工作 AI 才知道该怎么办。 */
 const UNKNOWN_SUFFIX: Record<OptimizeUnknownClass, string> = {
@@ -575,7 +645,22 @@ function lineFor(item: OptimizeItem): string {
   if (item.kind === 'unknown') {
     const cls = item.unknownClass ?? 'user_preference'
     const blocking = item.blocking === true ? '[挡住下一步] ' : ''
-    return `- ${blocking}${item.text}${UNKNOWN_SUFFIX[cls]}`
+    // 候选（上游：只用于 user_preference）——**不是新增要求、也不构成授权**，所以单独缩进列出。
+    const candidates = (item.candidates ?? []).length === 0
+      ? ''
+      : `\n${(item.candidates ?? []).map(c => `  · ${c.text}${c.impact === undefined ? '' : `（${c.impact}）`}`).join('\n')}`
+    return `- ${blocking}${item.text}${UNKNOWN_SUFFIX[cls]}${candidates}`
+  }
+  if (item.kind === 'quality_interpretation') {
+    const why = item.rationale === undefined ? '' : `（来自原话：「${item.rationale}」）`
+    return `- ${item.text}${why}`
+  }
+  if (item.kind === 'observed_fact') {
+    const from = (item.sourceRefs ?? []).length === 0 ? '' : `（依据：${(item.sourceRefs ?? []).join('、')}）`
+    return `- ${item.text}${from}`
+  }
+  if (item.kind === 'implementation_option' || item.kind === 'proposal') {
+    return `- ${item.text}`
   }
   const evidence = item.quote === undefined ? '' : `（依据："${item.quote}"）`
   return `- ${item.text}${evidence}`

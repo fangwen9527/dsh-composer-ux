@@ -98,7 +98,23 @@ export const OPTIMIZER_OUTPUT_CONTRACT = [
 ].join('\n')
 
 /** 模型可以产出的条目种类（宿主只认这些，其余整条丢弃并记账）。 */
-export const OPTIMIZE_ITEM_KINDS = ['rewrite', 'requirement', 'quality', 'unknown', 'plan', 'risk'] as const
+/**
+ * 条目类型（**可接受**的全集）。
+ *
+ * 0.14.0 起照上游 `dsh-prompt-optimizer` 的本体：
+ *   · `user_requirement`      用户明说的要求（**必须附逐字引文**）
+ *   · `quality_interpretation` 质量词怎么理解（要 `rationale` 指出来自原话哪几个字）
+ *   · `observed_fact`         真读到的事实（要 `sourceRefs`；只列过目录不算）
+ *   · `implementation_option` 可逆的实现细节（不是用户要求，工作 AI 可自行调整）
+ *   · `proposal`              建议（可能不被采纳）
+ *   · `unknown`               未决项（带 `unknownClass`；`user_preference` 可带候选）
+ * 后面四个是 0.13.x 的旧本体：装配仍认（兼容老数据），但提示词不再产出它们，S3c 删除。
+ */
+export const OPTIMIZE_ITEM_KINDS = [
+  'user_requirement', 'quality_interpretation', 'observed_fact',
+  'implementation_option', 'proposal', 'unknown',
+  'rewrite', 'requirement', 'quality', 'plan', 'risk',
+] as const
 
 /** 模型可以产出的未决项分类（缺省按"只有用户能定"处理，与对方 0.6 同口径）。 */
 export const OPTIMIZE_UNKNOWN_CLASSES = ['user_preference', 'lookupable_fact', 'implementation_detail'] as const
@@ -108,6 +124,14 @@ export const OPTIMIZE_MAX_ITEMS = 12
 
 /** 单条 `text` 的字符上限（超出就地截断并记账）。 */
 export const OPTIMIZE_ITEM_MAX_CHARS = 300
+
+/** 单条 `rationale`（质量解读的依据说明）的字符上限。 */
+export const OPTIMIZE_RATIONALE_MAX_CHARS = 160
+
+/** `unknown` 的候选上限（上游：最多 3 个，每个 text ≤200 字，且只允许用于 user_preference）。 */
+export const OPTIMIZE_CANDIDATES_MAX = 3
+/** 单个候选的 text 上限。 */
+export const OPTIMIZE_CANDIDATE_MAX_CHARS = 200
 
 /**
  * 各档的任务段（**可被设置页里的自定义提示词整体替换**的那部分）。

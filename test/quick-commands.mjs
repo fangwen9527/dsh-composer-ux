@@ -928,11 +928,14 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   check('预算有绝对上限（不随档位无限涨）',
     pure.optimizeBudgetFor('heavy', 1_000_000) <= 12_000)
   // 档位门：普通档不该出现 requirement / quality / plan / risk（提示词是请求，这里是保证）
-  check('档位允许的条目种类',
-    pure.allowedKindsFor('light').join(',') === 'rewrite,unknown'
+  check('档位允许的条目种类（旧本体 + 0.14.0 上游六类的三级放开）',
+    pure.allowedKindsFor('light').join(',') === 'rewrite,unknown,user_requirement'
     && pure.allowedKindsFor('standard').includes('requirement')
+    && pure.allowedKindsFor('standard').includes('user_requirement')
     && pure.allowedKindsFor('standard').includes('plan') === false
     && pure.allowedKindsFor('heavy').includes('risk')
+    && pure.allowedKindsFor('heavy').includes('proposal')
+    && pure.allowedKindsFor('light').includes('proposal') === false
     && pure.allowedKindsFor('???').join(',') === pure.allowedKindsFor('standard').join(','))
   const tierGated = pure.assembleCommand(original, parsed.items, { tier: 'light' })
   check('普通档即使拿到 requirement 也不渲染（档位承诺由宿主保证）',
@@ -2702,6 +2705,66 @@ console.log('5h. 关闭档（0.14.0）：不优化就是**一次模型调用都�
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previousHome
   }
+}
+
+console.log('5i. 上游六类本体（0.14.0 S3a）：必填字段与装配')
+{
+  const original = '帮我做个坦克模型，要真实帅气，单个 html 文件。'
+  const parse = rows => pure.parseOptimizeOutput(JSON.stringify({ items: rows }), original)
+
+  // user_requirement：必须有逐字引文（上游硬规则 1）
+  const reqNoQuote = parse([{ kind: 'user_requirement', text: '要单个 html 文件' }])
+  check('user_requirement 缺 quote ⇒ 只丢这一条',
+    reqNoQuote.items.length === 0 && reqNoQuote.dropped.length === 1 && /quote/.test(reqNoQuote.dropped[0].reason))
+  const reqBadQuote = parse([{ kind: 'user_requirement', text: '要单个 html 文件', quote: '这句话不在原话里' }])
+  check('user_requirement 引文不是逐字 ⇒ 丢掉', reqBadQuote.items.length === 0 && reqBadQuote.dropped.length === 1)
+  const reqOk = parse([{ kind: 'user_requirement', text: '要单个 html 文件', quote: '单个 html 文件' }])
+  check('user_requirement 引文逐字 ⇒ 收下', reqOk.items.length === 1 && reqOk.items[0].kind === 'user_requirement')
+
+  // quality_interpretation：必须有 rationale（上游硬规则 2）
+  const qiNo = parse([{ kind: 'quality_interpretation', text: '视觉上要像照片' }])
+  check('quality_interpretation 缺 rationale ⇒ 丢掉', qiNo.items.length === 0 && /rationale/.test(qiNo.dropped[0].reason))
+  const qiOk = parse([{ kind: 'quality_interpretation', text: '视觉上要像照片', rationale: '真实、帅气' }])
+  check('quality_interpretation 给了 rationale ⇒ 收下并保留它',
+    qiOk.items.length === 1 && qiOk.items[0].rationale === '真实、帅气')
+
+  // observed_fact：必须有 sourceRefs（上游硬规则 5：只列过目录不算）
+  const ofNo = parse([{ kind: 'observed_fact', text: '项目里用的是 Vite' }])
+  check('observed_fact 缺 sourceRefs ⇒ 丢掉', ofNo.items.length === 0 && /sourceRefs/.test(ofNo.dropped[0].reason))
+  const ofOk = parse([{ kind: 'observed_fact', text: '项目里用的是 Vite', sourceRefs: ['package.json'] }])
+  check('observed_fact 有来源 ⇒ 收下', ofOk.items.length === 1 && ofOk.items[0].sourceRefs[0] === 'package.json')
+
+  // implementation_option / proposal：不需要引文（它们**不是**用户要求）
+  const soft = parse([
+    { kind: 'implementation_option', text: '默认用浅色主题，可逆' },
+    { kind: 'proposal', text: '也可以顺手加个导出按钮' },
+  ])
+  check('可逆细节与建议不需要引文就不被丢', soft.items.length === 2 && soft.dropped.length === 0)
+
+  // unknown 的候选：只允许 user_preference，最多 3 个
+  const cand = parse([{
+    kind: 'unknown', unknownClass: 'user_preference', blocksAction: true, text: '「真实」指渲染还是材质？',
+    candidates: [{ id: 'a', text: '按 A 读', impact: '做成 A' }, { id: 'b', text: '按 B 读' }, { id: 'c', text: 'C' }, { id: 'd', text: 'D' }],
+  }])
+  check('候选最多保留 3 个（多的忽略并记账）',
+    cand.items.length === 1 && cand.items[0].candidates.length === 3
+    && cand.warnings.some(w => /候选超过/.test(w)))
+  const candWrong = parse([{
+    kind: 'user_requirement', text: '要单个 html 文件', quote: '单个 html 文件',
+    candidates: [{ id: 'a', text: '不该有' }],
+  }])
+  check('候选给在非 unknown 上 ⇒ 忽略并记警告（不冒充授权）',
+    candWrong.items.length === 1 && (candWrong.items[0].candidates ?? []).length === 0
+    && candWrong.warnings.some(w => /user_preference/.test(w)))
+
+  // 装配：上游本体**不改写原话**，只把辅助小节追加在后面
+  const assembled = pure.assembleCommand(original, [...reqOk.items, ...qiOk.items, ...soft.items], { tier: 'heavy' })
+  check('❗原话在成品里**逐字**保留（上游最硬的一条：不改写）',
+    assembled.text.startsWith(original), assembled.text.slice(0, 40))
+  check('成品里带上了辅助小节',
+    assembled.text.includes('【你要的') && assembled.text.includes('【对质量词的理解】')
+    && assembled.text.includes('【可逆的实现选择') && assembled.text.includes('【建议'))
+  check('质量解读把小节里带上 rationale（指回原话字眼）', assembled.text.includes('真实、帅气'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

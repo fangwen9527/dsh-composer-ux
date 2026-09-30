@@ -1198,6 +1198,31 @@ const cases = [
     expect: "关闭档被挡下来（ok=false，不会假装优化过）",
   },
 
+  {
+    name: "EM 质量解读不要求 rationale（\"高级感\"这类词又变成没有依据的形容词）",
+    file: "src/optimizer-assemble.ts",
+    from: "  if (kind === 'quality_interpretation' && rationale === '') {",
+    to: "  if (false) {",
+    test: "test/quick-commands.mjs",
+    expect: "quality_interpretation 缺 rationale ⇒ 丢掉",
+  },
+  {
+    name: "EN 事实不要求来源（模型可以凭空\"读到\"项目里有什么）",
+    file: "src/optimizer-assemble.ts",
+    from: "  if (kind === 'observed_fact' && sourceRefs.length === 0) {",
+    to: "  if (false) {",
+    test: "test/quick-commands.mjs",
+    expect: "observed_fact 缺 sourceRefs ⇒ 丢掉",
+  },
+  {
+    name: "EO 候选不设上限（一句话能膨胀成一排\"读法\"推销方案）",
+    file: "src/optimizer-prompt.ts",
+    from: "export const OPTIMIZE_CANDIDATES_MAX = 3",
+    to: "export const OPTIMIZE_CANDIDATES_MAX = 99",
+    test: "test/quick-commands.mjs",
+    expect: "候选最多保留 3 个（多的忽略并记账）",
+  },
+
 ]
 
 let allBit = true

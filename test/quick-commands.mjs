@@ -2797,5 +2797,38 @@ console.log('5j. 模型选择与协作基调（0.14.0 S4）：设置真的生效
   check('默认（普通）⇒ 没有那一段', host.llmCalls[0].system.includes('硬邦邦模式') === false)
 }
 
+console.log('5k. 内置 Bash 的开关（0.14.0 S5）：关着时模型**看不到**这个工具')
+{
+  // 关（默认）：工具表里没有 bash；也不追加那一段边界说明。
+  const bashDir = mkdtempSync(join(tmpdir(), 'composer-ux-bash-switch-'))
+  const bashQuery = { readSession: async () => ({ header: { cwd: bashDir } }) }
+  const bashFinal = JSON.stringify({ items: [{ kind: 'user_requirement', quote: '弄好看点', text: '把这一页做得好看点' }] })
+  const off = await bootHost({
+    settings: { optimizeReadTools: true },
+    sessionQuery: bashQuery,
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+    chunksSeq: [[{ type: 'text-delta', index: 0, text: bashFinal }, { type: 'finish', reason: { kind: 'stop' } }]],
+  })
+  await handler0(off, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-off' })), makeRes())
+  const offTools = (off.llmCalls[0].tools ?? []).map(tool => tool.name)
+  check('关着时工具表里没有 bash（不是软拦截）',
+    offTools.includes('read') && offTools.includes('bash') === false, JSON.stringify(offTools))
+  check('关着时系统提示词里也没有 bash 那段',
+    off.llmCalls[0].system.includes('关于 bash 工具') === false)
+
+  // 开：工具表里有 bash，并追加边界说明。
+  const on = await bootHost({
+    settings: { optimizeReadTools: true, optimizeBash: true },
+    sessionQuery: bashQuery,
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+    chunksSeq: [[{ type: 'text-delta', index: 0, text: bashFinal }, { type: 'finish', reason: { kind: 'stop' } }]],
+  })
+  await handler0(on, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-on' })), makeRes())
+  const onTools = (on.llmCalls[0].tools ?? []).map(tool => tool.name)
+  check('开着时 bash 才挂给模型', onTools.includes('bash'), JSON.stringify(onTools))
+  check('开着时系统提示词里有边界说明（只在工作目录/不写文件）',
+    on.llmCalls[0].system.includes('关于 bash 工具') && on.llmCalls[0].system.includes('不要写文件'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

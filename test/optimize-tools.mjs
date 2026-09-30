@@ -30,7 +30,8 @@ const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
     contents: "export { fencePath, globToRegExp, parseToolArguments, runGlobTool, runGrepTool, runReadTool, runReadToolByName, READ_TOOL_SCHEMAS, READ_TOOLS_SYSTEM_NOTE, TOOL_MAX_FILE_BYTES, TOOL_MAX_GLOB_HITS, TOOL_MAX_GREP_HITS, TOOL_MAX_RESULT_CHARS, TOOL_MAX_CALLS_PER_ROUND, TOOL_MAX_ROUNDS, TOOL_TOTAL_TIMEOUT_MS } from './src/optimize-tools.ts'\n"
-      + "export { runOptimizeToolLoop } from './src/optimize-tool-loop.ts'\n",
+      + "export { runOptimizeToolLoop } from './src/optimize-tool-loop.ts'\n"
+      + "export { BASH_MAX_COMMAND_CHARS, BASH_MAX_OUTPUT_CHARS, BASH_TOOL_NAME, BASH_TOOL_SCHEMA, BASH_TOOL_SYSTEM_NOTE, runBashTool } from './src/optimize-bash.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -308,6 +309,53 @@ console.log('6. 工具循环：消息形状、轮次封顶、异常必须降级'
     check('模型看到的是拒绝原因（不是"没找到文件"）', String(toolMessage.content[0].text).includes('拒绝'))
     check('越界也要继续把这一轮跑完（不中断）', out.rounds === 2)
   }
+}
+
+console.log('7. 内置 Bash（0.14.0）：真跑进程，但四条边界都是硬的')
+{
+  const root = (() => { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-bash-'))); roots.push(dir); return dir })()
+  // shell 里给解释器路径加引号（路径可能带空格）；JS 片段内部只用单引号，避免和 shell 引号打架。
+  const nodeBin = '"' + process.execPath + '"'
+  const run = (command, options) => pure.runBashTool(root, { command }, options)
+
+  // 正常命令 + 工作目录锁死
+  const pwd = await run(`${nodeBin} -e "console.log(process.cwd())"`)
+  check('正常命令能跑，且 cwd 就是会话工作目录',
+    pwd.isError === false && realpathSync(pwd.text.split('\n').slice(1).join('\n').trim()) === root,
+    pwd.text.slice(0, 120))
+  check('记账里有工具名与输出字节数',
+    pwd.meta.tool === pure.BASH_TOOL_NAME && pwd.meta.bytes > 0)
+
+  // 非零退出：如实回报，不抛
+  const bad = await run(`${nodeBin} -e "process.exit(3)"`)
+  check('非零退出 ⇒ isError（模型看得到退出码）', bad.isError === true && /退出码 3/.test(bad.text))
+
+  // 输出截断
+  const loud = await run(`${nodeBin} -e "process.stdout.write('x'.repeat(9000))"`)
+  check('超长输出被截断并如实标注',
+    loud.text.includes('输出已截断') && loud.text.length <= pure.BASH_MAX_OUTPUT_CHARS + 80,
+    String(loud.text.length))
+
+  // 超时：真的杀掉（30 秒的命令，1 秒上限）
+  const started = Date.now()
+  const slow = await run(`${nodeBin} -e "setTimeout(() => {}, 30000)"`, { timeoutMs: 1_000 })
+  const took = Date.now() - started
+  check('超时被杀（不把整轮拖死）', slow.isError === true && /超时/.test(slow.text) && took < 15_000, String(took))
+  check('超时进记账（rejected 说明原因）', typeof slow.meta.rejected === 'string' && slow.meta.rejected.includes('超时'))
+
+  // 参数与围栏：坏参数一律拒绝，且**不启动进程**
+  check('空命令 ⇒ 拒绝', (await pure.runBashTool(root, {})).meta.rejected !== undefined)
+  check('超长命令 ⇒ 拒绝',
+    (await pure.runBashTool(root, { command: 'x'.repeat(pure.BASH_MAX_COMMAND_CHARS + 1) })).meta.rejected !== undefined)
+  check('拿不到工作目录 ⇒ 拒绝执行', (await pure.runBashTool('', { command: 'echo hi' })).meta.rejected !== undefined)
+  check('坏参数（null/数字）不抛',
+    (await pure.runBashTool(root, null)).isError === true && (await pure.runBashTool(root, 42)).isError === true)
+
+  // 工具声明与说明段：给模型的那份不能少
+  check('工具声明形状对（name/parameters/command 必填）',
+    pure.BASH_TOOL_SCHEMA.name === 'bash' && pure.BASH_TOOL_SCHEMA.parameters.required.includes('command'))
+  check('说明段写清了边界（只在工作目录、不写文件、超时会截断）',
+    pure.BASH_TOOL_SYSTEM_NOTE.includes('工作目录') && pure.BASH_TOOL_SYSTEM_NOTE.includes('不要写文件'))
 }
 
 for (const dir of roots) rmSync(dir, { recursive: true, force: true })

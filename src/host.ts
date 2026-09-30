@@ -75,6 +75,7 @@ import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts
 import { appendLedger, buildLedgerRun } from './optimize-ledger.ts'
 import { clearDockState, dockStateBytes, optimizeStatePath, readDockState, writeDockState } from './optimize-state.ts'
 import { runOptimizeToolLoop } from './optimize-tool-loop.ts'
+import { BASH_TOOL_SYSTEM_NOTE } from './optimize-bash.ts'
 import { READ_TOOLS_SYSTEM_NOTE } from './optimize-tools.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
@@ -974,6 +975,9 @@ export function apply(ctx: Context, config?: unknown): void {
       const ledgerOn = readOwnFlag(optCtx, config, OPTIMIZER_LEDGER_FIELD, DEFAULT_SETTINGS.optimizerLedger)
       // 只读查证工具（0.13.0 ⑤；默认**关**）：工具轮次要花时间与 token，不替用户决定放大成本。
       const readToolsOn = readOwnFlag(optCtx, config, OPTIMIZE_READ_TOOLS_FIELD, DEFAULT_SETTINGS.optimizeReadTools)
+      // 内置 Bash（0.14.0，默认关）：开了才把 `bash` 工具挂给模型，并追加它的边界说明。
+      // 它与只读工具共用同一个工作目录围栏：拿不到会话工作目录就不开。
+      const bashOn = readOwnFlag(optCtx, config, OPTIMIZE_BASH_FIELD, DEFAULT_SETTINGS.optimizeBash)
       const sessionId = textOf(payload.sessionId)
       const contextTurns = contextOn && sessionId !== ''
         ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId)))
@@ -1114,16 +1118,18 @@ export function apply(ctx: Context, config?: unknown): void {
        */
       let toolInfo: Record<string, unknown> | null = null
       let tooledResult: { out: string; failure: string } | null = null
-      const cwd = readToolsOn ? sessionCwdOf(await readSessionSnapshot(sessionId)) : ''
-      if (readToolsOn && cwd !== '') {
+      const toolsOn = readToolsOn || bashOn
+      const cwd = toolsOn ? sessionCwdOf(await readSessionSnapshot(sessionId)) : ''
+      if (toolsOn && cwd !== '') {
         try {
           const looped = await runOptimizeToolLoop({
             llm: optCtx.llm as never,
             provider: route.provider,
             model: route.model,
-            system: `${system}${READ_TOOLS_SYSTEM_NOTE}`,
+            system: `${system}${readToolsOn ? READ_TOOLS_SYSTEM_NOTE : ''}${bashOn ? BASH_TOOL_SYSTEM_NOTE : ''}`,
             userText: buildOptimizeUser(body, { context: contextText }),
             root: cwd,
+            bash: bashOn,
             signal: controller.signal,
             onDelta: onStreamDelta,
             maxChars: OPTIMIZE_OUTPUT_MAX * 4,

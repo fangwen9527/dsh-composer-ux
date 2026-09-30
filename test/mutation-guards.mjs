@@ -1257,6 +1257,23 @@ const cases = [
     expect: "基调=硬邦邦 ⇒ 系统提示词里有那一段",
   },
 
+  {
+    name: "EV Bash 输出不截断（一条命令能把整轮预算烧光）",
+    file: "src/optimize-bash.ts",
+    from: "  if (text.length <= BASH_MAX_OUTPUT_CHARS) return { text, truncated: false }",
+    to: "  if (true) return { text, truncated: false }",
+    test: "test/optimize-tools.mjs",
+    expect: "超长输出被截断并如实标注",
+  },
+  {
+    name: "EW Bash 命令长度不设限",
+    file: "src/optimize-bash.ts",
+    from: "    if (command.length > BASH_MAX_COMMAND_CHARS) {",
+    to: "    if (false) {",
+    test: "test/optimize-tools.mjs",
+    expect: "超长命令 ⇒ 拒绝",
+  },
+
 ]
 
 let allBit = true

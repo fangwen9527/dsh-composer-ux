@@ -14,6 +14,7 @@
  *     回落那次要换成不带它的版本（否则模型还在等着调工具）。
  *  4. **不谎报**：回落时把**真实发生过**的轮次/次数交出去 —— 那几次调用是真花了钱的。
  */
+import { BASH_TOOL_NAME, BASH_TOOL_SCHEMA, runBashTool } from './optimize-bash.ts'
 import { READ_TOOL_SCHEMAS, parseToolArguments, runReadToolByName, TOOL_MAX_CALLS_PER_ROUND, TOOL_MAX_ROUNDS, TOOL_TOTAL_TIMEOUT_MS } from './optimize-tools.ts'
 
 /** 依赖（注入的 llm 与配置；不 import 宿主模块，便于用假 llm 测）。 */
@@ -26,6 +27,13 @@ export interface ToolLoopDeps {
   readonly userText: string
   /** 会话工作目录的绝对路径（围栏的根）。 */
   readonly root: string
+  /**
+   * 是否把 `bash` 工具也挂给模型（0.14.0，默认 **false**）。
+   *
+   * 关着的时候模型**看不到**这个工具（不是工具内部软拦截）—— 与上游那句
+   * "关掉 = 不把 bash 工具注册给模型"同一做法，也让"关着就不花钱/不冒险"可核对。
+   */
+  readonly bash?: boolean
   readonly signal?: AbortSignal
   readonly onDelta?: (out: string, delta: string) => void
   /** 单轮文本上限（防模型啰嗦到把预算烧光）。 */
@@ -95,7 +103,7 @@ export async function runOptimizeToolLoop(deps: ToolLoopDeps): Promise<ToolLoopO
         system: deps.system,
         ...(deps.temperature === undefined ? {} : { temperature: deps.temperature }),
         ...(deps.reasoningEffort === undefined || deps.reasoningEffort === '' ? {} : { reasoningEffort: deps.reasoningEffort }),
-        tools: READ_TOOL_SCHEMAS,
+        tools: deps.bash === true ? [...READ_TOOL_SCHEMAS, BASH_TOOL_SCHEMA] : READ_TOOL_SCHEMAS,
         ...(deps.signal === undefined ? {} : { signal: deps.signal }),
         messages: freezeMessages(messages),
       })
@@ -178,13 +186,16 @@ export async function runOptimizeToolLoop(deps: ToolLoopDeps): Promise<ToolLoopO
       calls += 1
       names.push(call.name)
       const parsed = parseToolArguments(call.args)
-      const result = parsed.error === undefined
-        ? runReadToolByName(deps.root, call.name, parsed.args)
-        : {
+      // `bash` 要 spawn 子进程，所以这里是**异步**的；只读工具仍是同步的（同一个循环消费同一种结果形状）。
+      const result = parsed.error !== undefined
+        ? {
           text: `拒绝：工具参数不是合法 JSON（${parsed.error}）`,
           isError: true,
           meta: { tool: call.name, files: 0, hits: 0, bytes: 0, rejected: '参数不是合法 JSON' as string | undefined },
         }
+        : call.name === BASH_TOOL_NAME
+          ? await runBashTool(deps.root, parsed.args, { signal: deps.signal })
+          : runReadToolByName(deps.root, call.name, parsed.args)
       if (result.meta.rejected !== undefined) rejected += 1
       messages.push({
         id: `optimize-tool-${round}-${calls}-${started.toString(36)}`,

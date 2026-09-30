@@ -1325,6 +1325,31 @@ const cases = [
     expect: "❗面板内容区是可滚容器（overflow-y:auto + overscroll 收敛）",
   },
 
+  {
+    name: "FD 重启屏不认\"极快重启\"（整个下线窗口没被探到就永远转圈）",
+    file: "src/client/restart-screen.ts",
+    from: "  if (probe.online && probe.boot !== track.oldBoot && probe.boot !== '') {",
+    to: "  if (false) {",
+    test: "test/restart-screen.mjs",
+    expect: "❗极快重启（没见到下线、但号变了）也判完成，不死等",
+  },
+  {
+    name: "FE 重启屏没有\"卡住\"这一步（失败时只剩转圈，日志路径永远不出现）",
+    file: "src/client/restart-screen.ts",
+    from: "    return { ...track, phase: attempts >= attemptLimit ? 'stuck' : 'stopping', attempts }",
+    to: "    return { ...track, phase: 'stopping', attempts }",
+    test: "test/restart-screen.mjs",
+    expect: "一直在线且号不变、到上限 ⇒ stuck",
+  },
+  {
+    name: "FF 自动刷新不带 ?restarted=1（恢复后不会再提示\"重启完成\"）",
+    file: "src/client/restart-screen.ts",
+    from: "  params.set('restarted', '1')",
+    to: "  void params",
+    test: "test/restart-screen.mjs",
+    expect: "加 ?restarted=1",
+  },
+
 ]
 
 let allBit = true

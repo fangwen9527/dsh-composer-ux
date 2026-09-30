@@ -38,6 +38,7 @@ const EMPTY_TASKLIST = 'INFO: No tasks are running which match the specified cri
  */
 async function runHelper(source, tasklistOutputs = [EMPTY_TASKLIST]) {
   const calls = []
+  const notes = []
   let probes = 0
   const fakeRequire = (name) => {
     if (name === 'node:child_process') {
@@ -57,7 +58,13 @@ async function runHelper(source, tasklistOutputs = [EMPTY_TASKLIST]) {
         },
       }
     }
-    if (name === 'node:fs') return { openSync: () => 1, appendFileSync: () => {} }
+    if (name === 'node:fs') {
+      return {
+        openSync: () => 1,
+        appendFileSync: (path, line) => { notes.push(String(line)) },
+        existsSync: (path) => !String(path).includes('missing'),
+      }
+    }
     if (name === 'node:net') {
       // 端口探针：下一个 tick 就报"连不上"（= 端口空了、可以起替换进程了）。
       return { connect: () => ({ on: (event, listener) => { if (event === 'error') setTimeout(() => { listener(new Error('ECONNREFUSED')) }, 0) }, destroy: () => {} }) }
@@ -69,7 +76,7 @@ async function runHelper(source, tasklistOutputs = [EMPTY_TASKLIST]) {
   // eslint-disable-next-line no-new-func
   new Function('require', 'process', 'setTimeout', 'Date', source)(fakeRequire, fakeProcess, setTimeout, Date)
   await new Promise(resolve => { setTimeout(resolve, 1200) })
-  return calls
+  return { calls, notes }
 }
 
 const desktopSource = restartHelperSource({
@@ -81,7 +88,7 @@ const desktopSource = restartHelperSource({
 })
 
 {
-  const calls = await runHelper(desktopSource)
+  const { calls } = await runHelper(desktopSource)
   const killer = calls.find(call => call.file === 'taskkill')
   check('桌面形态真的会去杀壳，且只给 /PID', killer !== undefined
     && killer.args.join('|') === '/F|/PID|111', JSON.stringify(killer === undefined ? null : killer.args))
@@ -106,7 +113,7 @@ const desktopSource = restartHelperSource({
 {
   // 旧宿主先"还活着"两次、然后"没了" ⇒ 既验证反复探测，也验证最终仍然重建。
   const aliveCsv = '"node.exe","222","Console","1","1,234 K"\r\n'
-  const calls = await runHelper(desktopSource, [aliveCsv, aliveCsv, EMPTY_TASKLIST])
+  const { calls } = await runHelper(desktopSource, [aliveCsv, aliveCsv, EMPTY_TASKLIST])
   const probes = calls.filter(call => call.file === 'tasklist')
   check('旧宿主还活着时反复探测（不是探一次就放弃）', probes.length >= 2, String(probes.length))
   check('探测不到退出也照样重建（超时继续）',
@@ -121,10 +128,28 @@ const desktopSource = restartHelperSource({
     port: 3080,
     desktop: null,
   })
-  const calls = await runHelper(webSource)
+  const { calls } = await runHelper(webSource)
   check('web 形态一个进程都不杀（没有 taskkill）', calls.every(call => call.file !== 'taskkill'))
   check('web 形态照旧重拉同一条命令',
     calls.some(call => call.file === 'dsh' && call.args.join('|') === 'web'))
+}
+
+{
+  // ❗起飞前检查：exe 不在 ⇒ 绝不杀壳，退回「只换宿主」（否则杀完没人回来）。
+  const missingExe = restartHelperSource({
+    spawned: { file: 'C:\\node\\node.exe', args: ['host.js'], viaShell: false, detached: true },
+    cwd: 'D:\\work',
+    logs: { out: 'o.log', err: 'e.log' },
+    port: 19387,
+    desktop: { shellPid: 111, hostPid: 222, appExe: 'C:\\nope\\missing.exe' },
+  })
+  const { calls, notes } = await runHelper(missingExe)
+  check('❗应用 exe 不在 ⇒ **绝不杀壳**（杀完没人能把它拉回来）',
+    calls.every(call => call.file !== 'taskkill'))
+  check('❗exe 不在时退回「只换宿主」：照旧把宿主命令拉起来',
+    calls.some(call => call.file === 'C:\\node\\node.exe'))
+  check('退回时留下证据（日志里写明为什么没杀壳）',
+    notes.some(line => line.includes('app executable missing')))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

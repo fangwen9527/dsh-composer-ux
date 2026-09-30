@@ -218,7 +218,7 @@ function runApply(services, opts = {}) {
 console.log('2. 0.1.6：只有 settingsScope（走 bind）')
 {
   const run = runApply({ settingsScope: {} })
-  check('注册了 9 个槽位条目', run.registrations.length === 9, String(run.registrations.length))
+  check('注册了 8 个槽位条目', run.registrations.length === 8, String(run.registrations.length))
   check('认领的是 bind({ namespace: composer-ux })', JSON.stringify(run.calls.bind) === '["composer-ux"]', JSON.stringify(run.calls.bind))
   check('没有去问 configForms', run.calls.get.length === 0, JSON.stringify(run.calls.get))
   check(
@@ -233,7 +233,7 @@ console.log('2. 0.1.6：只有 settingsScope（走 bind）')
 console.log('3. 0.1.7：只有 configForms（走 get）')
 {
   const run = runApply({ configForms: {} })
-  check('注册了 9 个槽位条目', run.registrations.length === 9, String(run.registrations.length))
+  check('注册了 8 个槽位条目', run.registrations.length === 8, String(run.registrations.length))
   check('认领的是 get(composer-ux)', JSON.stringify(run.calls.get) === '["composer-ux"]', JSON.stringify(run.calls.get))
   check('没有去问 settingsScope', run.calls.bind.length === 0, JSON.stringify(run.calls.bind))
   check(
@@ -248,7 +248,7 @@ console.log('3. 0.1.7：只有 configForms（走 get）')
 console.log('4. 两个都没有：降级但不消失')
 {
   const run = runApply({})
-  check('仍然注册了 9 个槽位条目', run.registrations.length === 9, String(run.registrations.length))
+  check('仍然注册了 8 个槽位条目', run.registrations.length === 8, String(run.registrations.length))
   check('没有认领任何服务', run.calls.bind.length === 0 && run.calls.get.length === 0)
   const live = run.inject?.hooks?.live?.getSnapshot()
   check('live 落回默认档位（不是 extreme）', live?.optimizerTier !== 'heavy', JSON.stringify(live?.optimizerTier))
@@ -264,7 +264,7 @@ console.log('4. 两个都没有：降级但不消失')
 console.log('5. 没有 ctx.inject：兜底也要认领')
 {
   const run = runApply({ settingsScope: {} }, { inject: false })
-  check('仍然注册了 9 个槽位条目', run.registrations.length === 9, String(run.registrations.length))
+  check('仍然注册了 8 个槽位条目', run.registrations.length === 8, String(run.registrations.length))
   check('靠"直接读一次"认领了 bind', JSON.stringify(run.calls.bind) === '["composer-ux"]', JSON.stringify(run.calls.bind))
   check(
     'live 仍是服务里的值',
@@ -329,7 +329,7 @@ console.log('7. 真 cordis 代理：读缺席服务名抛错时，apply 仍要�
     threw = error
   }
   check('apply 不抛', threw === null, threw === null ? '' : String(threw?.message))
-  check('仍然注册了 9 个槽位条目', registrations.length === 9, String(registrations.length))
+  check('仍然注册了 8 个槽位条目', registrations.length === 8, String(registrations.length))
   check('认领了在场的 settingsScope', JSON.stringify(calls.bind) === '["composer-ux"]', JSON.stringify(calls.bind))
 }
 

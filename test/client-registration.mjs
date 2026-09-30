@@ -202,8 +202,11 @@ const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
 // 0.15.0 起是 8 个（多了侧边栏脚注那枚「重启」）。
-check('注册了 9 个槽位条目', registrations.length === 9, JSON.stringify(registrations.map(r => r.id)))
-check('侧边栏脚注的重启入口', byId('composer-ux-restart')?.name === 'sidebar.footer.action')
+check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
+// 0.15.4：侧边栏脚注那枚按用户要求移除了（侧边栏底部太挤）；现在入口是标题栏那枚 + 设置页那枚。
+check('侧边栏脚注那枚已移除', byId('composer-ux-restart') === undefined)
+check('标题栏条那枚在（摆放照 HHHEEEWWW/dsh-quick-restart）',
+  byId('composer-ux-restart-titlebar')?.name === 'shell.overlay')
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
 check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
 check('面板缩放手柄', byId('composer-ux-panel-resize')?.name === 'shell.overlay')

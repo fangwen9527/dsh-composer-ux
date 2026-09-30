@@ -30,7 +30,6 @@ import { installSettingsCardStyle } from './client/settings-style.ts'
 import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
-import { RestartFooterAction } from './client/RestartFooterAction.tsx'
 import { RestartTitlebarButton } from './client/RestartTitlebarButton.tsx'
 import { maybeShowRestartDone } from './client/restart-screen.ts'
 import { SettingsSection } from './client/SettingsSection.tsx'
@@ -621,14 +620,10 @@ export function apply(ctx: any): void {
     label: '重启',
   }, RestartTitlebarButton))
 
-  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
-  // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
-  slots.inject('sidebar.footer.action', () => slots.register({
-    name: 'sidebar.footer.action',
-    id: 'composer-ux-restart',
-    order: 50,
-    label: '重启',
-  }, RestartFooterAction))
+  // 侧边栏脚注那枚「重启」在 0.15.4 移除了（用户 2026-09-30：只删这枚 —— 侧边栏底部太挤）。
+  // 现在两处入口：标题栏条那一枚（shell.overlay，随手能点）与设置页抬头那一枚（会先说清
+  // 有几个会话在跑）。要加回来：`sidebar.footer.action` 槽，组件见 git 历史里的 RestartFooterAction。
+
 
   // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
   // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。

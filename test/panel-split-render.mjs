@@ -165,6 +165,11 @@ console.log('2b. 「优化选项」卡片（0.14.0）：七个控件都在，且
     html.includes('aria-label="只读工具"') && html.includes('aria-label="内置 Bash"'))
   check('说明写清了边界（Bash 默认关、锁定工作目录、超时）',
     html.includes('锁定会话工作目录') && html.includes('单条超时 20 秒'))
+  // 0.14.1：面板内容区必须能滚（否则卡片比面板高时，下面的内容被面板底部裁掉够不到）。
+  check('❗面板内容区是可滚容器（overflow-y:auto + overscroll 收敛）',
+    /overflow-y:auto/.test(html) && html.includes('overscroll-behavior:contain'))
+  check('模型行显示「跟随会话模型」（未指定时的默认）',
+    html.includes('跟随会话模型'))
 }
 
 console.log('3. ❗底部按钮在可滚内容区之外（用户报的"展开后看不到按钮"就是这条）')

@@ -13,13 +13,15 @@
  *   ② 模型是"跟随会话 / 指定"，指定的写法是 `provider/model`（只写模型名则沿用会话 provider）；
  *   ③ 详情只改「任务与风格」那段，输出契约由插件追加、改不掉（改了整套逐字校验就失效）。
  */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   OPTIMIZER_FRAMINGS, OPTIMIZER_PERMISSIONS, OPTIMIZER_TURNS_MAX, OPTIMIZER_TURNS_MIN,
   type ComposerUxSettings, type OptimizerFraming, type OptimizerHistory, type OptimizerPermission,
 } from '../settings-contract.ts'
+import { fetchModelCatalog, type ModelCatalogResult } from './model-catalog.ts'
 import {
-  optCard, optCardTitle, optHint, optInput, optLabel, optNumber, optPromptBox, optRow,
+  optCard, optCardTitle, optHint, optInput, optLabel, optNumber, optPickerButton, optPickerGroup,
+  optPickerItem, optPickerItemActive, optPickerModelId, optPickerPanel, optPromptBox, optRow,
   optSegButton, optSegButtonActive, optSegmented, optSlider,
 } from './styles.ts'
 
@@ -100,6 +102,22 @@ function currentPrompt(settings: ComposerUxSettings): string {
 export function OptimizeOptionsCard({ settings, actions }: OptimizeOptionsCardProps): React.ReactElement {
   const [detailOpen, setDetailOpen] = useState(false)
   const [modelText, setModelText] = useState(settings.optimizerModel)
+  // 模型下拉（0.14.1）：打开时才去问宿主要清单（省一次请求），清单本身宿主会缓存 60 秒。
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [catalog, setCatalog] = useState<ModelCatalogResult | { kind: 'loading' } | null>(null)
+  const [manual, setManual] = useState(false)
+  const [retrySeq, setRetrySeq] = useState(0)
+
+  useEffect(() => {
+    if (!pickerOpen) return
+    let alive = true
+    setCatalog({ kind: 'loading' })
+    const controller = new AbortController()
+    void fetchModelCatalog({ fresh: retrySeq > 0, signal: controller.signal }).then(result => {
+      if (alive) setCatalog(result)
+    })
+    return () => { alive = false; controller.abort() }
+  }, [pickerOpen, retrySeq])
   const prompt = currentPrompt(settings)
   const tierOff = settings.optimizerTier === 'off'
 
@@ -124,44 +142,98 @@ export function OptimizeOptionsCard({ settings, actions }: OptimizeOptionsCardPr
       />
 
       <div style={optRow}>
-        <span style={optLabel} title="解释层用哪个模型：跟随会话当前选的，或自己指定">模型</span>
-        <div style={optSegmented} role="group" aria-label="模型">
-          <button
-            type="button"
-            aria-pressed={settings.optimizerModel === ''}
-            title="用会话当前选的模型（默认）"
-            style={settings.optimizerModel === '' ? optSegButtonActive : optSegButton}
-            onMouseDown={event => { event.preventDefault() }}
-            onClick={() => { setModelText(''); actions.setModel('') }}
-          >
-            跟随会话
-          </button>
-          <button
-            type="button"
-            aria-pressed={settings.optimizerModel !== ''}
-            title="指定一条路由：写 provider/model（只写模型名则沿用会话的 provider）"
-            style={settings.optimizerModel !== '' ? optSegButtonActive : optSegButton}
-            onMouseDown={event => { event.preventDefault() }}
-            onClick={() => { actions.setModel(modelText.trim() === '' ? 'provider/model' : modelText.trim()) }}
-          >
-            指定
-          </button>
-        </div>
+        <span style={optLabel} title="解释层用哪个模型：跟随会话当前选的，或从清单里指定一条">模型</span>
+        <button
+          type="button"
+          aria-label="模型"
+          aria-expanded={pickerOpen}
+          title="点开选模型：第一项是跟随会话；下面按 provider 分组列出可用模型（清单长了可以滚）"
+          style={optPickerButton}
+          onMouseDown={event => { event.preventDefault() }}
+          onClick={() => { setPickerOpen(!pickerOpen) }}
+        >
+          {settings.optimizerModel === '' ? '跟随会话模型' : settings.optimizerModel} ▾
+        </button>
       </div>
-      {settings.optimizerModel !== '' && (
-        <input
-          aria-label="指定的模型"
-          title="写 provider/model，例如 go/deepseek-flash；留空 = 跟随会话"
-          value={modelText}
-          onChange={event => { setModelText(event.target.value) }}
-          onBlur={() => {
-            const next = modelText.trim()
-            actions.setModel(next)
-            setModelText(next)
-          }}
-          style={optInput}
-          spellCheck={false}
-        />
+      {pickerOpen && (
+        <div style={optPickerPanel} role="listbox" aria-label="模型清单">
+          <button
+            type="button"
+            style={settings.optimizerModel === '' ? optPickerItemActive : optPickerItem}
+            onMouseDown={event => { event.preventDefault() }}
+            onClick={() => { setModelText(''); actions.setModel(''); setManual(false); setPickerOpen(false) }}
+          >
+            跟随会话模型
+            {catalog !== null && catalog.kind === 'ok' && catalog.current.model !== '' && (
+              <span style={optPickerModelId}>当前：{catalog.current.model}</span>
+            )}
+          </button>
+          {catalog === null || catalog.kind === 'loading' ? (
+            <span style={optHint}>正在读模型清单…</span>
+          ) : catalog.kind === 'error' ? (
+            <>
+              <span style={optHint}>读不到模型清单：{catalog.error}</span>
+              <button
+                type="button"
+                style={optPickerItem}
+                onMouseDown={event => { event.preventDefault() }}
+                onClick={() => { setRetrySeq(retrySeq + 1) }}
+              >
+                重试
+              </button>
+            </>
+          ) : (
+            <>
+              {catalog.groups.length === 0 && <span style={optHint}>宿主没报出任何 provider（在设置里看过模型路由吗？）</span>}
+              {catalog.groups.map(group => (
+                <React.Fragment key={group.id}>
+                  <span style={optPickerGroup}>{group.name}</span>
+                  {group.models.length === 0 && (
+                    <span style={optHint}>{group.error === undefined ? "这一组没有模型" : `这一组读不到：${group.error}`}</span>
+                  )}
+                  {group.models.map(model => {
+                    const value = `${group.id}/${model.id}`
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        style={settings.optimizerModel === value ? optPickerItemActive : optPickerItem}
+                        onMouseDown={event => { event.preventDefault() }}
+                        onClick={() => { actions.setModel(value); setModelText(value); setPickerOpen(false) }}
+                      >
+                        {model.name}
+                        {model.name === model.id ? null : <span style={optPickerModelId}>{model.id}</span>}
+                      </button>
+                    )
+                  })}
+                </React.Fragment>
+              ))}
+            </>
+          )}
+          <button
+            type="button"
+            style={optPickerItem}
+            onMouseDown={event => { event.preventDefault() }}
+            onClick={() => { setManual(!manual) }}
+          >
+            手动输入 provider/model…
+          </button>
+          {manual && (
+            <input
+              aria-label="手动输入模型"
+              title="写 provider/model，例如 go/deepseek-flash"
+              value={modelText}
+              onChange={event => { setModelText(event.target.value) }}
+              onBlur={() => {
+                const next = modelText.trim()
+                actions.setModel(next)
+                setModelText(next)
+              }}
+              style={optInput}
+              spellCheck={false}
+            />
+          )}
+        </div>
       )}
 
       <Segmented<OptimizerHistory>

@@ -1169,6 +1169,9 @@ async function bootHost(options = {}) {
     // `options.resolveModelInfo` 让「钳推理档」的用例能造出路由真实暴露的档位表；
     // 不传就与过去完全一样（服务上没有这个方法）。
     ...(options.resolveModelInfo === undefined ? {} : { resolveModelInfo: options.resolveModelInfo }),
+    // 0.14.1：模型清单路由用它们（不传 = 服务上没有这两个方法 ⇒ 路由给空清单）。
+    ...(options.listProviders === undefined ? {} : { listProviders: options.listProviders }),
+    ...(options.listModels === undefined ? {} : { listModels: options.listModels }),
     stream: (callOptions) => {
       llmCalls.push(callOptions)
       // `options.stream` 让"断连中止"这类用例自己控制流的节奏（默认是同步吐完）。
@@ -1272,9 +1275,10 @@ const json = res => JSON.parse(res.captured.body)
   const expectedPaths = [
     pure.OPTIMIZER_API_PATH, pure.OPTIMIZE_STATE_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
     pure.BALANCE_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH,
+    pure.MODELS_API_PATH,
   ]
-  check('注册了七条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启）',
-    host.routes.length === 7
+  check('注册了八条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单）',
+    host.routes.length === 8
     && host.routes.every(route => route.kind === 'exact')
     && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
@@ -2870,6 +2874,67 @@ console.log('5l. 上下文「回合 0–10 / 全文」（0.14.0 S6）：设置�
   // 全文：连最早的 R1 也带上
   const full = await sent({ optimizerHistory: 'full' })
   check('全文 ⇒ 最早的几轮也带上', full.includes('R1') && full.includes('R8'))
+}
+
+console.log('5m. 模型清单路由（0.14.1）：按 provider 分组、单点失败不废整份、有缓存')
+{
+  const host = await bootHost({
+    listProviders: () => [
+      { id: 'go', name: 'go' },
+      { id: 'deepseek-official', name: 'DeepSeek 官方' },
+      { id: 'broken', name: '坏的' },
+    ],
+    listModels: async (provider) => {
+      if (provider === 'broken') throw new Error('端点没响应')
+      if (provider === 'go') return [{ id: 'deepseek-flash', name: 'DeepSeek V4 Flash' }]
+      return [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }, { id: 'x', name: 'x' }]
+    },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+  })
+  const route = host.routes.find(entry => entry.path === pure.MODELS_API_PATH)
+  check('模型清单路由注册了', route !== undefined)
+
+  const call = async (url) => {
+    const req = { method: 'GET', url }
+    let payload = null
+    const res = { writeHead: () => {}, end: (body) => { payload = JSON.parse(body) } }
+    await route.handler(req, res)
+    return payload
+  }
+
+  const body = await call(pure.MODELS_API_PATH)
+  check('返回按 provider 分组的三组', body.ok === true && body.groups.length === 3, JSON.stringify(body.groups?.map(g => g.id)))
+  check('组里带模型（id + 名字）',
+    body.groups[0].models.length === 1 && body.groups[0].models[0].name === 'DeepSeek V4 Flash')
+  check('provider 的中文名照搬（图 1 那种分组标题）', body.groups[1].name === 'DeepSeek 官方')
+  check('❗单个 provider 读不到 ⇒ 只有那一组带原因，其余照常',
+    body.groups[2].models.length === 0 && /端点没响应/.test(body.groups[2].error)
+    && body.groups[0].models.length === 1, JSON.stringify(body.groups))
+  check('带上会话当前选的那条 route（下拉里给"跟随会话"显示）',
+    body.current.provider === 'go' && body.current.model === 'deepseek-flash')
+
+  // 缓存：60 秒内第二次不再问 provider（?fresh=1 才绕过）
+  let asked = 0
+  const cached = await bootHost({
+    listProviders: () => [{ id: 'go', name: 'go' }],
+    listModels: async () => { asked += 1; return [{ id: 'm', name: 'M' }] },
+  })
+  const cachedRoute = cached.routes.find(entry => entry.path === pure.MODELS_API_PATH)
+  const callCached = async (url) => {
+    let payload = null
+    await cachedRoute.handler({ method: 'GET', url }, { writeHead: () => {}, end: (b) => { payload = JSON.parse(b) } })
+    return payload
+  }
+  await callCached(pure.MODELS_API_PATH)
+  await callCached(pure.MODELS_API_PATH)
+  check('60 秒缓存：第二次不再问 provider', asked === 1, String(asked))
+  await callCached(`${pure.MODELS_API_PATH}?fresh=1`)
+  check('?fresh=1 绕过缓存', asked === 2, String(asked))
+
+  // 方法不对 ⇒ 405（只读路由不收 POST）
+  let code = 0
+  await cachedRoute.handler({ method: 'POST', url: pure.MODELS_API_PATH }, { writeHead: (c) => { code = c }, end: () => {} })
+  check('非 GET ⇒ 405', code === 405, String(code))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

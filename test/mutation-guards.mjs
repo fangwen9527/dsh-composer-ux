@@ -1308,6 +1308,23 @@ const cases = [
     expect: "❗原话原样保留（不再回填改写）",
   },
 
+  {
+    name: "FB 模型清单：单个 provider 读不到就整条路由失败（一个坏端点废掉整个下拉）",
+    file: "src/host.ts",
+    from: "              error = errorText(failure)",
+    to: "              error = ''",
+    test: "test/quick-commands.mjs",
+    expect: "❗单个 provider 读不到 ⇒ 只有那一组带原因，其余照常",
+  },
+  {
+    name: "FC 面板内容区又不可滚（卡片比面板高时，下面的内容被裁掉够不到）",
+    file: "src/client/styles.ts",
+    from: "  overflowX: 'hidden',\n  overflowY: 'auto',\n  overscrollBehavior: 'contain',",
+    to: "  overflow: 'hidden',",
+    test: "test/panel-split-render.mjs",
+    expect: "❗面板内容区是可滚容器（overflow-y:auto + overscroll 收敛）",
+  },
+
 ]
 
 let allBit = true

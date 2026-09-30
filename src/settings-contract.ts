@@ -48,6 +48,17 @@ export const RESTART_API_PATH = '/composer-ux/restart'
 export const USAGE_API_PATH = '/composer-ux/usage'
 
 /**
+ * 模型清单（0.14.1）：只读，给「优化选项」卡片的模型下拉用。
+ *
+ * 为什么要宿主中转：客户端拿不到 `llm` 服务，而「有哪些 provider、每个 provider 有哪些模型」
+ * 只有宿主知道（`listProviders()` + `listModels()`）。
+ */
+export const MODELS_API_PATH = '/composer-ux/models'
+
+
+
+
+/**
  * 「金额」栏（0.10.0）：价目同步接口。
  *
  * 出网必须在宿主半：浏览器侧发不出跨域请求，也不该让 API Key/页面内容经过前端逻辑。

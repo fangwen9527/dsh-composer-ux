@@ -431,7 +431,12 @@ export const quickSectionBody: CSSProperties = {
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden',
+  // 0.14.1：**这一半要能滚**。以前是 overflow: hidden —— 卡片（七行 + 详情 + 提示词框）
+  // 比面板还高时，下面的内容就被面板底部裁掉、够不到（用户报的「点完看不到下边」）。
+  // 横轴仍然不滚（面板宽度固定），纵轴给滑动条；overscroll 收敛，免得滚到页面上。
+  overflowX: 'hidden',
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
 }
 
 /** 两半之间的切换按钮（一整行，点它换另一半）。 */
@@ -822,4 +827,83 @@ export const optHint: CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary)',
   fontSize: 10.5,
   lineHeight: 1.5,
+}
+
+// ── 0.14.1：模型下拉（按 provider 分组、长了自己滚）────────────────────────────
+
+/** 选择器按钮（显示当前选的是「跟随会话模型」还是某条 route）。 */
+export const optPickerButton: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  textAlign: 'left',
+  padding: '3px 8px',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 11.5,
+  lineHeight: 1.7,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+/**
+ * 下拉面板：**这里就是滑动条** —— 清单可能很长（多个 provider × 多个模型），
+ * 所以限高 + `overflowY: auto`，不允许它把卡片顶出面板。
+ */
+export const optPickerPanel: CSSProperties = {
+  maxHeight: 260,
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  padding: 4,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+}
+
+/** 下拉里的 provider 分组标题（吸顶，滚动时也知道自己在哪一组）。 */
+export const optPickerGroup: CSSProperties = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 10.5,
+  fontWeight: 600,
+  padding: '4px 6px 2px',
+}
+
+/** 下拉里的一条模型。 */
+export const optPickerItem: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 6,
+  width: '100%',
+  textAlign: 'left',
+  padding: '4px 8px',
+  border: 'none',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 11.5,
+  lineHeight: 1.6,
+  cursor: 'pointer',
+}
+
+/** 选中的那条。 */
+export const optPickerItemActive: CSSProperties = {
+  ...optPickerItem,
+  background: 'var(--dsw-alias-bg-layer-2)',
+  fontWeight: 600,
+}
+
+/** 模型 id（弱化，跟在名字后面）。 */
+export const optPickerModelId: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 10.5,
 }

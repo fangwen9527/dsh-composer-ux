@@ -30,6 +30,7 @@ import {
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
+  MODELS_API_PATH,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
   normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
@@ -1386,6 +1387,68 @@ export function apply(ctx: Context, config?: unknown): void {
       }
       sendJson(res, 200, { ok: true, hidden: payload.hidden === true, keep: true, file, bytes: result.bytes ?? 0 })
     }
+
+    // ── 模型清单（0.14.1）─────────────────────────────────────────────────
+    /** 缓存：下拉打开很频繁，而这份清单不会秒变。`?fresh=1` 绕过（界面上就是「重试」）。 */
+    const MODEL_CACHE_MS = 60_000
+    /** 单个 provider 的模型清单最多等这么久（读不到就那一组空着，别拖住整个下拉）。 */
+    const MODEL_LIST_TIMEOUT_MS = 3_000
+    let modelsCache: { at: number; payload: Record<string, unknown> } | null = null
+
+    optCtx.effect(() => optCtx.webServer.register({
+      kind: 'exact',
+      path: MODELS_API_PATH,
+      handler: (async (req: { method?: string; url?: string }, res: never) => {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: '只支持 GET' })
+          return
+        }
+        const fresh = String(req.url ?? '').includes('fresh=1')
+        const now = Date.now()
+        if (!fresh && modelsCache !== null && now - modelsCache.at < MODEL_CACHE_MS) {
+          sendJson(res, 200, modelsCache.payload)
+          return
+        }
+        try {
+          const llm = optCtx.get('llm') as {
+            listProviders?: () => { id?: unknown; name?: unknown }[]
+            listModels?: (provider: string) => Promise<{ id?: unknown; name?: unknown }[]>
+          } | undefined
+          const providerRows = typeof llm?.listProviders === 'function' ? llm.listProviders() : []
+          const current = sessionRoute()
+          const groups: Record<string, unknown>[] = []
+          for (const row of providerRows) {
+            const id = textOf(row?.id)
+            if (id === '') continue
+            const name = textOf(row?.name) === '' ? id : textOf(row?.name)
+            let models: { id: string; name: string }[] = []
+            let error = ''
+            try {
+              const listed = typeof llm?.listModels === 'function'
+                ? await Promise.race([
+                  llm.listModels(id),
+                  new Promise<never>((_resolve, reject) => {
+                    setTimeout(() => { reject(new Error(`超时 ${String(MODEL_LIST_TIMEOUT_MS)} ms`)) }, MODEL_LIST_TIMEOUT_MS)
+                  }),
+                ])
+                : []
+              models = (Array.isArray(listed) ? listed : [])
+                .map(item => ({ id: textOf(item?.id), name: textOf(item?.name) === '' ? textOf(item?.id) : textOf(item?.name) }))
+                .filter(item => item.id !== '')
+            } catch (failure: unknown) {
+              // 注意别写成 catch (error)：那会**遮蔽**上面那个 let error，原因就永远写不进去（踩过）。
+              error = errorText(failure)
+            }
+            groups.push({ id, name, models, ...(error === '' ? {} : { error }) })
+          }
+          const payload: Record<string, unknown> = { ok: true, at: now, current, groups }
+          modelsCache = { at: now, payload }
+          sendJson(res, 200, payload)
+        } catch (error: unknown) {
+          sendJson(res, 500, { ok: false, error: `读模型清单失败：${errorText(error)}` })
+        }
+      }) as never,
+    }))
 
     optCtx.effect(() => optCtx.webServer.register({
       kind: 'exact',

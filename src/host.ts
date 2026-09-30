@@ -31,6 +31,7 @@ import {
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   MODELS_API_PATH,
+  RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
   normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
@@ -2502,6 +2503,26 @@ export function apply(ctx: Context, config?: unknown): void {
         //
         // 0.15.2：判据拆成具名步骤，403 里带上**是哪一条不满足**与当时看到的事实 ——
         // 起因是两枚按钮都只报一句"不许"，查不出原因（见 explainRestartTrust 的注释）。
+        // 先卡防跨站头（照 dsh-quick-restart 的顺序：头 → 来源）。
+        // 这是桌面版（`dsh-app://` 来源）唯一真正需要的防线：跨站页面加不了自定义头。
+        if (firstHeaderValue(req.headers?.[RESTART_CSRF_HEADER]) !== RESTART_CSRF_VALUE) {
+          send(403, {
+            ok: false,
+            error: `缺少 ${RESTART_CSRF_HEADER}: ${RESTART_CSRF_VALUE} 头（跨站页面加不了这个头）`,
+          })
+          return
+        }
+
+        // 先卡防跨站头（照 dsh-quick-restart 的顺序：头 → 来源）。
+        // 这是桌面版（页面来源是 `dsh-app://`）唯一真正需要的防线：跨站页面加不了自定义头。
+        if (firstHeaderValue(req.headers?.[RESTART_CSRF_HEADER]) !== RESTART_CSRF_VALUE) {
+          send(403, {
+            ok: false,
+            error: `缺少 ${RESTART_CSRF_HEADER}: ${RESTART_CSRF_VALUE} 头（跨站页面加不了这个头）`,
+          })
+          return
+        }
+
         const trust = explainRestartTrust({
           remoteAddress: req.socket?.remoteAddress,
           headers: req.headers ?? {},

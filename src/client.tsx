@@ -31,6 +31,7 @@ import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
 import { RestartFooterAction } from './client/RestartFooterAction.tsx'
+import { RestartTitlebarButton } from './client/RestartTitlebarButton.tsx'
 import { maybeShowRestartDone } from './client/restart-screen.ts'
 import { SettingsSection } from './client/SettingsSection.tsx'
 import { StatsLineEntry } from './client/StatsLineEntry.tsx'
@@ -611,6 +612,15 @@ export function apply(ctx: any): void {
     },
   }
 
+  // 标题栏条上那枚「重启」（0.15.3）：摆放照 HHHEEEWWW/dsh-quick-restart —— 挂在 shell.overlay
+  // 的绝对层里贴顶、靠 env(titlebar-area-*) 让开原生窗口控件；只在 data-windows-titlebar 存在时渲染。
+  slots.inject('shell.overlay', () => slots.register({
+    name: 'shell.overlay',
+    id: 'composer-ux-restart-titlebar',
+    order: 12,
+    label: '重启',
+  }, RestartTitlebarButton))
+
   // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
   // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
   slots.inject('sidebar.footer.action', () => slots.register({
@@ -624,19 +634,16 @@ export function apply(ctx: any): void {
   // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
   maybeShowRestartDone()
 
-  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
   // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
 
   // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
   // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
 
-  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
   // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
 
   // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
   // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
 
-  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
   // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
 
   // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。

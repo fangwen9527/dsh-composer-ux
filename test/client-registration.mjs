@@ -202,7 +202,7 @@ const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
 // 0.15.0 起是 8 个（多了侧边栏脚注那枚「重启」）。
-check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
+check('注册了 9 个槽位条目', registrations.length === 9, JSON.stringify(registrations.map(r => r.id)))
 check('侧边栏脚注的重启入口', byId('composer-ux-restart')?.name === 'sidebar.footer.action')
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
 check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
@@ -680,8 +680,10 @@ console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号
     bannerAt > linkAt, `banner=${String(bannerAt)} link=${String(linkAt)}`)
 
   // 两步确认：第一步只读状态，第二步才 POST。
+  // 0.15.3：第一步改成多行（要带防跨站头），所以断言改成「这次读状态没写 method」。
   check('第一步是只读 GET（不带 method）',
-    section.includes('fetch(RESTART_API_PATH, { cache: \'no-store\' })'))
+    /fetch\(RESTART_API_PATH, \{[\s\S]*?\}\)/.test(section)
+    && /fetch\(RESTART_API_PATH, \{[\s\S]*?\}\)/.exec(section)?.[0].includes('method') === false)
   check('第二步才 POST，且带 JSON 体（浏览器 POST 一定会带 Origin，信任关卡才有东西可查）',
     section.includes("method: 'POST'") && section.includes('body: \'{}\''))
   check('确认与取消两枚按钮都在', section.includes('确认重启') && section.includes('取消'))

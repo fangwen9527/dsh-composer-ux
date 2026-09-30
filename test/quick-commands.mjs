@@ -2292,11 +2292,18 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
   check('本机同源 POST → 放行', pure.trustedRestartRequest(trust()) === true)
   check('非回环 peer → 拒', pure.trustedRestartRequest(trust({ remoteAddress: '10.0.0.9' })) === false)
   check('任何转发痕迹 → 拒（说明中间站着代理，不是用户）',
-    ['forwarded', 'x-forwarded-for', 'x-real-ip'].every(name =>
+    ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip'].every(name =>
       pure.trustedRestartRequest(trust({ headers: { ...trust().headers, [name]: 'x' } })) === false))
-  check('缺 Origin 或 Host → 拒',
-    pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080' } })) === false
-    && pure.trustedRestartRequest(trust({ headers: { origin: 'http://127.0.0.1:3080' } })) === false)
+  // 0.15.3：判据对齐 HHHEEEWWW/dsh-quick-restart —— **放行**缺 Origin（桌面版壳就是这样）
+  // 与 `dsh-app://`；http 来源才要求与 Host 同源（且 Host 缺了就算不同源）。
+  check('缺 Origin ⇒ 放行（桌面版壳的原生来源）',
+    pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080' } })) === true)
+  check('`dsh-app://` 来源 ⇒ 放行',
+    pure.trustedRestartRequest(trust({ headers: { origin: 'dsh-app://dsh' } })) === true)
+  check('`Origin: null` ⇒ 放行',
+    pure.trustedRestartRequest(trust({ headers: { origin: 'null' } })) === true)
+  check('http 来源但缺 Host ⇒ 拒（算不同源）',
+    pure.trustedRestartRequest(trust({ headers: { origin: 'http://127.0.0.1:3080' } })) === false)
 
   // 0.15.2：403 要说清是哪一条不满足（用户截图里两枚按钮只报一句「不许」，查不出原因）。
   check('放行时 reason = ok', pure.explainRestartTrust(trust()).reason === 'ok')
@@ -2304,14 +2311,18 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     pure.explainRestartTrust(trust({ remoteAddress: '10.0.0.9' })).reason === 'peer-not-loopback')
   check('带转发头 ⇒ forwarded-header',
     pure.explainRestartTrust(trust({ headers: { ...trust().headers, 'x-forwarded-for': '1.1.1.1' } })).reason === 'forwarded-header')
-  check('缺 Origin ⇒ no-origin',
-    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080' } })).reason === 'no-origin')
-  check('缺 Host ⇒ no-host',
-    pure.explainRestartTrust(trust({ headers: { origin: 'http://127.0.0.1:3080' } })).reason === 'no-host')
+  check('缺 Origin ⇒ reason 仍是 ok（放行）',
+    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080' } })).reason === 'ok')
+  check('`dsh-app://` ⇒ ok（这一条就是用户那两枚按钮的根因）',
+    pure.explainRestartTrust(trust({ headers: { origin: 'dsh-app://dsh', host: '127.0.0.1:3080' } })).reason === 'ok')
+  check('http 来源但缺 Host ⇒ origin-host-mismatch',
+    pure.explainRestartTrust(trust({ headers: { origin: 'http://127.0.0.1:3080' } })).reason === 'origin-host-mismatch')
+  check('Origin 指向非回环地址 ⇒ origin-not-loopback',
+    pure.explainRestartTrust(trust({ headers: { origin: 'http://10.0.0.9:3080', host: '10.0.0.9:3080' } })).reason === 'origin-not-loopback')
   check('❗localhost 与 127.0.0.1 不算同源（原因写得明明白白，不是一句「不许」）',
     pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080', origin: 'http://localhost:3080' } })).reason === 'origin-host-mismatch')
   check('Origin 解析不出来 ⇒ origin-unparsable',
-    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080', origin: 'null' } })).reason === 'origin-unparsable')
+    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080', origin: 'not a url' } })).reason === 'origin-unparsable')
   check('给用户的那句话带原因与当时看到的事实',
     (() => {
       const facts = pure.explainRestartTrust(trust({ remoteAddress: '10.0.0.9' }))

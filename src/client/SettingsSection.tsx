@@ -27,6 +27,7 @@ import {
   insertModeOf, newQuickPromptId, newSessionId, optimizerPromptFieldOf,
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
+  RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
 } from '../settings-contract.ts'
 import { enterRestartScreen } from './restart-screen.ts'
 import {
@@ -809,7 +810,10 @@ function useRestart(): RestartController {
 
   /** 读宿主半的状态；`{ error }` = 读不到（HTTP 失败 / 连接断了）。 */
   const readFacts = async (): Promise<RestartFacts | { error: string }> => {
-    const response = await fetch(RESTART_API_PATH, { cache: 'no-store' })
+    const response = await fetch(RESTART_API_PATH, {
+      cache: 'no-store',
+      headers: { [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
+    })
     if (!response.ok) return { error: `HTTP ${String(response.status)}` }
     const parsed = await response.json() as Record<string, unknown>
     return {
@@ -895,7 +899,7 @@ function useRestart(): RestartController {
       try {
         const response = await fetch(RESTART_API_PATH, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
           body: '{}',
         })
         const parsed = await response.json() as { ok?: boolean; error?: string }

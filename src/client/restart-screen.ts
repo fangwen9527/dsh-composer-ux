@@ -15,6 +15,8 @@
  * DOM 那层只负责画和定时。
  */
 
+import { RESTART_CSRF_HEADER, RESTART_CSRF_VALUE } from '../settings-contract.ts'
+
 /** 重启屏的阶段。 */
 export type RestartPhase = 'stopping' | 'starting' | 'up' | 'stuck'
 
@@ -446,7 +448,10 @@ export async function requestRestart(fetcher: typeof fetch = fetch): Promise<Res
   let oldBoot = ''
   let logPath = ''
   try {
-    const status = await fetcher('/composer-ux/restart', { cache: 'no-store' })
+    const status = await fetcher('/composer-ux/restart', {
+      cache: 'no-store',
+      headers: { [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
+    })
     if (status.ok) {
       const facts = (await status.json()) as Record<string, unknown>
       oldBoot = typeof facts.boot === 'string' ? facts.boot : ''
@@ -461,7 +466,7 @@ export async function requestRestart(fetcher: typeof fetch = fetch): Promise<Res
   try {
     const response = await fetcher('/composer-ux/restart', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
       body: '{}',
     })
     const parsed = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string }

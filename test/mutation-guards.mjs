@@ -17,19 +17,6 @@ import { execSync } from 'node:child_process'
 
 const cases = [
   {
-    name: 'A 去掉同源回环那道关卡（host.ts）',
-    file: 'src/host.ts',
-    from: '        if (trust.reason !== \'ok\') {',
-    to: '        if (false && trust.reason !== \'ok\') {',
-    // 只拆关卡、不真的排重启：否则这个测试会 spawn 一个后台助手。
-    also: [{
-      from: 'const scheduled = scheduleRestart(buildIo(), servingPort(firstHeaderValue(req.headers?.host)))',
-      to: 'const scheduled = { ok: true, pid: 0, helperPid: 0, logOut: \'\', logErr: \'\', port: null, command: \'\' }',
-    }],
-    test: 'test/quick-commands.mjs',
-    expect: 'POST 跨站 Origin',
-  },
-  {
     name: 'B 去掉官方信任关卡（host.ts）',
     file: 'src/host.ts',
     from: '        const rejection = connection?.requestRejection?.(req)',
@@ -1361,10 +1348,27 @@ const cases = [
   {
     name: "FH 把 localhost 与 127.0.0.1 当成同源（放松了\"杀进程\"接口的来源判据）",
     file: "src/restart.ts",
-    from: "    return { ...base, reason: parsed.host === host ? 'ok' : 'origin-host-mismatch' }",
-    to: "    return { ...base, reason: 'ok' }",
+    from: "    if (parsed.host !== host) return { ...base, reason: 'origin-host-mismatch' }",
+    to: "    if (false) return { ...base, reason: 'origin-host-mismatch' }",
     test: "test/quick-commands.mjs",
     expect: "❗localhost 与 127.0.0.1 不算同源（原因写得明明白白，不是一句「不许」）",
+  },
+
+  {
+    name: "FI 桌面版的 dsh-app:// 来源又被拒（用户那两枚按钮的根因回来了）",
+    file: "src/restart.ts",
+    from: "  if (origin === '' || origin === 'null' || DSH_APP_ORIGIN.test(origin)) return { ...base, reason: 'ok' }",
+    to: "  if (false) return { ...base, reason: 'ok' }",
+    test: "test/quick-commands.mjs",
+    expect: "`dsh-app://` ⇒ ok（这一条就是用户那两枚按钮的根因）",
+  },
+  {
+    name: "FJ 转发头少认一个 x-forwarded-host（经过代理的请求就能重启了）",
+    file: "src/restart.ts",
+    from: "    ?? firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers['x-real-ip']) ?? ''",
+    to: "    ?? firstHeader(headers['x-real-ip']) ?? ''",
+    test: "test/quick-commands.mjs",
+    expect: "任何转发痕迹 → 拒（说明中间站着代理，不是用户）",
   },
 
 ]

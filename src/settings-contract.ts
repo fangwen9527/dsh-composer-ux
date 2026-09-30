@@ -55,6 +55,25 @@ export const USAGE_API_PATH = '/composer-ux/usage'
  */
 export const MODELS_API_PATH = '/composer-ux/models'
 
+/**
+ * 重启请求必须带的防跨站头（0.15.3，照 HHHEEEWWW/dsh-quick-restart 的做法）。
+ *
+ * 为什么它够用：跨站页面**加不了自定义头** —— 浏览器会先发预检，而宿主不答 CORS，
+ * 请求根本发不出去。这条头是桌面版（页面来源是 `dsh-app://`）与网页版之间唯一需要的防线。
+ * 放这里而不是 `restart.ts`：客户端半也要用它，而 `restart.ts` 引了 node 内建模块。
+ */
+export const RESTART_CSRF_HEADER = 'x-composer-ux-restart'
+/** 这个头的期望值。 */
+export const RESTART_CSRF_VALUE = '1'
+
+/**
+ *
+ * 为什么它够用：跨站页面**加不了自定义头** —— 浏览器会先发预检，而宿主不答 CORS，
+ * 请求根本发不出去。这条头是桌面版（页面来源是 `dsh-app://`）与网页版之间唯一需要的防线。
+ * 放这里而不是 `restart.ts`：客户端半也要用它，而 `restart.ts` 引了 node 内建模块。
+ */
+/** 这个头的期望值。 */
+
 
 
 

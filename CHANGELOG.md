@@ -2,6 +2,42 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.15.3] — 2026-09-30（修好重启被 403 挡住的根因 + 按参考插件把按钮摆到标题栏条）
+
+起因（用户原话）：**「参考一下这个，看这个的重启方式是怎么样的，并把按钮位置调成这个插件的样子
+https://github.com/HHHEEEWWW/dsh-quick-restart」**。
+
+### 1. 根因：来源判据太窄，桌面版必然被拒
+
+读它的 `lib/index.js` 逐字看到这一行：`if (!origin || origin === 'null' || /^dsh-app:\/\//iu.test(origin)) return ''`
+—— **桌面版壳的页面来源是 `dsh-app://`，它直接放行**，跨站防线交给客户端必须带的自定义头
+（`x-dsh-quick-restart: 1`，跨站页面加不了自定义头）。我们原来的判据要求 `Origin` 与 `Host` 逐字同源，
+于是桌面版**两枚按钮都 403**。现在对齐它的判据：
+
+- 放行 `dsh-app://`、没有 Origin、`Origin: null`；
+- http 来源仍要求与 Host 同源，且 Host 必须是回环（新增 `origin-not-loopback`）；
+- 转发头多认一个 `x-forwarded-host`；
+- 新增防跨站头 `x-composer-ux-restart: 1`（宿主先卡它、再判来源；客户端两处请求都带上）。
+
+### 2. 按钮按它的摆放挪到标题栏条（只改位置，不重做样式）
+
+新增一枚挂在 `shell.overlay`：贴顶 + `right: calc(100% - env(titlebar-area-x) - env(titlebar-area-width))`，
+正好落在原生「最小化」按钮左边；高 28px、最小宽 104px；`-webkit-app-region: no-drag`（否则点不着）；
+只在 `data-windows-titlebar` 存在时（Windows 桌面壳）渲染。颜色与两步确认仍是我们自己的，
+侧边栏与设置页那两枚**保留**。
+
+## 验证
+
+- `npm test`：**2356 passed / 0 failed**（23 个套件；守卫断言按新判据重写 + 槽位 8→9）。
+- 变异测试：**161/161 全部被咬住**（新增 FI `dsh-app://` 又被拒 / FJ 转发头少认一个；
+  移除旧的 A —— 它挡的是"来源判据"，现在由 FI/FJ 直接钉在判据本身上）。
+- `typecheck` 0 错误。
+
+## 升级说明
+
+- 装完**需要手动重启一次 DSH**（界面上的按钮在旧版本里还是 403）：
+  `C:\Users\fangwen\.dsh\launcher\restart-webui.bat`。
+
 ## [0.15.2] — 2026-09-30（重启被挡时，现在会说清是哪一条不满足）
 
 起因（用户截图）：**侧边栏与设置页两枚「重启」都报** `restart is limited to same-origin loopback requests`。

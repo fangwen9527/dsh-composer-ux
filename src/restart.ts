@@ -197,10 +197,12 @@ export type RestartTrustReason =
   | 'ok'
   | 'peer-not-loopback'
   | 'forwarded-header'
-  | 'no-origin'
-  | 'no-host'
   | 'origin-unparsable'
   | 'origin-host-mismatch'
+  | 'origin-not-loopback'
+
+/** 桌面版壳的原生来源（`dsh web` 走 http://127.0.0.1:PORT，不进这条）。 */
+const DSH_APP_ORIGIN = /^dsh-app:\/\//iu
 
 /** 守卫看到的事实（原样回给调用方 —— 都是请求自己的头，不含任何凭据）。 */
 export interface RestartTrustFacts {
@@ -222,16 +224,20 @@ export function explainRestartTrust(request: TrustRequest): RestartTrustFacts {
   const origin = firstHeader(headers.origin) ?? ''
   const host = firstHeader(headers.host) ?? ''
   const peer = request.remoteAddress ?? ''
-  const forwarded = firstHeader(headers.forwarded) ?? firstHeader(headers['x-forwarded-for']) ?? firstHeader(headers['x-real-ip']) ?? ''
+  const forwarded = firstHeader(headers.forwarded) ?? firstHeader(headers['x-forwarded-for'])
+    ?? firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers['x-real-ip']) ?? ''
   const base = { peer, origin, host, forwarded }
   if (!isLoopbackAddress(request.remoteAddress)) return { ...base, reason: 'peer-not-loopback' }
   if (forwarded !== '') return { ...base, reason: 'forwarded-header' }
-  if (origin === '') return { ...base, reason: 'no-origin' }
-  if (host === '') return { ...base, reason: 'no-host' }
+  // 桌面版壳的原生来源（`dsh-app://`）、没有 Origin、以及 `Origin: null` 一律放行：
+  // 这三种情况下"同源比对"无从谈起，而跨站防线在下面那个自定义头上。
+  if (origin === '' || origin === 'null' || DSH_APP_ORIGIN.test(origin)) return { ...base, reason: 'ok' }
   try {
     const parsed = new URL(origin)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ...base, reason: 'origin-unparsable' }
-    return { ...base, reason: parsed.host === host ? 'ok' : 'origin-host-mismatch' }
+    if (parsed.host !== host) return { ...base, reason: 'origin-host-mismatch' }
+    if (!isLoopbackAddress(parsed.hostname)) return { ...base, reason: 'origin-not-loopback' }
+    return { ...base, reason: 'ok' }
   } catch {
     return { ...base, reason: 'origin-unparsable' }
   }
@@ -243,10 +249,9 @@ export function restartTrustText(facts: RestartTrustFacts): string {
   const why: Record<Exclude<RestartTrustReason, 'ok'>, string> = {
     'peer-not-loopback': '请求不是从本机回环地址来的',
     'forwarded-header': '请求带着转发头（中间有代理，不是你的浏览器直连）',
-    'no-origin': '请求没有 Origin 头（浏览器同源 POST 应当会带）',
-    'no-host': '请求没有 Host 头',
     'origin-unparsable': 'Origin 头解析不出 http/https 来源',
     'origin-host-mismatch': 'Origin 与 Host 不是同一个来源',
+    'origin-not-loopback': 'Origin 指向的不是本机地址',
   }
   const peer = facts.peer === '' ? '空' : facts.peer
   const origin = facts.origin === '' ? '空' : facts.origin

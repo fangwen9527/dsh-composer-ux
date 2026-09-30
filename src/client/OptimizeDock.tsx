@@ -18,7 +18,7 @@ import {
   dockPhaseText, dockSummary, type OptimizeDockState,
 } from './optimize-dock.ts'
 import {
-  dockBox, dockButton, dockButtonDisabled, dockButtonPrimary, dockButtons, dockDropped, dockEditor,
+  dockBody, dockBox, dockButton, dockButtonDisabled, dockButtonPrimary, dockButtons, dockButtonsPinned, dockDropped, dockEditor,
   dockError, dockHead, dockItemRow, dockItemText, dockKind, dockList, dockMeta, dockPhase, dockSummaryLine,
 } from './styles.ts'
 
@@ -138,6 +138,12 @@ export function OptimizeDock({ state, seconds, actions }: OptimizeDockProps) {
           )}
       </div>
 
+      {/*
+        可滚内容区：条目 / 丢弃记账 / 失败提示 / 成品输入框 / 记账行都在这里面。
+        底部那排按钮（插入输入框 / 重新优化 / 复制）**刻意留在外面** —— 内容再长也不会被裁，
+        因为面板是 `maxHeight` 封顶 + `overflow: hidden`，而这几颗恰恰是最需要点得到的。
+      */}
+      <div style={dockBody}>
       {state.items.length > 0 && (
         <ol style={dockList}>
           {state.items.map(item => (
@@ -185,7 +191,9 @@ export function OptimizeDock({ state, seconds, actions }: OptimizeDockProps) {
         </div>
       )}
 
-      <div style={dockButtons}>
+      </div>
+
+      <div style={{ ...dockButtons, ...dockButtonsPinned }}>
         <button
           type="button"
           disabled={!canInsert}

@@ -1099,6 +1099,39 @@ const cases = [
     test: "test/optimize-tools.mjs",
     expect: "根是符号链接时：读得到，且相对路径是 note.txt（没被切坏）",
   },
+  {
+    name: "EA 面板默认展开优化那半（用户要的是打开先看快捷指令）",
+    file: "src/client/panel-sections.ts",
+    from: "export const DEFAULT_PANEL_SECTION: PanelSection = 'quick'",
+    to: "export const DEFAULT_PANEL_SECTION: PanelSection = 'optimize'",
+    test: "test/client-registration.mjs",
+    expect: "默认展开快捷指令（用户 2026-09-30 选的 A）",
+  },
+  {
+    name: "EB 有结果框也不切到优化那半（点了 ✨ 看不到结果）",
+    file: "src/client/panel-sections.ts",
+    from: "  return dockPresent ? 'optimize' : current",
+    to: "  return current",
+    test: "test/panel-split-render.mjs",
+    expect: "结果框渲染出来了",
+  },
+  {
+    name: "EC 结果框内容区不再自己滚（内容把底部按钮顶出去 = 用户报的 bug）",
+    file: "src/client/styles.ts",
+    from: "export const dockBody: CSSProperties = {\n  flex: '1 1 auto',\n  minHeight: 0,",
+    to: "export const dockBody: CSSProperties = {\n  minHeight: 0,",
+    test: "test/client-registration.mjs",
+    expect: "结果框内容区自己滚（flex 1 + minHeight 0 + overflowY auto）",
+  },
+  {
+    name: "ED 切换按钮不再换另一半（只能展开不能收起）",
+    file: "src/client/panel-sections.ts",
+    from: "  return current === 'quick' ? 'optimize' : 'quick'",
+    to: "  return current",
+    test: "test/client-registration.mjs",
+    expect: "点切换按钮 = 换另一半（走纯函数 toggleSection）",
+  },
+
 ]
 
 let allBit = true

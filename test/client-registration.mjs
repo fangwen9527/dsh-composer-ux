@@ -272,7 +272,8 @@ console.log('2.0c 结果框接线（0.12.0）')
   check('面板把结果框与五个动作都注入了',
     panel.includes('<OptimizeDock') && panel.includes('insert: actions.dockInsert')
     && panel.includes('retry: actions.dockRetry') && panel.includes('cancel: actions.dockCancel')
-    && panel.includes('close: actions.dockClose') && panel.includes('edit: actions.dockEdit'))
+    // close 现在包了一层（关掉结果框顺手切回快捷指令那半），但**必须**仍然接到 dockClose。
+    && /close: (?:\(\) => \{ )?actions\.dockClose/.test(panel) && panel.includes('edit: actions.dockEdit'))
   check('结果框：成品可编辑（textarea 绑到 edit 动作）',
     dockSource.includes('aria-label="优化后的提示词（可编辑）"') && dockSource.includes('actions.edit(event.target.value)'))
   check('结果框：没有成品时「插入输入框」点不动',
@@ -282,6 +283,46 @@ console.log('2.0c 结果框接线（0.12.0）')
   check('结果框：复制失败不谎报"已复制"', dockSource.includes('if (!ok) return'))
   check('结果框：每条流水都显示依据（不冒充用户说过的话）',
     dockSource.includes('模型自己补的，依据不是你原话'))
+}
+
+console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报的「展开后看不到按钮」）')
+{
+  // 本块自己一份 strip（与上面几节同一做法：先去注释，免得护栏被"注释掉的代码"骗过）
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const panel = strip(readFileSync('src/client/QuickCommandsPanel.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const dock = strip(readFileSync('src/client/OptimizeDock.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const styles = strip(readFileSync('src/client/styles.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const sections = strip(readFileSync('src/client/panel-sections.ts', 'utf8').replace(/\r\n/g, '\n'))
+
+  check('默认展开快捷指令（用户 2026-09-30 选的 A）',
+    sections.includes("DEFAULT_PANEL_SECTION: PanelSection = 'quick'")
+    && /useState<PanelSection>\(DEFAULT_PANEL_SECTION\)/.test(panel))
+  check('中间那个切换按钮在（aria-expanded + ▸/▾ 两态）',
+    panel.includes('style={quickSectionToggle}') && panel.includes("aria-expanded={section === 'optimize'}")
+    && panel.includes('\u25b8') && panel.includes('\u25be'))
+  check('点切换按钮 = 换另一半（走纯函数 toggleSection）',
+    panel.includes('setSection(toggleSection(section))') && sections.includes("return current === 'quick' ? 'optimize' : 'quick'"))
+  check('两半互斥：内容区各由 section 决定渲染',
+    panel.includes("dock !== null && section === 'optimize'") && panel.includes("section === 'quick' && ("))
+  check('有结果框就显示优化那半（渲染期同步调整 —— effect 会先闪一帧，SSR 也测不到）',
+    panel.includes('sectionForDock(dockPresent, section)') && panel.includes('const prevDockPresent = useRef(false)')
+    && panel.includes('if (prevDockPresent.current !== dockPresent) {')
+    && !/useEffect\(\(\) => \{\s*setSection/.test(panel))
+  check('档位与 ✨ 按钮在两半之外（标题行，跑优化永远一步）',
+    panel.indexOf('quickTierRow') < panel.indexOf('quickSectionToggle')
+    && panel.indexOf('quickPrimaryButton') < panel.indexOf('quickSectionToggle'))
+  check('关掉结果框顺手切回快捷指令那半',
+    panel.includes('actions.dockClose(); setSection(DEFAULT_PANEL_SECTION)'))
+  check('❗结果框底部三个按钮在可滚内容区**之外**（这正是被裁掉的那排）',
+    dock.includes('...dockButtons, ...dockButtonsPinned')
+    && dock.indexOf('dockBody') < dock.indexOf('dockButtonsPinned')
+    && dock.includes('插入输入框') && dock.includes('重新优化') && dock.includes('复制'))
+  check('❗结果框内容区自己滚（flex 1 + minHeight 0 + overflowY auto）',
+    /dockBody[\s\S]{0,260}overflowY: 'auto'/.test(styles) && /dockBody[\s\S]{0,260}minHeight: 0/.test(styles)
+    && /dockBody[\s\S]{0,260}flex: '1 1 auto'/.test(styles))
+  check('❗两半容器与快捷指令列表也必须有 flex/minHeight（否则又互相挤）',
+    /quickSectionBody[\s\S]{0,200}minHeight: 0/.test(styles)
+    && /quickList: CSSProperties = \{[\s\S]{0,160}minHeight: 0/.test(styles))
 }
 
 console.log('2.0d 字段常量必须真的 import 进来（typecheck 抓到的运行时 ReferenceError）')

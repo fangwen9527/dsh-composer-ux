@@ -313,6 +313,9 @@ export const quickPrimaryButtonDisabled: CSSProperties = {
 
 /** 条目列表容器（可滚动）。 */
 export const quickList: CSSProperties = {
+  // `flex: 1 1 auto` + `minHeight: 0`：这一半被压时**自己滚**，而不是把内容顶出去。
+  flex: '1 1 auto',
+  minHeight: 0,
   overflowY: 'auto',
   padding: '6px 6px 8px',
   display: 'flex',
@@ -414,7 +417,47 @@ export const quickEmpty: CSSProperties = {
 
 // ── 快捷指令：分类（0.3.0 起的两级结构） ───────────────────────────────────
 
-/** 分类切换行（面板里在档位行下方）。 */
+/**
+ * 面板中部：**两半内容区共用的容器**（「优化提示词」与「快捷指令」二选一放进来）。
+ *
+ * 为什么要它：面板是 `maxHeight` 封顶的弹性列，两半如果都当普通块排下去，
+ * 就会**互相抢高度** —— 结果框一长（条目多 + 成品多行）就把下面的列表挤没、
+ * 再继续把**自己底部的按钮**顶出面板边界（`overflow: hidden` 直接裁掉）。
+ * 用户 2026-09-30 报的「展开优化之后看不到 插入输入框 / 重新优化 / 复制」正是这个。
+ * 现在两半互斥、各自内部滚（见 quickList / dockBody），谁都不会被裁。
+ */
+export const quickSectionBody: CSSProperties = {
+  flex: '1 1 auto',
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+}
+
+/** 两半之间的切换按钮（一整行，点它换另一半）。 */
+export const quickSectionToggle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  width: '100%',
+  padding: '6px 12px',
+  border: 0,
+  borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+  borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  fontSize: 11.5,
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
+/** 切换按钮里那个箭头（用等宽字符占位，避免文字左右跳）。 */
+export const quickSectionToggleArrow: CSSProperties = {
+  width: 10,
+  flex: '0 0 auto',
+}
+
+/** 分类标签行（分类两级里的第一级）。 */
 export const quickCategoryRow: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -462,6 +505,10 @@ export const quickCategoryAdd: CSSProperties = {
 
 /** 结果框外框。 */
 export const dockBox: CSSProperties = {
+  // 撑满中部容器（`minHeight: 0` 是关键：否则弹性子项按内容高度撑，又会被裁）。
+  flex: '1 1 auto',
+  minHeight: 0,
+  overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
@@ -469,6 +516,26 @@ export const dockBox: CSSProperties = {
   borderRadius: 10,
   background: 'var(--dsw-alias-bg-layer-1)',
   border: '0.5px solid var(--dsw-alias-border-l2)',
+}
+
+/**
+ * 结果框的**可滚内容区**（条目 / 丢弃记账 / 失败提示 / 成品输入框 / 记账行）。
+ *
+ * 为什么把它单独包一层：底部那排按钮（插入输入框 / 重新优化 / 复制）**必须永远看得见**。
+ * 之前它们和内容在同一个流里，内容一长就被面板裁掉 —— 那一排反而最需要点得到。
+ */
+export const dockBody: CSSProperties = {
+  flex: '1 1 auto',
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  overflowY: 'auto',
+}
+
+/** 底部按钮行：钉在结果框底部，不随内容滚动。 */
+export const dockButtonsPinned: CSSProperties = {
+  flex: '0 0 auto',
 }
 
 /** 结果框标题行（阶段 + 秒表 + 取消/关闭）。 */

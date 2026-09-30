@@ -21,6 +21,7 @@ import { bookCounts } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { useOptimizeElapsed } from './optimize-clock.ts'
+import { DEFAULT_PANEL_SECTION, sectionForDock, toggleSection, type PanelSection } from './panel-sections.ts'
 import { OptimizeDock } from './OptimizeDock.tsx'
 import type { OptimizeDockState } from './optimize-dock.ts'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
@@ -30,6 +31,7 @@ import {
   quickItemPreview, quickList, quickNotice, quickPanel, quickPanelFoot, quickPanelHead,
   quickPanelTitle, quickPanelTitleRow, quickPrimaryButton, quickPrimaryButtonDisabled,
   quickTierButton, quickTierButtonActive, quickTierRow,
+  quickSectionBody, quickSectionToggle, quickSectionToggleArrow,
 } from './styles.ts'
 
 /** 面板注入面。 */
@@ -108,6 +110,15 @@ export function QuickCommandsPanel({
   const ref = useRef<HTMLDivElement | null>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const [activeId, setActiveId] = useState('')
+  /**
+   * 面板中部显示哪一半（0.13.1）。
+   *
+   * 用户 2026-09-30 要的形态：「优化提示词」与「快捷指令」两半，中间一个切换按钮，
+   * 默认展开**快捷指令**；点切换按钮就换成优化那半（档位与 ✨ 按钮始终在标题行）。
+   * 跑起来或已有结果时**自动切到优化那半** —— 否则刚跑出来的东西会被自己藏在收起状态里。
+   */
+  const [section, setSection] = useState<PanelSection>(DEFAULT_PANEL_SECTION)
+  const dockPresent = dock !== null
   // 秒表：非流式下能显示的最细阶段就是"等待模型响应"，所以这里只报已等待秒数。
   const seconds = useOptimizeElapsed(busy ? startedAt : 0)
   /**
@@ -136,7 +147,8 @@ export function QuickCommandsPanel({
     const above = anchor.bottom - height - GAP
     const top = above >= MARGIN ? above : Math.min(anchor.bottom + GAP, window.innerHeight - height - MARGIN)
     setPosition({ left, top: Math.max(MARGIN, top) })
-  }, [anchor?.left, anchor?.bottom, counts.prompts, categories.length, busy])
+    // `section` 也在依赖里：换半时面板高度会变（结果框 vs 列表），位置得跟着重算。
+  }, [anchor?.left, anchor?.bottom, counts.prompts, categories.length, busy, section, dock !== null])
 
   // 外部点击 / Escape / 滚动 / 缩放时关闭（与右键菜单同一套规则）。
   useEffect(() => {
@@ -168,6 +180,26 @@ export function QuickCommandsPanel({
       window.removeEventListener('resize', actions.close)
     }
   }, [anchor === null, actions, dockRunning])
+
+  /**
+   * 结果框"从无到有"的那一刻自动切到「优化提示词」那一半 ——
+   * 否则用户点了 ✨ 之后，结果被自己藏在收起的那一半里，看起来像"没反应"。
+   *
+   * 为什么在**渲染期**做而不是 `useEffect`：
+   *  · effect 要等提交之后才跑，中间会先渲染一帧"快捷指令"那半 —— 点 ✨ 会看到面板闪一下；
+   *  · 而且 SSR 里 effect 根本不跑，于是"有结果框就该显示优化半"这条在渲染测试里测不到
+   *    （第一版这么写时，渲染套件里 7 条全红，红的全是这一组）。
+   * 这是 React 文档里"props 变化时同步调整 state"的写法：只在**变化的那一次**设置，不会死循环；
+   * 用户手动切回快捷指令时 `dockPresent` 没变，也不会被抢回去。
+   */
+  // ⚠️ 初值必须是 false（默认那一半假设"没有结果框"），不能写成 `useRef(dockPresent)`：
+  //   后者让首帧的"变化"永远不成立，于是"面板重开时结果框本来就在"这种情况不会切过去。
+  const prevDockPresent = useRef(false)
+  if (prevDockPresent.current !== dockPresent) {
+    prevDockPresent.current = dockPresent
+    const next = sectionForDock(dockPresent, section)
+    if (next !== section) setSection(next)
+  }
 
   if (anchor === null) return null
 
@@ -212,37 +244,35 @@ export function QuickCommandsPanel({
           <span aria-hidden>✨</span>
           <span>{busy ? `优化中…（${String(seconds)}s）` : '优化提示词'}</span>
         </button>
-        <div style={quickCategoryRow}>
-          {categories.map(category => (
-            <button
-              key={category.id}
-              type="button"
-              title={`${category.name}（${String(category.prompts.length)} 条）`}
-              aria-pressed={category.id === active?.id}
-              style={category.id === active?.id ? quickCategoryTabActive : quickCategoryTab}
-              onMouseDown={event => { event.preventDefault() }}
-              onClick={() => { setActiveId(category.id) }}
-            >
-              {category.name}
-            </button>
-          ))}
-          <button
-            type="button"
-            style={quickCategoryAdd}
-            disabled={categories.length >= QUICK_CATEGORY_MAX}
-            title="新增一个分类（名字到「设置 → 输入体验」里改）"
-            onMouseDown={event => { event.preventDefault() }}
-            onClick={() => {
-              actions.addCategory(DEFAULT_CATEGORY_NAME)
-            }}
-          >
-            ＋
-          </button>
-        </div>
       </div>
 
-      {dock !== null && (
-        <div style={{ padding: '8px 12px 0' }}>
+      {/*
+        中间那个切换按钮（用户 2026-09-30 要的形态）：点它 = 展开「优化提示词」那一半、
+        收起「快捷指令」；再点 = 换回来。标题行的档位与 ✨ 按钮**始终露在外面**，
+        所以"跑一次优化"永远是一步（不必先展开）。
+      */}
+      <button
+        type="button"
+        style={quickSectionToggle}
+        aria-expanded={section === 'optimize'}
+        title={section === 'optimize'
+          ? '收起「优化提示词」，回到「快捷指令」'
+          : '展开「优化提示词」（结果框就在里面；上面点 ✨ 也会自动展开）'}
+        onMouseDown={event => { event.preventDefault() }}
+        onClick={() => { setSection(toggleSection(section)) }}
+      >
+        <span style={quickSectionToggleArrow} aria-hidden>{section === 'optimize' ? '▾' : '▸'}</span>
+        <span>优化提示词</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--dsw-alias-label-tertiary)' }}>
+          {section === 'optimize'
+            ? '点此回到快捷指令'
+            : dockPresent ? '上次的结果在这儿' : '还没有结果'}
+        </span>
+      </button>
+
+      <div style={quickSectionBody}>
+      {dock !== null && section === 'optimize' && (
+        <div style={{ padding: '8px 12px 8px', flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <OptimizeDock
             state={dock}
             seconds={dockSeconds}
@@ -250,14 +280,55 @@ export function QuickCommandsPanel({
               insert: actions.dockInsert,
               retry: actions.dockRetry,
               cancel: actions.dockCancel,
-              close: actions.dockClose,
+              // 关掉结果框顺手切回快捷指令那半：此时优化半已经没内容了。
+              close: () => { actions.dockClose(); setSection(DEFAULT_PANEL_SECTION) },
               edit: actions.dockEdit,
             }}
           />
         </div>
       )}
+      {section === 'optimize' && dock === null && (
+        <div style={quickEmpty}>
+          还没跑过优化。<br />
+          点上面的「✨ 优化提示词」把输入框里的话交给另一个 AI 整理成一条能直接发的清晰指令 ——
+          结果会出现在这里（可编辑、可插入输入框、可复制）。<br />
+          强度用标题行那三个档位（普通 / 高级 / 极端）。
+        </div>
+      )}
 
-      <div style={quickList}>
+      {section === 'quick' && (
+        <>
+          <div style={{ padding: '8px 12px 0' }}>
+            <div style={quickCategoryRow}>
+              {categories.map(category => (
+                <button
+                  key={category.id}
+                  type="button"
+                  title={`${category.name}（${String(category.prompts.length)} 条）`}
+                  aria-pressed={category.id === active?.id}
+                  style={category.id === active?.id ? quickCategoryTabActive : quickCategoryTab}
+                  onMouseDown={event => { event.preventDefault() }}
+                  onClick={() => { setActiveId(category.id) }}
+                >
+                  {category.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                style={quickCategoryAdd}
+                disabled={categories.length >= QUICK_CATEGORY_MAX}
+                title="新增一个分类（名字到「设置 → 输入体验」里改）"
+                onMouseDown={event => { event.preventDefault() }}
+                onClick={() => {
+                  actions.addCategory(DEFAULT_CATEGORY_NAME)
+                }}
+              >
+                ＋
+              </button>
+            </div>
+          </div>
+
+          <div style={quickList}>
         {items.length === 0 && (
           <div style={quickEmpty}>
             这个分类里还没有条目。<br />
@@ -293,6 +364,9 @@ export function QuickCommandsPanel({
             onMove={promptId => { actions.movePrompt(promptId, active.id) }}
           />
         )}
+      </div>
+        </>
+      )}
       </div>
 
       <div style={quickPanelFoot}>

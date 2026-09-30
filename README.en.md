@@ -188,9 +188,12 @@ edited in settings; the JSON output contract is always appended and cannot be ov
 | Read-only tool fence (including symlinks) / every cap / out-of-bounds rejection | `node test/optimize-tools.mjs` (66 checks against a **real temporary directory**) |
 | Tool-loop message shape / round cap / exceptions must degrade | same file, section 6 (a fake `llm.stream` drives the whole loop; `role:'tool'` and `toolCallId` are asserted) |
 | Tool path: off by default, fires only when enabled, **prose after lookups falls back**, no cwd ⇒ no tool at all | `test/quick-commands.mjs` 5g (13 checks) |
-| Mutation guards really bite, and **the *named* test must be the one going red** | `npm run test:mutations`: **128/128 bite** |
+| Mutation guards really bite, and **the *named* test must be the one going red** | `npm run test:mutations`: **132/132 bite** |
+| Panel split + pinned result-box buttons (0.13.1) | `node test/panel-split-render.mjs` (20 checks, real `react-dom/server` render) |
 | Release gates | `npm run gates` (tag target / packed file list / docs drift) |
 | Three-platform CI | GitHub Actions: ubuntu / windows / macos × Node 20 |
+
+> 0.13.1 split the panel into「优化提示词 / 快捷指令」halves with one toggle between them, and pinned the result
 
 ### Not verified (design intent, or verified on one machine only)
 

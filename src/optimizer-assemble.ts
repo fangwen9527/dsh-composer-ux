@@ -96,9 +96,9 @@ export interface AssembleResult {
  * （对方 0.6 的做法同源：`compiler.js` 的 `DEFAULT_BUDGET = 1200` 是个固定量，不是输入的倍数。）
  */
 const TIER_BUDGET: Record<string, { readonly factor: number; readonly floor: number }> = {
-  basic: { factor: 1.4, floor: 400 },
-  advanced: { factor: 2.6, floor: 700 },
-  extreme: { factor: 4, floor: 1_400 },
+  light: { factor: 1.4, floor: 400 },
+  standard: { factor: 2.6, floor: 700 },
+  heavy: { factor: 4, floor: 1_400 },
 }
 
 /**
@@ -109,9 +109,11 @@ const TIER_BUDGET: Record<string, { readonly factor: number; readonly floor: num
  * 亲手选的语义（普通 = 只修语言），就必须由宿主保证，而不是指望模型听话。
  */
 const TIER_KINDS: Record<string, readonly OptimizeItemKind[]> = {
-  basic: ['rewrite', 'unknown'],
-  advanced: ['rewrite', 'requirement', 'quality', 'unknown'],
-  extreme: ['rewrite', 'requirement', 'quality', 'unknown', 'plan', 'risk'],
+  // `off` 档不调用模型（宿主半会拦），空数组只是防御。
+  off: [],
+  light: ['rewrite', 'unknown'],
+  standard: ['rewrite', 'requirement', 'quality', 'unknown'],
+  heavy: ['rewrite', 'requirement', 'quality', 'unknown', 'plan', 'risk'],
 }
 
 /**
@@ -120,7 +122,7 @@ const TIER_KINDS: Record<string, readonly OptimizeItemKind[]> = {
  * @returns 允许的种类（顺序不表意）。
  */
 export function allowedKindsFor(tier: string): readonly OptimizeItemKind[] {
-  return TIER_KINDS[tier] ?? TIER_KINDS.advanced!
+  return TIER_KINDS[tier] ?? TIER_KINDS.standard!
 }
 
 /**
@@ -130,7 +132,7 @@ export function allowedKindsFor(tier: string): readonly OptimizeItemKind[] {
  * @returns 允许的成品字符上限。
  */
 export function optimizeBudgetFor(tier: string, originalChars: number): number {
-  const spec = TIER_BUDGET[tier] ?? TIER_BUDGET.advanced!
+  const spec = TIER_BUDGET[tier] ?? TIER_BUDGET.standard!
   const scaled = Math.ceil(Math.max(0, originalChars) * spec.factor)
   return Math.min(OPTIMIZE_OUTPUT_MAX, Math.max(spec.floor, scaled))
 }

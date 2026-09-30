@@ -134,7 +134,7 @@ check(
 /** 观测到的调用记录。 */
 const scopeValue = {
   enabled: true,
-  optimizerTier: 'extreme',
+  optimizerTier: 'heavy',
   quickPrompts: [{ id: 'a', label: '甲', prompt: '内容甲', always: true }],
 }
 
@@ -223,7 +223,7 @@ console.log('2. 0.1.6：只有 settingsScope（走 bind）')
   check('没有去问 configForms', run.calls.get.length === 0, JSON.stringify(run.calls.get))
   check(
     '服务里的值真的进了 live 快照',
-    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'extreme',
+    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'heavy',
     JSON.stringify(run.inject?.hooks?.live?.getSnapshot()?.optimizerTier),
   )
   run.inject?.actions?.setField('sendKey', 'Ctrl+Enter')
@@ -238,7 +238,7 @@ console.log('3. 0.1.7：只有 configForms（走 get）')
   check('没有去问 settingsScope', run.calls.bind.length === 0, JSON.stringify(run.calls.bind))
   check(
     '服务里的值真的进了 live 快照',
-    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'extreme',
+    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'heavy',
     JSON.stringify(run.inject?.hooks?.live?.getSnapshot()?.optimizerTier),
   )
   run.inject?.actions?.setField('sendKey', 'Ctrl+Enter')
@@ -251,7 +251,7 @@ console.log('4. 两个都没有：降级但不消失')
   check('仍然注册了 7 个槽位条目', run.registrations.length === 7, String(run.registrations.length))
   check('没有认领任何服务', run.calls.bind.length === 0 && run.calls.get.length === 0)
   const live = run.inject?.hooks?.live?.getSnapshot()
-  check('live 落回默认档位（不是 extreme）', live?.optimizerTier !== 'extreme', JSON.stringify(live?.optimizerTier))
+  check('live 落回默认档位（不是 extreme）', live?.optimizerTier !== 'heavy', JSON.stringify(live?.optimizerTier))
   let threw = false
   try {
     run.inject?.actions?.setField('sendKey', 'Ctrl+Enter')
@@ -268,7 +268,7 @@ console.log('5. 没有 ctx.inject：兜底也要认领')
   check('靠"直接读一次"认领了 bind', JSON.stringify(run.calls.bind) === '["composer-ux"]', JSON.stringify(run.calls.bind))
   check(
     'live 仍是服务里的值',
-    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'extreme',
+    run.inject?.hooks?.live?.getSnapshot()?.optimizerTier === 'heavy',
     JSON.stringify(run.inject?.hooks?.live?.getSnapshot()?.optimizerTier),
   )
 }

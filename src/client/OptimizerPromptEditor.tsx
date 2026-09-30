@@ -30,7 +30,7 @@ export interface OptimizerPromptEditorProps {
 
 /** 内置的任务提示词正文（**不含**输出契约——契约由宿主追加，见文件头注释）。 */
 export function builtinTaskPrompt(tier: string): string {
-  return OPTIMIZER_SPECS[tier as OptimizerTier]?.system ?? OPTIMIZER_SPECS.advanced.system
+  return OPTIMIZER_SPECS[tier as OptimizerTier]?.system ?? OPTIMIZER_SPECS.standard.system
 }
 
 /**

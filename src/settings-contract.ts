@@ -569,7 +569,17 @@ export function insertModeOf(prompt: Pick<QuickPrompt, 'always' | 'firstOnly'>):
  * 而是产出「可定位到原话某一段」的条目，由宿主逐条做字面比对后再装配成一条命令。
  * 档位语义也随之对齐对方「档位 = 依据预算」的说法（见 `optimizer-prompt.ts`）。
  */
-export type OptimizerTier = 'basic' | 'advanced' | 'extreme'
+/**
+ * 优化档位（0.14.0 起照 dsh-prompt-optimizer 的四档；旧值自动迁移）。
+ *
+ * 档位 = **依据预算与思考方式**，不是「写多少字」：
+ *   · `off`      关闭 —— 不优化（不调用模型；主按钮变灰并写明原因）
+ *   · `light`    单一解读，最多 4 条，质量词只作参考
+ *   · `standard` 条目内并列，质量词至少落到 1 个可检维度，最多 8 条
+ *   · `heavy`    显式多假设分支（最多 3 个候选）+ 质量维度至少 2 条，最多 12 条，思考更深
+ * 后三档照搬上游 `strategy.js` 的 TIER_STRATEGY。
+ */
+export type OptimizerTier = 'off' | 'light' | 'standard' | 'heavy'
 
 /** 档位元数据（顺序即界面顺序）。 */
 export const OPTIMIZER_TIERS: readonly {
@@ -577,13 +587,35 @@ export const OPTIMIZER_TIERS: readonly {
   readonly label: string
   readonly hint: string
 }[] = [
-  { id: 'basic', label: '普通', hint: '只做语言层修复：病句、错别字、指代与含糊词，不新增任何需求，篇幅约为原文 1.4 倍。' },
-  { id: 'advanced', label: '高级', hint: '在不动目标的前提下，把「你显然想要、但没说出口」的必要要求补成对 AI 的要求，每条都要指回你原话里的某一句。' },
-  { id: 'extreme', label: '极端', hint: '按复杂任务处理：在上面基础上再加分阶段执行计划与 2~4 种情况的预案。' },
+  { id: 'off', label: '关闭', hint: '完全不优化：不调用模型、不碰你的输入框（等于没装这个功能）。' },
+  { id: 'light', label: '轻度', hint: '单一解读：只把「你这一轮到底要什么」理清楚，最多 4 条，不产出并列候选。' },
+  { id: 'standard', label: '标准', hint: '条目内并列：质量词落到可检维度（至少 1 条），最多 8 条。' },
+  { id: 'heavy', label: '重度', hint: '多假设分支：同一句话有几种读法就列候选（最多 3 个），质量维度至少 2 条，最多 12 条，思考更深。' },
 ]
 
-/** 默认档位。 */
-export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'advanced'
+/** 默认档位（照上游默认：标准）。 */
+export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'standard'
+
+/**
+ * 旧档位 → 新档位（0.13.2 及以前写下的 `basic/advanced/extreme`）。
+ *
+ * 迁移而不是丢弃：用户在旧版里选过「极端」，升级后应当仍是最重的那一档。
+ */
+export const LEGACY_OPTIMIZER_TIERS: Readonly<Record<string, OptimizerTier>> = Object.freeze({
+  basic: 'light',
+  advanced: 'standard',
+  extreme: 'heavy',
+})
+
+/**
+ * 档位归一化：认识的用原值、旧值按映射迁移、其余（含空）落回默认。
+ * 读取层与 UI 共用，避免各写一套白名单。
+ */
+export function normalizeOptimizerTier(value: unknown): OptimizerTier {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (raw === 'off' || raw === 'light' || raw === 'standard' || raw === 'heavy') return raw
+  return LEGACY_OPTIMIZER_TIERS[raw] ?? DEFAULT_OPTIMIZER_TIER
+}
 
 /**
  * 每个档位的「自定义系统提示词」字段名。
@@ -592,15 +624,28 @@ export const DEFAULT_OPTIMIZER_TIER: OptimizerTier = 'advanced'
  * 宿主半的 schema 也是平铺 key），且**留空 = 用内置那份**这个语义用空串表达最直接 ——
  * 不需要额外一个"是否自定义"的布尔（多一个布尔就多一种自相矛盾的状态）。
  */
+/** 三档自定义提示词字段（0.14.0 起按新档位命名；`off` 不调用模型，所以没有它）。 */
 export const OPTIMIZER_PROMPT_FIELDS = {
-  basic: 'optimizerPromptBasic',
-  advanced: 'optimizerPromptAdvanced',
-  extreme: 'optimizerPromptExtreme',
+  light: 'optimizerPromptLight',
+  standard: 'optimizerPromptStandard',
+  heavy: 'optimizerPromptHeavy',
 } as const
 
-/** 全部档位的自定义提示词字段名（顺序即档位顺序）。 */
+/**
+ * 旧字段名（0.13.2 及以前）：**只用于读取迁移**，UI 不再写它们。
+ *
+ * 为什么保留：用户可能在里面存着自己改过的提示词，改名不该把它弄丢；
+ * 它们在宿主 schema 里继续注册，免得 DSH 把旧键当未知字段丢掉。
+ */
+export const LEGACY_OPTIMIZER_PROMPT_FIELDS = {
+  light: 'optimizerPromptBasic',
+  standard: 'optimizerPromptAdvanced',
+  heavy: 'optimizerPromptExtreme',
+} as const
+
+/** 可自定义提示词的档位字段名（顺序即档位顺序；`off` 档不调用模型，没有提示词字段）。 */
 export const OPTIMIZER_PROMPT_FIELD_LIST: readonly string[] =
-  OPTIMIZER_TIERS.map(item => OPTIMIZER_PROMPT_FIELDS[item.id])
+  OPTIMIZER_TIERS.filter(item => item.id !== 'off').map(item => OPTIMIZER_PROMPT_FIELDS[item.id as keyof typeof OPTIMIZER_PROMPT_FIELDS])
 
 /**
  * 自定义提示词的字数上限。
@@ -616,7 +661,10 @@ export const OPTIMIZER_PROMPT_MAX = 20_000
  * @returns 该档位对应的设置字段名。
  */
 export function optimizerPromptFieldOf(tier: string): string {
-  return OPTIMIZER_PROMPT_FIELDS[tier as OptimizerTier] ?? OPTIMIZER_PROMPT_FIELDS[DEFAULT_OPTIMIZER_TIER]
+  // `off` 档不调用模型，也就没有「该档的自定义提示词」这回事 —— 返回空串让调用方走「不优化」。
+  if (tier === 'off') return ''
+  return OPTIMIZER_PROMPT_FIELDS[tier as keyof typeof OPTIMIZER_PROMPT_FIELDS]
+    ?? OPTIMIZER_PROMPT_FIELDS[DEFAULT_OPTIMIZER_TIER]
 }
 
 /**
@@ -930,9 +978,9 @@ export type SettingsField =
   | typeof OPTIMIZER_HISTORY_FIELD
   | typeof OPTIMIZER_TURNS_FIELD
   | typeof OPTIMIZE_BASH_FIELD
-  | typeof OPTIMIZER_PROMPT_FIELDS.basic
-  | typeof OPTIMIZER_PROMPT_FIELDS.advanced
-  | typeof OPTIMIZER_PROMPT_FIELDS.extreme
+  | typeof OPTIMIZER_PROMPT_FIELDS.light
+  | typeof OPTIMIZER_PROMPT_FIELDS.standard
+  | typeof OPTIMIZER_PROMPT_FIELDS.heavy
   | typeof TERMINAL_MODE_FIELD
   | typeof TERMINAL_BASH_PATH_FIELD
   | typeof STATS_ENABLED_FIELD
@@ -1033,9 +1081,9 @@ export interface ComposerUxSettings {
    * 改的是「任务与风格」那一段；JSON 输出契约由插件在末尾追加、不由这里控制
    * （它的作用是让宿主能按逐字依据校验每一条，被改掉整个机制就失效了）。
    */
-  optimizerPromptBasic: string
-  optimizerPromptAdvanced: string
-  optimizerPromptExtreme: string
+  optimizerPromptLight: string
+  optimizerPromptStandard: string
+  optimizerPromptHeavy: string
   /**
    * 「默认终端」档位：自动 / Git Bash / PowerShell。只对 Windows 生效
    * （非 Windows 上宿主半直接跳过，卡片显示"不需要"）。
@@ -1120,9 +1168,9 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   optimizerTurns: DEFAULT_OPTIMIZER_TURNS,
   optimizeBash: false,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
-  optimizerPromptBasic: '',
-  optimizerPromptAdvanced: '',
-  optimizerPromptExtreme: '',
+  optimizerPromptLight: '',
+  optimizerPromptStandard: '',
+  optimizerPromptHeavy: '',
   terminalMode: DEFAULT_TERMINAL_MODE,
   terminalBashPath: '',
   terminalCandidates: [],
@@ -1402,10 +1450,7 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     }
     return out
   }
-  const asTier = (): OptimizerTier => {
-    const v = source[OPTIMIZER_TIER_FIELD]
-    return v === 'basic' || v === 'advanced' || v === 'extreme' ? v : DEFAULT_OPTIMIZER_TIER
-  }
+  const asTier = (): OptimizerTier => normalizeOptimizerTier(source[OPTIMIZER_TIER_FIELD])
   return {
     enabled: asBool(ENABLED_FIELD),
     // 五栏开关：显式写过听它的，否则按"用户碰过没"迁移（见 sectionEnabledOf）。
@@ -1451,9 +1496,13 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     optimizerHistory: source[OPTIMIZER_HISTORY_FIELD] === 'full' ? 'full' : 'turns',
     optimizerTurns: normalizeOptimizerTurns(source[OPTIMIZER_TURNS_FIELD]),
     optimizeBash: asBool(OPTIMIZE_BASH_FIELD),
-    optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
-    optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
-    optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),
+    // 0.14.0 改名迁移：新字段为空而旧字段有内容 ⇒ 用旧内容（用户改过的提示词不该因为改名丢掉）。
+    optimizerPromptLight: asPrompt(OPTIMIZER_PROMPT_FIELDS.light, OPTIMIZER_PROMPT_MAX)
+      || asPrompt(LEGACY_OPTIMIZER_PROMPT_FIELDS.light, OPTIMIZER_PROMPT_MAX),
+    optimizerPromptStandard: asPrompt(OPTIMIZER_PROMPT_FIELDS.standard, OPTIMIZER_PROMPT_MAX)
+      || asPrompt(LEGACY_OPTIMIZER_PROMPT_FIELDS.standard, OPTIMIZER_PROMPT_MAX),
+    optimizerPromptHeavy: asPrompt(OPTIMIZER_PROMPT_FIELDS.heavy, OPTIMIZER_PROMPT_MAX)
+      || asPrompt(LEGACY_OPTIMIZER_PROMPT_FIELDS.heavy, OPTIMIZER_PROMPT_MAX),
     terminalMode: terminalModeFrom(source[TERMINAL_MODE_FIELD]),
     // 路径只做长度与归一化收窄，不在这里判"存不存在"——那是宿主半的探测结论，
     // 由状态行告诉用户（用户看得见自己填了什么，比悄悄清空好）。

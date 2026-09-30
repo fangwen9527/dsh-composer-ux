@@ -127,6 +127,8 @@ export function QuickCommandsPanel({
    */
   const [section, setSection] = useState<PanelSection>(DEFAULT_PANEL_SECTION)
   const dockPresent = dock !== null
+  /** 档位是「关闭」（0.14.0）：主按钮禁用并写明原因。 */
+  const tierOff = settings.optimizerTier === 'off'
   // 秒表：非流式下能显示的最细阶段就是"等待模型响应"，所以这里只报已等待秒数。
   const seconds = useOptimizeElapsed(busy ? startedAt : 0)
   /**
@@ -243,16 +245,19 @@ export function QuickCommandsPanel({
             ))}
           </div>
         </div>
+        {/* 关闭档（0.14.0）：按钮禁用并写明原因 —— 一个"不优化"的档位不该看起来还能点。 */}
         <button
           type="button"
-          disabled={busy}
-          title="把输入框里的话交给另一个 AI 整理成一条可以直接发出去的清晰指令，结果直接写回输入框。它只能产出能指回你原话某一句的补全，指不回去的会被丢掉并记账"
-          style={busy ? quickPrimaryButtonDisabled : quickPrimaryButton}
+          disabled={busy || tierOff}
+          title={tierOff
+            ? '档位是「关闭」：不优化（到下面的「优化选项」把档位拨到轻度或以上）'
+            : '把输入框里的话交给另一个 AI 整理成一条可以直接发出去的清晰指令，结果直接写回输入框。它只能产出能指回你原话某一句的补全，指不回去的会被丢掉并记账'}
+          style={busy || tierOff ? quickPrimaryButtonDisabled : quickPrimaryButton}
           onMouseDown={event => { event.preventDefault() }}
           onClick={() => { actions.optimize() }}
         >
           <span aria-hidden>✨</span>
-          <span>{busy ? `优化中…（${String(seconds)}s）` : '优化提示词'}</span>
+          <span>{tierOff ? '优化已关闭' : busy ? `优化中…（${String(seconds)}s）` : '优化提示词'}</span>
         </button>
       </div>
 

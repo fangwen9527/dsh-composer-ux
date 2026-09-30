@@ -56,7 +56,7 @@ console.log('1. 记录形状：只有数字与机器短串，没有文本载体'
 {
   const record = ledger.buildLedgerRun({
     sessionId: 'x'.repeat(120),
-    tier: 'advanced',
+    tier: 'standard',
     provider: 'go',
     model: 'deepseek-flash',
     draftChars: 42.7,
@@ -84,7 +84,7 @@ console.log('1. 记录形状：只有数字与机器短串，没有文本载体'
   check('失败时才有 failure 键', !('failure' in record))
 
   const failed = ledger.buildLedgerRun({
-    sessionId: '', tier: 'basic', provider: 'go', model: 'm', draftChars: 0, contextTurns: 0,
+    sessionId: '', tier: 'light', provider: 'go', model: 'm', draftChars: 0, contextTurns: 0,
     contextChars: 0, hadPrevious: false, items: 0, dropped: 0, droppedReasons: [], warnings: 0,
     fallback: false, retried: false, promptSource: 'builtin', ms: 10, ok: false,
     failure: '优化失败：模型返回错误\n第二行会被压平',
@@ -114,7 +114,7 @@ console.log('1b. 原因消毒：模型给的值不许被写进台账')
   check('长度封顶 60', ledger.ledgerSafeReason('长'.repeat(200)).length === 60)
 
   const record = ledger.buildLedgerRun({
-    sessionId: 's', tier: 'advanced', provider: 'go', model: 'm', draftChars: 10, contextTurns: 0,
+    sessionId: 's', tier: 'standard', provider: 'go', model: 'm', draftChars: 10, contextTurns: 0,
     contextChars: 0, hadPrevious: false, items: 0, dropped: 1, droppedReasons: [raw], warnings: 0,
     fallback: false, retried: false, promptSource: 'builtin', ms: 5, ok: false,
     failure: `优化失败：模型返回错误「${secret}」`,
@@ -145,7 +145,7 @@ console.log('2. 轮转：超上限保留尾部整行，并留一条轮转标记'
   const big = `${Array.from({ length: 400 }, (_, i) => JSON.stringify({ kind: 'run', at: '2026-01-01T00:00:00.000Z', pad: 'x'.repeat(2000), i })).join('\n')}\n`
   writeFileSync(file, big)
   const result = ledger.appendLedger(ledger.buildLedgerRun({
-    sessionId: 's', tier: 'basic', provider: 'p', model: 'm', draftChars: 1, contextTurns: 0, contextChars: 0,
+    sessionId: 's', tier: 'light', provider: 'p', model: 'm', draftChars: 1, contextTurns: 0, contextChars: 0,
     hadPrevious: false, items: 1, dropped: 0, droppedReasons: [], warnings: 0, fallback: false, retried: false,
     promptSource: 'builtin', ms: 5, ok: true,
   }), file)
@@ -197,16 +197,16 @@ console.log('4. 写：绝不抛错（台账是旁路，不能拖垮已经花钱�
 console.log('5. 摘要（recap 用的统计）')
 {
   const runs = [
-    { kind: 'run', at: 'a', tier: 'basic', ms: 100, ok: true, items: 2, dropped: 1 },
-    { kind: 'run', at: 'b', tier: 'basic', ms: 300, ok: false, items: 0, dropped: 0 },
-    { kind: 'run', at: 'c', tier: 'advanced', ms: 200, ok: true, items: 1, dropped: 0 },
+    { kind: 'run', at: 'a', tier: 'light', ms: 100, ok: true, items: 2, dropped: 1 },
+    { kind: 'run', at: 'b', tier: 'light', ms: 300, ok: false, items: 0, dropped: 0 },
+    { kind: 'run', at: 'c', tier: 'standard', ms: 200, ok: true, items: 1, dropped: 0 },
     { kind: 'rotated', at: 'd', droppedLines: 3, keptLines: 3 },
   ]
   const summary = ledger.summarizeLedger(runs)
   check('轮数/成功/失败', summary.runs === 3 && summary.ok === 2 && summary.failed === 1, JSON.stringify(summary))
   check('中位耗时（排序后取中）', summary.medianMs === 200, String(summary.medianMs))
   check('条目与丢弃合计', summary.items === 3 && summary.dropped === 1)
-  check('按档位计数', summary.tiers.basic === 2 && summary.tiers.advanced === 1)
+  check('按档位计数', summary.tiers.light === 2 && summary.tiers.standard === 1)
 }
 
 console.log('6. recap CLI：真进程跑，能看能清，坏行如实说')
@@ -214,14 +214,14 @@ console.log('6. recap CLI：真进程跑，能看能清，坏行如实说')
   const file = join(tmpHome(), 'composer-ux', 'optimize-log.jsonl')
   mkdirSync(join(file, '..'), { recursive: true })
   writeFileSync(file, [
-    JSON.stringify({ kind: 'run', at: '2026-09-29T12:00:00.000Z', sessionId: 'abc123', tier: 'advanced', provider: 'go', model: 'deepseek-flash', draftChars: 42, contextTurns: 4, contextChars: 1600, hadPrevious: false, items: 3, dropped: 1, droppedReasons: ['text 是空的'], warnings: 0, fallback: false, retried: true, promptSource: 'builtin', ms: 17500, ok: true }),
+    JSON.stringify({ kind: 'run', at: '2026-09-29T12:00:00.000Z', sessionId: 'abc123', tier: 'standard', provider: 'go', model: 'deepseek-flash', draftChars: 42, contextTurns: 4, contextChars: 1600, hadPrevious: false, items: 3, dropped: 1, droppedReasons: ['text 是空的'], warnings: 0, fallback: false, retried: true, promptSource: 'builtin', ms: 17500, ok: true }),
     '半截坏行',
-    JSON.stringify({ kind: 'run', at: '2026-09-29T12:05:00.000Z', sessionId: 'def456', tier: 'basic', provider: 'go', model: 'deepseek-flash', draftChars: 8, contextTurns: 0, contextChars: 0, hadPrevious: false, items: 0, dropped: 0, droppedReasons: [], warnings: 1, fallback: true, retried: false, promptSource: 'custom', ms: 900, ok: false, failure: '模型返回错误' }),
+    JSON.stringify({ kind: 'run', at: '2026-09-29T12:05:00.000Z', sessionId: 'def456', tier: 'light', provider: 'go', model: 'deepseek-flash', draftChars: 8, contextTurns: 0, contextChars: 0, hadPrevious: false, items: 0, dropped: 0, droppedReasons: [], warnings: 1, fallback: true, retried: false, promptSource: 'custom', ms: 900, ok: false, failure: '模型返回错误' }),
   ].join('\n') + '\n')
 
   const run = args => execFileSync(process.execPath, ['scripts/recap.mjs', '--file', file, ...args], { encoding: 'utf8' })
   const table = run([])
-  check('表格有表头与两行', table.includes('档位') && table.includes('advanced') && table.includes('basic'))
+  check('表格有表头与两行', table.includes('档位') && table.includes('standard') && table.includes('light'))
   check('丢弃原因单独一行显示', table.includes('text 是空的'))
   check('失败行的原因如实显示', table.includes('模型返回错误'))
   check('坏行被计数而不是整份作废', table.includes('有 1 行读不出来'))
@@ -232,10 +232,10 @@ console.log('6. recap CLI：真进程跑，能看能清，坏行如实说')
   check('--json 是机器可读的', Array.isArray(parsed.records) && parsed.records.length === 2 && parsed.badLines === 1)
 
   const filtered = run(['--session', 'abc'])
-  check('--session 前缀过滤', filtered.includes('advanced') && !filtered.includes('basic'))
+  check('--session 前缀过滤', filtered.includes('standard') && !filtered.includes('light'))
 
   const limited = JSON.parse(run(['--last', '1', '--json']))
-  check('--last 只取最后 N 轮', limited.records.length === 1 && limited.records[0].tier === 'basic')
+  check('--last 只取最后 N 轮', limited.records.length === 1 && limited.records[0].tier === 'light')
 
   const cleared = run(['--clear'])
   check('--clear 清空', cleared.includes('已清空') && !existsSync(file))

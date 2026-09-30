@@ -86,16 +86,16 @@ console.log('1. 快捷指令的净化（防脏数据）')
 {
   // 0.6.0：三档自定义提示词（留空 = 用内置那份，所以默认必须是空串）。
   check('自定义提示词默认空串（= 用内置）',
-    pure.DEFAULT_SETTINGS.optimizerPromptBasic === '' && pure.DEFAULT_SETTINGS.optimizerPromptAdvanced === ''
-    && pure.DEFAULT_SETTINGS.optimizerPromptExtreme === '')
-  const kept = pure.sanitizeSettings({ optimizerPromptExtreme: 'x'.repeat(5000) })
-  check('自定义提示词原样保留（够长也不截）', kept.optimizerPromptExtreme.length === 5000, String(kept.optimizerPromptExtreme.length))
-  const clipped = pure.sanitizeSettings({ optimizerPromptBasic: 'x'.repeat(pure.OPTIMIZER_PROMPT_MAX + 100) })
-  check("超上限被截断（不整份丢掉：这是用户自己敲的内容）", clipped.optimizerPromptBasic.length === pure.OPTIMIZER_PROMPT_MAX, String(clipped.optimizerPromptBasic.length))
+    pure.DEFAULT_SETTINGS.optimizerPromptLight === '' && pure.DEFAULT_SETTINGS.optimizerPromptStandard === ''
+    && pure.DEFAULT_SETTINGS.optimizerPromptHeavy === '')
+  const kept = pure.sanitizeSettings({ optimizerPromptHeavy: 'x'.repeat(5000) })
+  check('自定义提示词原样保留（够长也不截）', kept.optimizerPromptHeavy.length === 5000, String(kept.optimizerPromptHeavy.length))
+  const clipped = pure.sanitizeSettings({ optimizerPromptLight: 'x'.repeat(pure.OPTIMIZER_PROMPT_MAX + 100) })
+  check("超上限被截断（不整份丢掉：这是用户自己敲的内容）", clipped.optimizerPromptLight.length === pure.OPTIMIZER_PROMPT_MAX, String(clipped.optimizerPromptLight.length))
   check('字段名映射（未知档回落默认档）',
-    pure.optimizerPromptFieldOf('basic') === 'optimizerPromptBasic'
-    && pure.optimizerPromptFieldOf('extreme') === 'optimizerPromptExtreme'
-    && pure.optimizerPromptFieldOf('???') === pure.OPTIMIZER_PROMPT_FIELDS.advanced)
+    pure.optimizerPromptFieldOf('light') === 'optimizerPromptLight'
+    && pure.optimizerPromptFieldOf('heavy') === 'optimizerPromptHeavy'
+    && pure.optimizerPromptFieldOf('???') === pure.OPTIMIZER_PROMPT_FIELDS.standard)
 }
 {
   const clean = pure.sanitizeSettings({
@@ -126,8 +126,44 @@ console.log('1. 快捷指令的净化（防脏数据）')
 }
 {
   const clean = pure.sanitizeSettings({ optimizerTier: 'nonsense' })
-  check('未知档位回落到高级', clean.optimizerTier === 'advanced', clean.optimizerTier)
-  check('合法档位原样保留', pure.sanitizeSettings({ optimizerTier: 'extreme' }).optimizerTier === 'extreme')
+  check('未知档位回落到标准', clean.optimizerTier === 'standard', clean.optimizerTier)
+  check('合法档位原样保留', pure.sanitizeSettings({ optimizerTier: 'heavy' }).optimizerTier === 'heavy')
+}
+{
+  // 0.14.0：档位换成上游的四档（关闭/轻度/标准/重度），旧值必须**迁移**而不是丢弃 ——
+  // 用户在旧版里选过「极端」，升级后应当仍是最重的那一档。
+  check('旧档 basic → 轻度', pure.sanitizeSettings({ optimizerTier: 'basic' }).optimizerTier === 'light')
+  check('旧档 advanced → 标准', pure.sanitizeSettings({ optimizerTier: 'advanced' }).optimizerTier === 'standard')
+  check('旧档 extreme → 重度', pure.sanitizeSettings({ optimizerTier: 'extreme' }).optimizerTier === 'heavy')
+  check('关闭档是合法值（不是「未知值回落」）', pure.sanitizeSettings({ optimizerTier: 'off' }).optimizerTier === 'off')
+  check('归一化函数本身也认旧值', pure.normalizeOptimizerTier('extreme') === 'heavy'
+    && pure.normalizeOptimizerTier('') === 'standard' && pure.normalizeOptimizerTier('heavy') === 'heavy')
+  check('关闭档没有自定义提示词字段（它不调用模型）', pure.optimizerPromptFieldOf('off') === '')
+
+  // 自定义提示词的字段改名也要迁移：新字段为空而旧字段有内容 ⇒ 用旧内容（别把用户改过的弄丢）。
+  check('旧提示词字段的值迁移到新字段',
+    pure.sanitizeSettings({ optimizerPromptAdvanced: '我改过的提示词' }).optimizerPromptStandard === '我改过的提示词')
+  check('新字段有值时优先用新的',
+    pure.sanitizeSettings({ optimizerPromptStandard: '新的', optimizerPromptAdvanced: '旧的' }).optimizerPromptStandard === '新的')
+
+  // 0.14.0 优化选项卡片的六项默认值（照上游语义 + 我们的纪律：能花钱/给权限的一律默认关）。
+  const d = pure.DEFAULT_SETTINGS
+  check('协作基调默认普通', d.optimizerFraming === 'neutral')
+  check('权限默认审查（= 成品给你看，你点插入）', d.optimizerPermission === 'review')
+  check('模型默认跟随会话（空串）', d.optimizerModel === '')
+  check('上下文默认按回合、6 回合', d.optimizerHistory === 'turns' && d.optimizerTurns === 6)
+  check('内置 Bash 默认关（与只读工具同一套纪律）', d.optimizeBash === false)
+  check('非法枚举落回默认',
+    pure.sanitizeSettings({ optimizerFraming: 'x', optimizerPermission: 'y', optimizerHistory: 'z' }).optimizerFraming === 'neutral'
+    && pure.sanitizeSettings({ optimizerPermission: 'y' }).optimizerPermission === 'review'
+    && pure.sanitizeSettings({ optimizerHistory: 'z' }).optimizerHistory === 'turns')
+  check('回合数超范围被夹住',
+    pure.sanitizeSettings({ optimizerTurns: 99 }).optimizerTurns === 10
+    && pure.sanitizeSettings({ optimizerTurns: -3 }).optimizerTurns === 0
+    && pure.sanitizeSettings({ optimizerTurns: 'x' }).optimizerTurns === 6)
+  check('模型 id 去空白并截断',
+    pure.sanitizeSettings({ optimizerModel: '  go/x  ' }).optimizerModel === 'go/x'
+    && pure.sanitizeSettings({ optimizerModel: 'm'.repeat(500) }).optimizerModel.length === pure.OPTIMIZER_MODEL_MAX)
 }
 {
   // 0.5.0：右键菜单从布尔 menuNative 换成三档字符串 menuMode。
@@ -215,7 +251,7 @@ console.log('1. 快捷指令的净化（防脏数据）')
   check('快捷指令列表被改过 → 开（文档里的次级信号）',
     pure.sanitizeSettings({ quickPrompts: [{ id: 'x', label: 'x', prompt: 'x', always: false }] }).quickEnabled === true)
   check('优化档位不是默认 → 开',
-    pure.sanitizeSettings({ optimizerTier: 'extreme' }).quickEnabled === true)
+    pure.sanitizeSettings({ optimizerTier: 'heavy' }).quickEnabled === true)
 
   // 用户真实文档的回归：这就是他 2026-09-17 那份（headerValue 已换成假 UUID）。
   // 六栏必须全部保持开着 —— 升级不能把他正在用的东西关掉。
@@ -230,7 +266,7 @@ console.log('1. 快捷指令的净化（防脏数据）')
     headerAppliedName: 'x-opencode-session',
     headerAppliedValue: '00000000-0000-0000-0000-000000000000',
     headerStatus: '已写入 opencode-go、go',
-    optimizerTier: 'advanced',
+    optimizerTier: 'standard',
     panelWidth: 1007,
     panelHeight: 746,
     panelScroll: true,
@@ -522,7 +558,7 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
 
   const items = []
   const dropped = []
-  const outcome = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {
+  const outcome = await pure.optimizeDraftStream('把那个页面弄好看点', 'standard', {
     onItem: item => items.push(item),
     onDropped: row => dropped.push(row),
   })
@@ -535,7 +571,7 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
 
   // 预校验失败：宿主回普通 JSON + 400，客户端要把原因透出来（而不是只说 HTTP 400）。
   globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, error: '输入框是空的，没有可优化的内容' }), { status: 400 })
-  const rejected = await pure.optimizeDraftStream('x', 'advanced')
+  const rejected = await pure.optimizeDraftStream('x', 'standard')
   check('端到端：预校验 400 时透出宿主那句原因',
     rejected.ok === false && rejected.error === '输入框是空的，没有可优化的内容', JSON.stringify(rejected))
 
@@ -546,7 +582,7 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
       controller.close()
     },
   }), { status: 200 })
-  const noDone = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {})
+  const noDone = await pure.optimizeDraftStream('把那个页面弄好看点', 'standard', {})
   check('端到端：流结束却没有 done → 如实报错（不假装成功）',
     noDone.ok === false && /没有给出结论/.test(String(noDone.error)), JSON.stringify(noDone))
 
@@ -554,7 +590,7 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
   globalThis.fetch = async () => { throw new Error('aborted') }
   const aborter = new AbortController()
   aborter.abort()
-  const cancelled = await pure.optimizeDraftStream('把那个页面弄好看点', 'advanced', {}, aborter.signal)
+  const cancelled = await pure.optimizeDraftStream('把那个页面弄好看点', 'standard', {}, aborter.signal)
   check('端到端：取消时回报「已取消」（不冒充网络故障）',
     cancelled.ok === false && cancelled.error === '已取消', JSON.stringify(cancelled))
 
@@ -735,16 +771,16 @@ console.log('3e. 会话上下文：挑往来 / 收敛预算 / 渲染成块；记
 }
 
 {
-  const withIntent = pure.buildOptimizeSystem('advanced', '', { intent: true })
-  const without = pure.buildOptimizeSystem('advanced')
+  const withIntent = pure.buildOptimizeSystem('standard', '', { intent: true })
+  const without = pure.buildOptimizeSystem('standard')
   check('system：带上下文时追加"只用于理解、不算依据"那段纪律',
     withIntent.includes('不算依据') && withIntent.includes('会话上下文'), withIntent.slice(-160))
   check('system：不带上下文时没有那段', without.includes('不算依据') === false)
   check('system：两种情况都仍以输出契约结尾（契约永远是最后一块）',
     withIntent.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT) && without.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
   check('system：自定义提示词 + 上下文也照加纪律',
-    pure.buildOptimizeSystem('advanced', '我的任务段', { intent: true }).startsWith('我的任务段')
-    && pure.buildOptimizeSystem('advanced', '我的任务段', { intent: true }).includes('不算依据'))
+    pure.buildOptimizeSystem('standard', '我的任务段', { intent: true }).startsWith('我的任务段')
+    && pure.buildOptimizeSystem('standard', '我的任务段', { intent: true }).includes('不算依据'))
 
   const user = pure.buildOptimizeUser('把那个页面弄好看点', { context: '用户：改一下设置页\n工作 AI：好了', previous: '上一版成品' })
   check('user：上下文与上一轮成品都有各自的块',
@@ -779,25 +815,26 @@ console.log('3e. 会话上下文：挑往来 / 收敛预算 / 渲染成块；记
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
 console.log('4. 优化提示词：三档、依据纪律与输出契约')
 {
-  const advanced = pure.buildOptimizeSystem('advanced')
-  check('三档齐全', Object.keys(pure.OPTIMIZER_SPECS).join(',') === 'basic,advanced,extreme')
+  const advanced = pure.buildOptimizeSystem('standard')
+  // 三档**提示词**规格（off 档不调用模型，没有提示词）；名字已按 0.14.0 的新档位。
+  check('三档齐全', Object.keys(pure.OPTIMIZER_SPECS).join(',') === 'light,standard,heavy')
   check('人设段在（传话器）', advanced.includes('传话器/意图补全器'))
   check('依据纪律段在（要求逐字引文）', advanced.includes('依据纪律') && advanced.includes('逐字存在'))
   check('禁元话语段在', advanced.includes('不要元话语'))
   check('高级档要求补全没说出口的必要要求', advanced.includes('没说出口'))
-  check('普通档只修语言、不添需求', pure.buildOptimizeSystem('basic').includes('只做语言层修复'))
-  check('极端档要求分阶段计划与预案', pure.buildOptimizeSystem('extreme').includes('多情况预案'))
+  check('普通档只修语言、不添需求', pure.buildOptimizeSystem('light').includes('只做语言层修复'))
+  check('极端档要求分阶段计划与预案', pure.buildOptimizeSystem('heavy').includes('多情况预案'))
   check('未知档位回落到高级', pure.buildOptimizeSystem('???') === advanced)
-  check('温度：普通 0.2', pure.buildOptimizeTemperature('basic') === 0.2)
-  check('温度：高级 0.3', pure.buildOptimizeTemperature('advanced') === 0.3)
+  check('温度：普通 0.2', pure.buildOptimizeTemperature('light') === 0.2)
+  check('温度：高级 0.3', pure.buildOptimizeTemperature('standard') === 0.3)
   check('温度：未知回落高级', pure.buildOptimizeTemperature('???') === 0.3)
   // 输出契约必须**永远在最后**（模型对最后一条指令服从度最高），且不可能被自定义提示词顶掉。
   check('输出契约在末尾', advanced.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
   check('契约里给出 items/kind 的取值', advanced.includes('"items"') && advanced.includes('rewrite'))
   check('自定义提示词整体替换任务段，契约仍追加',
-    pure.buildOptimizeSystem('advanced', '我的任务段').startsWith('我的任务段')
-    && pure.buildOptimizeSystem('advanced', '我的任务段').includes(pure.OPTIMIZER_OUTPUT_CONTRACT))
-  check('空白的自定义提示词 = 用内置', pure.buildOptimizeSystem('advanced', '   ') === advanced)
+    pure.buildOptimizeSystem('standard', '我的任务段').startsWith('我的任务段')
+    && pure.buildOptimizeSystem('standard', '我的任务段').includes(pure.OPTIMIZER_OUTPUT_CONTRACT))
+  check('空白的自定义提示词 = 用内置', pure.buildOptimizeSystem('standard', '   ') === advanced)
   check('promptSource 判定', pure.optimizePromptSource('') === 'builtin'
     && pure.optimizePromptSource('x') === 'custom')
   const user = pure.buildOptimizeUser('把那个页面弄好看点')
@@ -852,7 +889,7 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   check('不支持的 op 如实记账', opsParsed.warnings.some(w => w.includes('add_item')))
 
   // ── 装配：原话为骨架
-  const assembled = pure.assembleCommand(original, parsed.items, { tier: 'advanced' })
+  const assembled = pure.assembleCommand(original, parsed.items, { tier: 'standard' })
   check('rewrite 按位置回填，未被覆盖的原文原样保留',
     assembled.text.startsWith('把那个页面做得更好看，动画也加上'), assembled.text)
   check('补全要求带逐字依据',
@@ -885,19 +922,19 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
 
   // ── 篇幅闸门：预算按档位给，降级要出声
   check('basic 预算：短原话走下限、长原话走倍数',
-    pure.optimizeBudgetFor('basic', 10) === 400 && pure.optimizeBudgetFor('basic', 1_000) === 1_400,
-    JSON.stringify([pure.optimizeBudgetFor('basic', 10), pure.optimizeBudgetFor('basic', 1_000)]))
-  check('advanced 预算比 basic 宽', pure.optimizeBudgetFor('advanced', 100) > pure.optimizeBudgetFor('basic', 100))
+    pure.optimizeBudgetFor('light', 10) === 400 && pure.optimizeBudgetFor('light', 1_000) === 1_400,
+    JSON.stringify([pure.optimizeBudgetFor('light', 10), pure.optimizeBudgetFor('light', 1_000)]))
+  check('advanced 预算比 basic 宽', pure.optimizeBudgetFor('standard', 100) > pure.optimizeBudgetFor('light', 100))
   check('预算有绝对上限（不随档位无限涨）',
-    pure.optimizeBudgetFor('extreme', 1_000_000) <= 12_000)
+    pure.optimizeBudgetFor('heavy', 1_000_000) <= 12_000)
   // 档位门：普通档不该出现 requirement / quality / plan / risk（提示词是请求，这里是保证）
   check('档位允许的条目种类',
-    pure.allowedKindsFor('basic').join(',') === 'rewrite,unknown'
-    && pure.allowedKindsFor('advanced').includes('requirement')
-    && pure.allowedKindsFor('advanced').includes('plan') === false
-    && pure.allowedKindsFor('extreme').includes('risk')
-    && pure.allowedKindsFor('???').join(',') === pure.allowedKindsFor('advanced').join(','))
-  const tierGated = pure.assembleCommand(original, parsed.items, { tier: 'basic' })
+    pure.allowedKindsFor('light').join(',') === 'rewrite,unknown'
+    && pure.allowedKindsFor('standard').includes('requirement')
+    && pure.allowedKindsFor('standard').includes('plan') === false
+    && pure.allowedKindsFor('heavy').includes('risk')
+    && pure.allowedKindsFor('???').join(',') === pure.allowedKindsFor('standard').join(','))
+  const tierGated = pure.assembleCommand(original, parsed.items, { tier: 'light' })
   check('普通档即使拿到 requirement 也不渲染（档位承诺由宿主保证）',
     !tierGated.text.includes('【补全要求')
     && tierGated.dropped.some(d => d.reason.includes('当前档位')))
@@ -906,7 +943,7 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
     { id: 'u2', kind: 'unknown', text: 'v'.repeat(400), unknownClass: 'lookupable_fact', quoteSource: 'none' },
     { id: 'r1', kind: 'risk', text: 'r'.repeat(400) },
     { id: 'r2', kind: 'risk', text: 'q'.repeat(400) },
-  ], { tier: 'extreme' })
+  ], { tier: 'heavy' })
   check('超预算时按固定顺序丢可选的节（risk 先于 unknown）',
     bulky.dropped.length > 0
     && bulky.dropped.every(d => d.kind === 'risk' && d.reason.includes('budget'))
@@ -916,23 +953,23 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   check('预算警告进了 warnings', bulky.warnings.some(w => w.includes('篇幅预算')))
 
   // ── 兜底口径：新机制永不比旧行为更差
-  const fb = pure.runOptimizePipeline('优化后的指令', original, { tier: 'advanced' })
+  const fb = pure.runOptimizePipeline('优化后的指令', original, { tier: 'standard' })
   check('模型没给 JSON → 按旧行为整段照收（fallback）',
     fb.ok === true && fb.fallback === true && fb.text === '优化后的指令')
-  const broken = pure.runOptimizePipeline('{"items":[', original, { tier: 'advanced' })
+  const broken = pure.runOptimizePipeline('{"items":[', original, { tier: 'standard' })
   check('半截 JSON → 失败，绝不把坏 JSON 写进输入框',
     broken.ok === false && broken.code === 'BAD_JSON')
-  const shape = pure.runOptimizePipeline('{"items":"not-an-array"}', original, { tier: 'advanced' })
+  const shape = pure.runOptimizePipeline('{"items":"not-an-array"}', original, { tier: 'standard' })
   check('有 items 键但类型不对 → 也判失败', shape.ok === false && shape.code === 'BAD_SHAPE')
-  const other = pure.runOptimizePipeline('把这段配置写进 config.json：\n\n{"port":8080}', original, { tier: 'advanced' })
+  const other = pure.runOptimizePipeline('把这段配置写进 config.json：\n\n{"port":8080}', original, { tier: 'standard' })
   check('旧式自由文本里夹着 JSON → 仍走兜底照收（不误判成信封）',
     other.ok === true && other.fallback === true)
-  const braceOnly = pure.runOptimizePipeline('{"port":8080}', original, { tier: 'advanced' })
+  const braceOnly = pure.runOptimizePipeline('{"port":8080}', original, { tier: 'standard' })
   check('整段就是一个不相干的 JSON 对象 → 也走兜底，不当成信封写坏',
     braceOnly.ok === true && braceOnly.fallback === true)
-  const empty = pure.runOptimizePipeline('{"items":[]}', original, { tier: 'advanced' })
+  const empty = pure.runOptimizePipeline('{"items":[]}', original, { tier: 'standard' })
   check('空数组 → 原话原样写回（每一轮必有成品）', empty.ok === true && empty.text === original)
-  const viaPipeline = pure.runOptimizePipeline(json, original, { tier: 'advanced' })
+  const viaPipeline = pure.runOptimizePipeline(json, original, { tier: 'standard' })
   check('整条流水线：解析→核对→装配一次跑通',
     viaPipeline.ok === true && viaPipeline.fallback === false
     && viaPipeline.text.startsWith('把那个页面做得更好看') && viaPipeline.dropped.length === 3)
@@ -953,11 +990,11 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   const closeOfFirst = raw.indexOf('},') + 1
   const closeOfSecond = raw.indexOf('},', closeOfFirst) + 1
 
-  const beforeFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst - 1), original, 'advanced')
+  const beforeFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst - 1), original, 'standard')
   check('第一条还没闭合 → 一条都不显示（半截对象绝不外泄）',
     beforeFirstClose.items.length === 0, JSON.stringify(beforeFirstClose.items.map(i => i.id)))
 
-  const afterFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst), original, 'advanced')
+  const afterFirstClose = pure.scanOptimizeStream(raw.slice(0, closeOfFirst), original, 'standard')
   check('第一条一闭合就出现（而且只有它）',
     afterFirstClose.items.length === 1 && afterFirstClose.items[0].id === 'item#1',
     JSON.stringify(afterFirstClose.items.map(i => i.id)))
@@ -965,7 +1002,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
     afterFirstClose.items[0].text === '把设置页做得好看点'
     && afterFirstClose.items[0].quote === '把那个页面弄好看点')
 
-  const afterSecond = pure.scanOptimizeStream(raw.slice(0, closeOfSecond), original, 'advanced')
+  const afterSecond = pure.scanOptimizeStream(raw.slice(0, closeOfSecond), original, 'standard')
   check('第二条闭合后依次追加（顺序稳定、只增不减）',
     afterSecond.items.map(i => i.id).join(',') === 'item#1,item#2',
     JSON.stringify(afterSecond.items.map(i => i.id)))
@@ -974,14 +1011,14 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   let leaked = 0
   let maxSeen = 0
   for (let n = 1; n <= raw.length; n += 1) {
-    const scan = pure.scanOptimizeStream(raw.slice(0, n), original, 'advanced')
+    const scan = pure.scanOptimizeStream(raw.slice(0, n), original, 'standard')
     if (scan.items.some(item => item.id === 'item#3')) leaked += 1
     maxSeen = Math.max(maxSeen, scan.items.length)
   }
   check('整段逐字符喂：引文对不上的条目一次都没闪过', leaked === 0, String(leaked))
   check('逐字符喂的最大可见条数是 2（第 3 条始终被挡）', maxSeen === 2, String(maxSeen))
 
-  const full = pure.scanOptimizeStream(raw, original, 'advanced')
+  const full = pure.scanOptimizeStream(raw, original, 'standard')
   check('数组闭合后 closed = true', full.closed === true)
   check('被丢的那条如实进 dropped（与批次同记账）',
     full.dropped.length === 1 && full.dropped[0].id === 'item#3' && /引文不是原话/.test(full.dropped[0].reason),
@@ -1003,7 +1040,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   const tricky = JSON.stringify({
     items: [{ kind: 'requirement', quote: '把那个页面弄好看点', text: trickyText }],
   })
-  const scan = pure.scanOptimizeStream(tricky, original, 'advanced')
+  const scan = pure.scanOptimizeStream(tricky, original, 'standard')
   check('text 里带 } 与引号、反斜杠、换行也能正确闭合与解析',
     scan.items.length === 1 && scan.items[0].text === trickyText, JSON.stringify(scan.items.map(i => i.text)))
 
@@ -1012,8 +1049,8 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
     items: [{ kind: 'quality', quote: '把那个页面弄好看点', text: '改完能正常打开' }],
   })
   check('basic 档不显示 quality 条目（与装配期的档位门同判据）',
-    pure.scanOptimizeStream(quality, original, 'basic').items.length === 0)
-  check('advanced 档显示同一条', pure.scanOptimizeStream(quality, original, 'advanced').items.length === 1)
+    pure.scanOptimizeStream(quality, original, 'light').items.length === 0)
+  check('advanced 档显示同一条', pure.scanOptimizeStream(quality, original, 'standard').items.length === 1)
 
   // ops 形态（对方 0.6 的信封）与"不支持的 op"。
   const ops = JSON.stringify({
@@ -1022,7 +1059,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
       { op: 'set_item_status', id: 'x', status: 'done' },
     ],
   })
-  const opsScan = pure.scanOptimizeStream(ops, original, 'advanced')
+  const opsScan = pure.scanOptimizeStream(ops, original, 'standard')
   check('ops 信封里只认 add_item，条目照常出现',
     opsScan.items.length === 1 && opsScan.items[0].id === 'item#1', JSON.stringify(opsScan.items.map(i => i.id)))
   check('不支持的 op 如实记一条警告',
@@ -1030,19 +1067,19 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
 
   // 半截/坏 JSON：不抛错、不产出（失败由批次解析判）。
   check('坏 JSON 前缀不抛错、不产出',
-    pure.scanOptimizeStream('{"items":[{"kind":', original, 'advanced').items.length === 0)
+    pure.scanOptimizeStream('{"items":[{"kind":', original, 'standard').items.length === 0)
   check('空数组：没有条目也没有丢弃，且数组已闭合',
     (() => {
-      const scan = pure.scanOptimizeStream('{"items":[]}', original, 'advanced')
+      const scan = pure.scanOptimizeStream('{"items":[]}', original, 'standard')
       return scan.items.length === 0 && scan.dropped.length === 0 && scan.closed === true
     })())
   check('没有信封（自由文本）时不产出任何条目',
-    pure.scanOptimizeStream('我来帮你把这句话理顺一下。', original, 'advanced').items.length === 0)
+    pure.scanOptimizeStream('我来帮你把这句话理顺一下。', original, 'standard').items.length === 0)
 
   // 思考块里复述了一份假信封：扫描取**最后**一个信封 ⇒ 认的是真产出。
   const think = '<think>{"items":[{"kind":"requirement","quote":"这句在原话里不存在","text":"假的"}]}</think>'
     + JSON.stringify({ items: [{ kind: 'requirement', quote: '把那个页面弄好看点', text: '改完能正常打开' }] })
-  const thinkScan = pure.scanOptimizeStream(think, original, 'advanced')
+  const thinkScan = pure.scanOptimizeStream(think, original, 'standard')
   check('思考块里复述的假信封不会被当成产出（取最后一个信封）',
     thinkScan.items.length === 1 && thinkScan.items[0].quote === '把那个页面弄好看点',
     JSON.stringify(thinkScan.items.map(i => `${i.id}|${i.quote ?? ''}`)))
@@ -1054,7 +1091,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
       { kind: 'rewrite', quote: '把那个页面', text: 'B' },
     ],
   })
-  const dupScan = pure.scanOptimizeStream(dup, original, 'advanced')
+  const dupScan = pure.scanOptimizeStream(dup, original, 'standard')
   check('同一段原话的两条 rewrite：只留靠前那条，另一条如实丢弃',
     dupScan.items.length === 1 && dupScan.items[0].text === 'A'
     && dupScan.dropped.some(d => /重复/.test(d.reason)), JSON.stringify(dupScan.dropped))
@@ -1063,7 +1100,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   const many = JSON.stringify({
     items: Array.from({ length: 13 }, () => ({ kind: 'requirement', quote: '把那个页面弄好看点', text: 'X' })),
   })
-  const manyScan = pure.scanOptimizeStream(many, original, 'advanced')
+  const manyScan = pure.scanOptimizeStream(many, original, 'standard')
   check('超过单轮上限的条目在流里也不出现（12 条封顶）',
     manyScan.items.length === 12 && manyScan.dropped.some(d => /上限/.test(d.reason)),
     `${String(manyScan.items.length)} / ${String(manyScan.dropped.length)}`)
@@ -1254,7 +1291,7 @@ const json = res => JSON.parse(res.captured.body)
 
   const handler = optimizerRoute(host).handler
   const res = makeRes()
-  await handler(makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler(makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   const body = json(res)
   check('HTTP 200', res.captured.status === 200, String(res.captured.status))
   check('按条目装配：rewrite 回填原话', body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
@@ -1278,10 +1315,10 @@ const json = res => JSON.parse(res.captured.body)
   // 自定义提示词（设置页里那份）必须真的被用上，且契约仍然追加在末尾。
   const host = await bootHost({
     model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
-    settings: { optimizerPromptAdvanced: '我的自定义任务段' },
+    settings: { optimizerPromptStandard: '我的自定义任务段' },
   })
   const res = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   check('用了设置里的自定义提示词', host.llmCalls[0].system.startsWith('我的自定义任务段'))
   check('自定义提示词不顶掉输出契约', host.llmCalls[0].system.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
   check('回报 promptSource=custom', json(res).promptSource === 'custom', JSON.stringify(json(res).promptSource))
@@ -1291,10 +1328,10 @@ const json = res => JSON.parse(res.captured.body)
   const host = await bootHost({
     model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
     modernSettings: true,
-    settings: { optimizerPromptExtreme: '一代新版用的任务段' },
+    settings: { optimizerPromptHeavy: '一代新版用的任务段' },
   })
   const res = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'extreme' })), res)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'heavy' })), res)
   check('0.1.7 形状（没有 get）也能读到自定义提示词',
     host.llmCalls[0].system.startsWith('一代新版用的任务段'), host.llmCalls[0].system.slice(0, 30))
 }
@@ -1306,7 +1343,7 @@ const json = res => JSON.parse(res.captured.body)
   })
   check('设置读不动也照常注册优化路由', optimizerRoute(host) !== undefined)
   const res = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   const body = json(res)
   check('读设置抛异常 → 回落内置提示词，优化照常成功',
     body.ok === true && body.promptSource === 'builtin'
@@ -1401,7 +1438,7 @@ const json = res => JSON.parse(res.captured.body)
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const handler = optimizerRoute(host).handler
   const res = makeRes()
-  await handler(makeReq('POST', JSON.stringify({ text: 'x', tier: 'basic' })), res)
+  await handler(makeReq('POST', JSON.stringify({ text: 'x', tier: 'light' })), res)
   check('basic 档温度 0.2', host.llmCalls[0].temperature === 0.2)
   check('basic 档 system 正确', host.llmCalls[0].system.includes('只做语言层修复'))
 }
@@ -1505,7 +1542,7 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
   // 宿主没有 connection 服务（老宿主/未注入）时，关卡缺席 ≠ 拒绝：照常工作。
   const bare = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const bareRes = makeRes()
-  await handler0(bare, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), bareRes)
+  await handler0(bare, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), bareRes)
   check('没有 connection 服务时照常优化（缺席不等于拒绝）', json(bareRes).ok === true, bareRes.captured.body)
 }
 
@@ -1513,7 +1550,7 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
   // 2) 斜杠命令：只把正文送去模型；前缀由调用方拼回。
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const res = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal 把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal 把那个页面弄好看点', tier: 'standard' })), res)
   const body = json(res)
   const sent = host.llmCalls[0].messages[0].content[0].text
   check('斜杠命令：送去模型的是命令后面的正文', sent.includes('把那个页面弄好看点') && sent.includes('【待转达内容】'), sent.slice(0, 60))
@@ -1524,13 +1561,13 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
     body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
 
   const onlyCmd = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal', tier: 'advanced' })), onlyCmd)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal', tier: 'standard' })), onlyCmd)
   check('只有命令、没有正文 → 400，并说明原因',
     onlyCmd.captured.status === 400 && /没有正文/.test(json(onlyCmd).error), onlyCmd.captured.body)
   check('只有命令时确实没有发起模型调用', host.llmCalls.length === 1, String(host.llmCalls.length))
 
   const pathLike = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '/path/to/file 这个报错怎么修', tier: 'advanced' })), pathLike)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '/path/to/file 这个报错怎么修', tier: 'standard' })), pathLike)
   check('`/path/...` 不是命令：整段照旧送去优化（不误拆）',
     host.llmCalls[1].messages[0].content[0].text.includes('/path/to/file 这个报错怎么修'),
     host.llmCalls[1].messages[0].content[0].text.slice(0, 80))
@@ -1541,7 +1578,7 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
   const infoWith = efforts => () => Promise.resolve({ provider: 'go', model: 'm', name: 'm', reasoning: { efforts } })
   const run = async host => {
     const res = makeRes()
-    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
     return res
   }
 
@@ -1615,7 +1652,7 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
     set statusCode(code) { captured.status = code },
   }
 
-  const pending = handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  const pending = handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   await new Promise(resolve => { setTimeout(resolve, 20) })
   check('优化进行中在 res 上挂了 close 监听（用 res 而不是 req）',
     listeners.some(([event]) => event === 'close'), JSON.stringify(listeners.map(([event]) => event)))
@@ -1658,7 +1695,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
   const res = makeStreamRes()
-  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   const events = res.captured.events
 
   check('SSE：回 200 且 content-type 是 text/event-stream',
@@ -1683,7 +1720,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
 
   // 两条路径必须给出一模一样的成品 —— 流式只改"送达方式"，不改任何判定。
   const once = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), once)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), once)
   check('SSE：成品与旧 JSON 路径逐字相同', done.text === json(once).text,
     `${String(done.text)} vs ${String(json(once).text)}`)
 }
@@ -1703,7 +1740,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
   })
   const res = makeStreamRes()
   resRef = res
-  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   check('SSE：条目在模型还没写完时就已推给客户端（真·边写边看）', sawItemBeforeFinish)
   check('SSE：闭合后不重复推送', res.captured.events.filter(event => event.type === 'item').length === 1,
     String(res.captured.events.filter(event => event.type === 'item').length))
@@ -1722,7 +1759,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
     ],
   })
   const res = makeStreamRes()
-  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res)
+  await handler0(host, streamReq(JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   const items = res.captured.events.filter(event => event.type === 'item')
   check('SSE：引文对不上原话的条目一次都没出现',
     items.length === 1 && items[0].quote === '把那个页面弄好看点', JSON.stringify(items))
@@ -1735,13 +1772,13 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
   // 预校验失败：流还没开始，照旧普通 JSON + 4xx（与对方 0.3.17 的"预校验走状态码"同口径）。
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const res = makeStreamRes()
-  await handler0(host, streamReq(JSON.stringify({ text: '   ', tier: 'advanced' })), res)
+  await handler0(host, streamReq(JSON.stringify({ text: '   ', tier: 'standard' })), res)
   check('SSE：预校验失败仍回普通 JSON + 400（不是事件流）',
     res.captured.status === 400 && res.captured.events.length === 0 && JSON.parse(res.captured.body).ok === false,
     res.captured.body)
 
   const onlyCmd = makeStreamRes()
-  await handler0(host, streamReq(JSON.stringify({ text: '/goal', tier: 'advanced' })), onlyCmd)
+  await handler0(host, streamReq(JSON.stringify({ text: '/goal', tier: 'standard' })), onlyCmd)
   check('SSE：只有命令没有正文也是 400（不发请求）',
     onlyCmd.captured.status === 400 && /没有正文/.test(json({ captured: { body: onlyCmd.captured.body } }).error),
     onlyCmd.captured.body)
@@ -1767,7 +1804,7 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
   readCalls.length = 0
   const withContext = await boot()
   const res1 = makeRes()
-  await handler0(withContext, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'advanced', sessionId: 's-1' })), res1)
+  await handler0(withContext, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'standard', sessionId: 's-1' })), res1)
   const user1 = withContext.llmCalls[0].messages[0].content[0].text
   check('上下文：送到模型的 user 里有会话往来块',
     user1.includes('<会话上下文>') && user1.includes('帮我改一下设置页') && user1.includes('工作 AI：好了，标题改了'),
@@ -1782,7 +1819,7 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
   readCalls.length = 0
   const off = await boot({ settings: { optimizerContext: false } })
   const res2 = makeRes()
-  await handler0(off, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'advanced', sessionId: 's-1' })), res2)
+  await handler0(off, makeReq('POST', JSON.stringify({ text: '它那个也顺手改一下', tier: 'standard', sessionId: 's-1' })), res2)
   check('开关关掉：不读会话（连快照都不读）', readCalls.length === 0, JSON.stringify(readCalls))
   check('开关关掉：提示词里没有上下文块与那段纪律',
     off.llmCalls[0].messages[0].content[0].text.includes('<会话上下文>') === false
@@ -1792,13 +1829,13 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
   readCalls.length = 0
   const noSession = await boot()
   const res3 = makeRes()
-  await handler0(noSession, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), res3)
+  await handler0(noSession, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res3)
   check('没送 sessionId：不读会话、照常优化',
     readCalls.length === 0 && json(res3).ok === true && json(res3).contextTurns === 0, JSON.stringify(json(res3).contextTurns))
 
   const noService = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const res4 = makeRes()
-  await handler0(noService, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', sessionId: 's-1' })), res4)
+  await handler0(noService, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 's-1' })), res4)
   check('宿主没有 sessionQuery：按"没有上下文"继续，不失败',
     json(res4).ok === true && json(res4).contextTurns === 0, res4.captured.body.slice(0, 80))
 
@@ -1807,7 +1844,7 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
     sessionQuery: { readSession: async () => { throw new Error('log corrupt') } },
   })
   const res5 = makeRes()
-  await handler0(broken, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', sessionId: 's-1' })), res5)
+  await handler0(broken, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 's-1' })), res5)
   check('读会话抛错：上下文当没有，优化照常完成',
     json(res5).ok === true && json(res5).contextTurns === 0, res5.captured.body.slice(0, 80))
 }
@@ -1817,7 +1854,7 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
   const res = makeRes()
   await handler0(host, makeReq('POST', JSON.stringify({
-    text: '把那个页面弄好看点，另外加个导出', tier: 'advanced', previous: '上一版成品：把设置页做得好看点',
+    text: '把那个页面弄好看点，另外加个导出', tier: 'standard', previous: '上一版成品：把设置页做得好看点',
   })), res)
   const user = host.llmCalls[0].messages[0].content[0].text
   check('记忆链：上一轮成品进了 user 块', user.includes('<上一轮成品>') && user.includes('上一版成品'), user.slice(0, 120))
@@ -1826,12 +1863,12 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
   check('记忆链：回报 hadPrevious', json(res).hadPrevious === true)
 
   const noPrev = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced' })), noPrev)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), noPrev)
   check('记忆链：没带就是没有（不凭空造一个空块）',
     host.llmCalls[1].messages[0].content[0].text.includes('<上一轮成品>') === false && json(noPrev).hadPrevious === false)
 
   const long = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'advanced', previous: 'x'.repeat(2_000) })), long)
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', previous: 'x'.repeat(2_000) })), long)
   const block = /<上一轮成品>\n([\s\S]*?)\n<\/上一轮成品>/.exec(host.llmCalls[2].messages[0].content[0].text)
   check('记忆链：超长上一轮截断到 1500（不让它把草稿挤掉）',
     block !== null && block[1].length === 1_500, String(block?.[1]?.length))
@@ -1849,7 +1886,7 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
     const secret = '独角兽紫罗兰七号'
     const draft = `把那个页面弄好看点：${secret}`
     const res = makeRes()
-    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 'sess-ledger-1' })), res)
+    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 'sess-ledger-1' })), res)
     check('这一轮成功（假模型吐 2 条）', json(res).ok === true && json(res).itemCount === 2, JSON.stringify(json(res)).slice(0, 90))
 
     const file = join(dir, 'composer-ux', 'optimize-log.jsonl')
@@ -1860,7 +1897,7 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
     check('是成功的 run 记录', record.kind === 'run' && record.ok === true)
     check('记的是草稿**字数**而不是草稿', record.draftChars === draft.length, `${record.draftChars} vs ${draft.length}`)
     check('记了条目数/档位/路由',
-      record.items === 2 && record.tier === 'advanced' && record.provider === 'go' && record.model === 'deepseek-flash',
+      record.items === 2 && record.tier === 'standard' && record.provider === 'go' && record.model === 'deepseek-flash',
       JSON.stringify([record.items, record.tier, record.provider, record.model]))
     check('记了会话与耗时', record.sessionId === 'sess-ledger-1' && Number.isFinite(record.ms))
     check('❗台账里搜不到草稿里那个独特的词', !text1.includes(secret))
@@ -1868,9 +1905,9 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
 
     // 第二轮：追加而不是覆盖（台账是流水，不是"最后一次状态"）
     const res2 = makeRes()
-    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic', sessionId: 'sess-ledger-2' })), res2)
+    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'light', sessionId: 'sess-ledger-2' })), res2)
     const lines2 = readFileSync(file, 'utf8').trim().split('\n')
-    check('第二轮是追加', lines2.length === 2 && JSON.parse(lines2[1]).tier === 'basic', String(lines2.length))
+    check('第二轮是追加', lines2.length === 2 && JSON.parse(lines2[1]).tier === 'light', String(lines2.length))
     check('两条记录的 sessionId 各自正确',
       JSON.parse(lines2[0]).sessionId === 'sess-ledger-1' && JSON.parse(lines2[1]).sessionId === 'sess-ledger-2')
 
@@ -1891,7 +1928,7 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
       }, { type: 'finish', reason: { kind: 'stop' } }],
     })
     const dropRes = makeRes()
-    await handler0(dropHost, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 'sess-ledger-3' })), dropRes)
+    await handler0(dropHost, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 'sess-ledger-3' })), dropRes)
     // 注意：路由返回的 `dropped` 是**条目数组**，台账里记的才是条数。
     check('这条用例真的触发了丢弃', json(dropRes).dropped.length === 1, JSON.stringify(json(dropRes).dropped))
     const lines3 = readFileSync(file, 'utf8').trim().split('\n')
@@ -1907,7 +1944,7 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
       settings: { optimizerLedger: false },
     })
     const before = readFileSync(file, 'utf8').trim().split('\n').length
-    await handler0(offHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic' })), makeRes())
+    await handler0(offHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'light' })), makeRes())
     check('开关关掉后一条都不写', readFileSync(file, 'utf8').trim().split('\n').length === before, String(before))
 
     // 被官方信任关卡拒掉的请求不该进台账（连 body 都不读，当然也不该记账）
@@ -1915,7 +1952,7 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
       model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
       connection: { requestRejection: () => 403 },
     })
-    await handler0(rejectedHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'basic' })), makeRes())
+    await handler0(rejectedHost, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'light' })), makeRes())
     check('被信任关卡拒掉的请求不进台账',
       readFileSync(file, 'utf8').trim().split('\n').length === before)
   } finally {
@@ -1946,7 +1983,7 @@ console.log('5g. 只读查证工具：默认关、开了才派、查完不是条
 
     // ① 默认关：一次调用，调用里没有 tools
     const off = await bootHost({ model: selection, sessionQuery })
-    await handler0(off, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-1' })), makeRes())
+    await handler0(off, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 's-tools-1' })), makeRes())
     check('默认关：只调一次模型', off.llmCalls.length === 1, String(off.llmCalls.length))
     check('默认关：调用里不带 tools', off.llmCalls[0].tools === undefined)
 
@@ -1958,7 +1995,7 @@ console.log('5g. 只读查证工具：默认关、开了才派、查完不是条
       chunksSeq: [readCall, [{ type: 'text-delta', index: 0, text: finalJson }, { type: 'finish', reason: { kind: 'stop' } }]],
     })
     const res = makeRes()
-    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-1' })), res)
+    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 's-tools-1' })), res)
     check('开着：调了两次模型（查证 + 收尾）', host.llmCalls.length === 2, String(host.llmCalls.length))
     check('开着：第一次调用带三个只读工具', host.llmCalls[0].tools?.length === 3, String(host.llmCalls[0].tools?.length))
     check('开着：系统提示里带了只读查证说明', String(host.llmCalls[0].system).includes('只读查证'))
@@ -1986,7 +2023,7 @@ console.log('5g. 只读查证工具：默认关、开了才派、查完不是条
       ],
     })
     const res3 = makeRes()
-    await handler0(prose, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-2' })), res3)
+    await handler0(prose, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 's-tools-2' })), res3)
     check('回落：那次不带工具的调用确实发生了（第 3 次）', prose.llmCalls.length === 3, String(prose.llmCalls.length))
     check('回落：不带工具那次**换掉了系统提示**（否则模型还在等工具）',
       !String(prose.llmCalls[2].system).includes('只读查证') && prose.llmCalls[2].tools === undefined)
@@ -2000,7 +2037,7 @@ console.log('5g. 只读查证工具：默认关、开了才派、查完不是条
       sessionQuery: { readSession: async () => ({ header: {} }) },
       settings: { optimizeReadTools: true },
     })
-    await handler0(noCwd, makeReq('POST', JSON.stringify({ text: draft, tier: 'advanced', sessionId: 's-tools-3' })), makeRes())
+    await handler0(noCwd, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 's-tools-3' })), makeRes())
     check('拿不到工作目录就不派工具', noCwd.llmCalls.length === 1 && noCwd.llmCalls[0].tools === undefined)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
@@ -2020,12 +2057,12 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
   // 面板是空的，用户会以为功能没做出来。
   const fresh = plain(schema({}))
   check('旧文档 → 快捷指令回落内置 9 条', fresh.quickPrompts?.length === 9, String(fresh.quickPrompts?.length))
-  check('旧文档 → 档位回落高级', fresh.optimizerTier === 'advanced', fresh.optimizerTier)
+  check('旧文档 → 档位回落高级', fresh.optimizerTier === 'standard', fresh.optimizerTier)
   check('旧文档 → 三档自定义提示词回落空串（= 内置）',
-    fresh.optimizerPromptBasic === '' && fresh.optimizerPromptAdvanced === '' && fresh.optimizerPromptExtreme === '',
-    JSON.stringify([fresh.optimizerPromptBasic, fresh.optimizerPromptAdvanced, fresh.optimizerPromptExtreme]))
+    fresh.optimizerPromptLight === '' && fresh.optimizerPromptStandard === '' && fresh.optimizerPromptHeavy === '',
+    JSON.stringify([fresh.optimizerPromptLight, fresh.optimizerPromptStandard, fresh.optimizerPromptHeavy]))
   check('自定义提示词能透过 schema 原样回来',
-    plain(schema({ optimizerPromptAdvanced: '我的任务段' })).optimizerPromptAdvanced === '我的任务段')
+    plain(schema({ optimizerPromptStandard: '我的任务段' })).optimizerPromptStandard === '我的任务段')
   check('旧文档 → 原有字段仍齐', fresh.enabled === true && fresh.sendKey === 'Enter' && fresh.headerName === 'x-opencode-session')
   check('内置条目结构正确', fresh.quickPrompts[0].id === 'builtin-1' && fresh.quickPrompts[0].always === false)
 
@@ -2645,6 +2682,26 @@ console.log('13. 金额规则失效：写完设置的人自己通知，不靠设
     /const onMoneySettingsUpdated = \(\): void => \{[\s\S]{0,200}readMoneySettings\(\)[\s\S]{0,120}invalidateProviderPrices\(\)[\s\S]{0,120}usageCache\.clear\(\)/.test(host))
   check('文档里写清了"不能只靠事件"的理由（0.1.7 的事件只在 describe 里发）',
     host.includes('settings/document-updated') && host.includes('describe()'))
+}
+
+console.log('5h. 关闭档（0.14.0）：不优化就是**一次模型调用都不发生**')
+{
+  // 可观测证据两样：`llmCalls` 为空（假模型桩记着每次调用），且没有落台账行。
+  const dir = mkdtempSync(join(tmpdir(), 'composer-ux-off-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dir
+  try {
+    const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) } })
+    const res = makeRes()
+    await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'off', sessionId: 'sess-off-1' })), res)
+    const body = json(res)
+    check('关闭档被挡下来（ok=false，不会假装优化过）', body.ok === false, JSON.stringify(body).slice(0, 90))
+    check('错误信息说清是「关闭」并指路', /关闭/.test(String(body.error)) && /档位/.test(String(body.error)))
+    check('❗一次模型调用都没发生（不花额度）', host.llmCalls.length === 0, String(host.llmCalls.length))
+    check('❗没有落台账（这轮根本没跑）', !existsSync(join(dir, 'composer-ux', 'optimize-log.jsonl')))
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previousHome
+  }
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

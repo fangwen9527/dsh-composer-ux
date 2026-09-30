@@ -1173,6 +1173,31 @@ const cases = [
     expect: "恢复时把 hidden 一起读回来",
   },
 
+  {
+    name: "EJ 旧档位不再迁移（升级后用户选的「极端」被打回默认）",
+    file: "src/settings-contract.ts",
+    from: "  basic: 'light',\n  advanced: 'standard',\n  extreme: 'heavy',",
+    to: "  basic: 'standard',\n  advanced: 'standard',\n  extreme: 'standard',",
+    test: "test/quick-commands.mjs",
+    expect: "旧档 extreme → 重度",
+  },
+  {
+    name: "EK 回合数不夹范围（99 回合会把上下文放大到失控）",
+    file: "src/settings-contract.ts",
+    from: "  return Math.min(OPTIMIZER_TURNS_MAX, Math.max(OPTIMIZER_TURNS_MIN, Math.round(value)))",
+    to: "  return Math.round(value)",
+    test: "test/quick-commands.mjs",
+    expect: "回合数超范围被夹住",
+  },
+  {
+    name: "EL 关闭档不拦（点一下照样调用模型、照样花额度）",
+    file: "src/host.ts",
+    from: "      if (tier === 'off') {",
+    to: "      if (false) {",
+    test: "test/quick-commands.mjs",
+    expect: "关闭档被挡下来（ok=false，不会假装优化过）",
+  },
+
 ]
 
 let allBit = true

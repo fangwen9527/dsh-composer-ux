@@ -113,12 +113,12 @@ export const OPTIMIZE_ITEM_MAX_CHARS = 300
  * 各档的任务段（**可被设置页里的自定义提示词整体替换**的那部分）。
  *
  * 三档的差别是"允许补到哪一层"，不是"换一种语气"：
- *   · basic    —— 只碰语言；不产出 requirement / plan / risk。
- *   · advanced —— 允许补"能指回原话某句"的必要要求，并对质量词作解释。
- *   · extreme  —— 再加分阶段计划与预案。
+ *   · light    —— 只碰语言；不产出 requirement / plan / risk。
+ *   · standard —— 允许补"能指回原话某句"的必要要求，并对质量词作解释。
+ *   · heavy    —— 再加分阶段计划与预案。（以上是 0.13.x 的语义；0.14.0 S2 会换成新的档位策略。）
  */
 const TIER_TASKS: Record<string, readonly string[]> = {
-  basic: [
+  light: [
     '【本轮任务：只做语言层修复】',
     '用户原话可能有病句、指代不明、用词含糊。把它改写成通顺、精确、无歧义的**同一段话**。',
     '只产出 `rewrite`（可以按句子拆成多条，每条引用原话里对应那一句）。',
@@ -127,7 +127,7 @@ const TIER_TASKS: Record<string, readonly string[]> = {
     'user_preference 或 lookupable_fact）；确实没有可补的就输出空数组。',
     '长度纪律：成品不超过原话的 1.4 倍；原话 30 字以内时不超过 60 字。',
   ],
-  advanced: [
+  standard: [
     '【本轮任务：在不动目标的前提下把命令说清楚】',
     '用户原话含糊、缺关键约束。你要补的是"用户显然想要、但没说出口"的必要信息，',
     '让它一次做对 —— 但每一条都必须是**从原话某一句直接推出**的，并引用那一句。',
@@ -141,7 +141,7 @@ const TIER_TASKS: Record<string, readonly string[]> = {
     '禁止：新增功能、新目标、新依赖；虚构项目事实；写用户没授权的技术选型。',
     '数量纪律：requirement 最多 3 条，quality 最多 2 条，unknown 最多 2 条。',
   ],
-  extreme: [
+  heavy: [
     '【本轮任务：把诉求固化成一条可直接执行的命令】',
     '这次是多步执行的复杂任务，工作 AI 会照这条命令干，用户不会再补充。',
     '在"高级"档允许的全部条目的基础上，再加两类（都要以用户在给工作 AI 下命令的口吻写）：',
@@ -158,17 +158,17 @@ const TIER_TASKS: Record<string, readonly string[]> = {
 
 /** 档位 id 与系统提示 / 温度的对应表。 */
 export const OPTIMIZER_SPECS = {
-  basic: {
+  light: {
     temperature: 0.2,
-    system: [RELAY_ROLE, TIER_TASKS.basic!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
+    system: [RELAY_ROLE, TIER_TASKS.light!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
   },
-  advanced: {
+  standard: {
     temperature: 0.3,
-    system: [RELAY_ROLE, TIER_TASKS.advanced!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
+    system: [RELAY_ROLE, TIER_TASKS.standard!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
   },
-  extreme: {
+  heavy: {
     temperature: 0.3,
-    system: [RELAY_ROLE, TIER_TASKS.extreme!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
+    system: [RELAY_ROLE, TIER_TASKS.heavy!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
   },
 } as const
 
@@ -176,7 +176,7 @@ export const OPTIMIZER_SPECS = {
 export type OptimizerSpecTier = keyof typeof OPTIMIZER_SPECS
 
 /** 未知档位回落到默认档（与 `DEFAULT_OPTIMIZER_TIER` 同值；此处不 import 以免循环）。 */
-const FALLBACK_TIER = 'advanced'
+const FALLBACK_TIER = 'standard'
 
 /** 取一个档位的说明（未知档走默认档）。 */
 function specOf(tier: string): { temperature: number; system: string } {

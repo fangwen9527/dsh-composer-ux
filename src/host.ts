@@ -32,6 +32,7 @@ import {
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
   OPTIMIZER_TURNS_FIELD,
+  LEGACY_OPTIMIZER_PROMPT_FIELDS,
   OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
@@ -481,9 +482,14 @@ function ownSchema(): Schema {
     [OPTIMIZER_TURNS_FIELD]: z.number().default(DEFAULT_SETTINGS.optimizerTurns),
     [OPTIMIZE_BASH_FIELD]: z.boolean().default(DEFAULT_SETTINGS.optimizeBash),
     // 三档的自定义系统提示词：默认空串 = 用内置那份（空串同时就是「恢复内置」写回的值）。
-    [OPTIMIZER_PROMPT_FIELDS.basic]: z.string().default(DEFAULT_SETTINGS.optimizerPromptBasic),
-    [OPTIMIZER_PROMPT_FIELDS.advanced]: z.string().default(DEFAULT_SETTINGS.optimizerPromptAdvanced),
-    [OPTIMIZER_PROMPT_FIELDS.extreme]: z.string().default(DEFAULT_SETTINGS.optimizerPromptExtreme),
+    [OPTIMIZER_PROMPT_FIELDS.light]: z.string().default(DEFAULT_SETTINGS.optimizerPromptLight),
+    [OPTIMIZER_PROMPT_FIELDS.standard]: z.string().default(DEFAULT_SETTINGS.optimizerPromptStandard),
+    [OPTIMIZER_PROMPT_FIELDS.heavy]: z.string().default(DEFAULT_SETTINGS.optimizerPromptHeavy),
+    // 旧字段名（0.14.0 改名）：继续注册，DSH 才不会把用户旧的自定义提示词当未知字段丢掉；
+    // 读取层把它当成新字段的兜底（见 settings-contract 的迁移读）。
+    [LEGACY_OPTIMIZER_PROMPT_FIELDS.light]: z.string().default(''),
+    [LEGACY_OPTIMIZER_PROMPT_FIELDS.standard]: z.string().default(''),
+    [LEGACY_OPTIMIZER_PROMPT_FIELDS.heavy]: z.string().default(''),
     // 「默认终端」（0.5.0 起）：用户档位与可选路径。
     [TERMINAL_MODE_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalMode),
     [TERMINAL_BASH_PATH_FIELD]: z.string().default(DEFAULT_SETTINGS.terminalBashPath),
@@ -926,6 +932,12 @@ export function apply(ctx: Context, config?: unknown): void {
       }
 
       const tier = textOf(payload.tier) === '' ? DEFAULT_OPTIMIZER_TIER : textOf(payload.tier)
+      // 关闭档（0.14.0）：**在调用模型之前**就退回去 —— 一个"不优化"的档位不该花任何额度。
+      // 面板那边也把主按钮禁掉了，这里是第二道（HTTP 可以被直接调用）。
+      if (tier === 'off') {
+        sendJson(res, 200, { ok: false, error: '档位是「关闭」：不优化。到「快捷指令」面板把档位拨到轻度或以上再来。' })
+        return
+      }
       const route = resolveRoute(payload)
       if (route.provider === '' || route.model === '') {
         sendJson(res, 200, { ok: false, error: '拿不到当前的模型路由，无法优化（请先在输入框旁的模型选择器里选一个模型）' })

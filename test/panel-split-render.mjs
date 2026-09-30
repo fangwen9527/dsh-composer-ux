@@ -132,7 +132,8 @@ console.log('1. 默认：面板打开时展开「快捷指令」那一半')
   const text = textOf(html)
   check('面板打开（锚点存在）', html.length > 0)
   check('标题行常露：快捷指令 + 三档档位 + ✨ 优化提示词',
-    text.includes('快捷指令') && text.includes('普通') && text.includes('高级') && text.includes('极端')
+    text.includes('快捷指令') && text.includes('关闭') && text.includes('轻度') && text.includes('标准')
+    && text.includes('重度')
     && text.includes('优化提示词'))
   check('切换按钮在，且默认是收起态（▸）', html.includes('▸') && html.includes('还没有结果'))
   check('默认渲染的是快捷指令那半：分类标签与条目都在',

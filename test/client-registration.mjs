@@ -141,7 +141,7 @@ const effectLabels = []
 const scopeValue = {
   enabled: true,
   quickPrompts: [{ id: 'a', label: '甲', prompt: '内容甲', always: true }],
-  optimizerTier: 'extreme',
+  optimizerTier: 'heavy',
 }
 /** 设置变化的订阅者：三档行为测试要靠它把新值推进插件（真实插件就是靠这个 sync）。 */
 const settingsSubscribers = new Set()
@@ -313,6 +313,10 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
   check('0.13.2：**收起**的结果框不触发自动切换（✕ 的意图就是别自动弹）',
     panel.includes('const dockVisible = dockPresent && !dockHidden')
     && panel.includes('dock: SnapshotStore<OptimizeDockState | null>') && panel.includes('dockHidden: SnapshotStore<boolean>'))
+  check('0.14.0：档位=关闭时主按钮禁用并写明原因（不做一个看起来还能点的按钮）',
+    panel.includes("const tierOff = settings.optimizerTier === 'off'")
+    && panel.includes('disabled={busy || tierOff}') && panel.includes('优化已关闭')
+    && panel.includes('档位是「关闭」：不优化'))
   check('结果框拿到「丢弃」（与收起分开的两个动作）',
     panel.includes('discard: () => { actions.dockDiscard(); setSection(DEFAULT_PANEL_SECTION) }'))
   check('档位与 ✨ 按钮在两半之外（标题行，跑优化永远一步）',

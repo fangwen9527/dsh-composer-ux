@@ -55,13 +55,13 @@ import { DEFAULT_SETTINGS, defaultQuickBook } from '../settings-contract.ts'
 
 const actions = {
   close() {}, insert() {}, optimize() {}, dockInsert() {}, dockRetry() {}, dockCancel() {},
-  dockClose() {}, dockEdit() {}, setTier() {}, setInsertMode() {}, addCategory() {},
+  dockClose() {}, dockDiscard() {}, dockShow() {}, dockEdit() {}, setTier() {}, setInsertMode() {}, addCategory() {},
   addPrompt() {}, movePrompt() {}, reloadBook() {},
 }
 
 const anchor = { left: 10, bottom: 20 }
 
-export function render({ dock = null, panelOpen = true, busy = false, notice = '', book = defaultQuickBook() } = {}) {
+export function render({ dock = null, panelOpen = true, busy = false, notice = '', hidden = false, book = defaultQuickBook() } = {}) {
   return renderToStaticMarkup(h(QuickCommandsPanel, {
     // 注入面给的是一堆 **hook 函数**（各自接一个 selector），不是 store —— 假实现直接返回选中值。
     useLive: selector => selector(DEFAULT_SETTINGS),
@@ -72,6 +72,7 @@ export function render({ dock = null, panelOpen = true, busy = false, notice = '
     useBook: selector => selector(book),
     useBookStatus: () => '',
     useDock: selector => selector(dock),
+    useDockHidden: selector => selector(hidden),
     actions,
   }))
 }
@@ -173,6 +174,23 @@ console.log('4. 优化在跑 / 无结果 / 面板关闭')
   check('锚点为空时整块不渲染', empty === '')
   const manual = render({ dock: null, notice: '写入失败' })
   check('状态提示行常露（两半之外）', textOf(manual).includes('写入失败'))
+}
+
+console.log('6. 收起（0.13.2）：✕ 之后结果还在，只是不自动显示')
+{
+  const html = render({ dock: doneDock(), hidden: true })
+  const text = textOf(html)
+  check('收起时面板打开在「快捷指令」那半（不抢过去）',
+    text.includes('一问一答') || html.includes('quickItem'), '应该看到条目列表')
+  check('收起时不渲染结果框本体（也不渲染那三个按钮）',
+    !text.includes('插入输入框') && !text.includes('重新优化') && !text.includes('复制'))
+  check('切换按钮告诉用户结果还在（上次的结果在这儿）',
+    html.includes('\u25b8') && text.includes('上次的结果在这儿'))
+
+  const shown = render({ dock: doneDock(), hidden: false })
+  check('没收起时照旧自动显示结果框（老行为不变）',
+    textOf(shown).includes('插入输入框') && shown.includes('\u25be'))
+  check('两种 hidden 渲染出的 HTML 不同（不是同一份）', html !== shown)
 }
 
 console.log('5. 产物里没有"把两半都渲染出来"的退路')

@@ -18,7 +18,8 @@ import {
   dockPhaseText, dockSummary, type OptimizeDockState,
 } from './optimize-dock.ts'
 import {
-  dockBody, dockBox, dockButton, dockButtonDisabled, dockButtonPrimary, dockButtons, dockButtonsPinned, dockDropped, dockEditor,
+  dockBody, dockBox, dockButton, dockButtonDisabled, dockButtonGhost, dockButtonPrimary, dockButtonWarn,
+  dockButtons, dockButtonsPinned, dockDropped, dockEditor,
   dockError, dockHead, dockItemRow, dockItemText, dockKind, dockList, dockMeta, dockPhase, dockSummaryLine,
 } from './styles.ts'
 
@@ -40,8 +41,10 @@ export interface OptimizeDockActions {
   readonly retry: () => void
   /** 中止这一轮并保留已生成的部分。 */
   readonly cancel: () => void
-  /** 收起结果框（丢弃框里的内容）。 */
+  /** 收起结果框（0.13.2：结果留着，可再展开）。 */
   readonly close: () => void
+  /** 丢弃结果框（真的清掉，磁盘那份也删）。 */
+  readonly discard: () => void
   /** 用户手改了成品。 */
   readonly edit: (text: string) => void
 }
@@ -90,6 +93,13 @@ export async function copyText(text: string): Promise<boolean> {
 /** 结果框。 */
 export function OptimizeDock({ state, seconds, actions }: OptimizeDockProps) {
   const [copied, setCopied] = useState(false)
+  /**
+   * 丢弃要**点两次**（与「插入输入框」覆盖确认同一套做法，不弹模态框）。
+   *
+   * 一次点击就删掉一份真花了钱的结果太容易误触；第一次点只把按钮换成「点第二次丢弃」，
+   * 并在 4 秒后自己复位。
+   */
+  const [discardArmed, setDiscardArmed] = useState(false)
   const running = state.phase === 'running'
   const hasText = state.text.trim() !== ''
   const canInsert = state.phase === 'done' && hasText
@@ -112,6 +122,25 @@ export function OptimizeDock({ state, seconds, actions }: OptimizeDockProps) {
             ? `已等待 ${String(seconds)}s`
             : state.elapsedMs > 0 ? `用时 ${(state.elapsedMs / 1000).toFixed(1)} 秒` : ''}
         </span>
+        {!running && (
+          <button
+            type="button"
+            style={discardArmed ? dockButtonWarn : dockButtonGhost}
+            title={discardArmed ? '再点一次就真的丢掉这份结果（不可恢复）' : '丢弃这份结果（不可恢复；只想收起来就点右边的 ✕）'}
+            onMouseDown={event => { event.preventDefault() }}
+            onClick={() => {
+              if (!discardArmed) {
+                setDiscardArmed(true)
+                setTimeout(() => { setDiscardArmed(false) }, 4000)
+                return
+              }
+              setDiscardArmed(false)
+              actions.discard()
+            }}
+          >
+            {discardArmed ? '点第二次丢弃' : '丢弃'}
+          </button>
+        )}
         {running
           ? (
             <button
@@ -128,8 +157,8 @@ export function OptimizeDock({ state, seconds, actions }: OptimizeDockProps) {
             <button
               type="button"
               style={dockButton}
-              aria-label="关闭结果框"
-              title="收起结果框（丢弃框里的内容；输入框里已经插入的内容不受影响）"
+              aria-label="收起结果框"
+              title="收起结果框（0.13.2 起只是收起：结果留着，点「优化提示词」那一半就能再看到；想删掉用旁边的「丢弃」）"
               onMouseDown={event => { event.preventDefault() }}
               onClick={actions.close}
             >

@@ -512,10 +512,10 @@ export const dockBox: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-  padding: '8px 10px',
-  borderRadius: 10,
-  background: 'var(--dsw-alias-bg-layer-1)',
-  border: '0.5px solid var(--dsw-alias-border-l2)',
+  padding: '8px 12px 8px',
+  // 0.13.2：**不再画成一张独立卡片**（用户原话「提示词优化是悬浮的」）。
+  // 去掉自己的背景与圆角边框，只留一条细分隔线 —— 它就是面板里的一段，而不是浮在上面的小窗。
+  borderTop: '0.5px solid var(--dsw-alias-border-l2)',
 }
 
 /**
@@ -536,6 +536,26 @@ export const dockBody: CSSProperties = {
 /** 底部按钮行：钉在结果框底部，不随内容滚动。 */
 export const dockButtonsPinned: CSSProperties = {
   flex: '0 0 auto',
+}
+
+/** 结果框里的弱化按钮（0.13.2：丢弃）。 */
+export const dockButtonGhost: CSSProperties = {
+  border: 0,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-tertiary)',
+  borderRadius: 999,
+  padding: '3px 8px',
+  fontSize: 11,
+  lineHeight: 1.6,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+/** 二次确认中的丢弃按钮（红一点，明确这是破坏性动作）。 */
+export const dockButtonWarn: CSSProperties = {
+  ...dockButtonGhost,
+  color: 'var(--dsw-alias-label-error, #d33)',
+  border: '0.5px solid var(--dsw-alias-label-error, #d33)',
 }
 
 /** 结果框标题行（阶段 + 秒表 + 取消/关闭）。 */

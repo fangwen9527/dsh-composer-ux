@@ -300,19 +300,37 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
   check('中间那个切换按钮在（aria-expanded + ▸/▾ 两态）',
     panel.includes('style={quickSectionToggle}') && panel.includes("aria-expanded={section === 'optimize'}")
     && panel.includes('\u25b8') && panel.includes('\u25be'))
-  check('点切换按钮 = 换另一半（走纯函数 toggleSection）',
-    panel.includes('setSection(toggleSection(section))') && sections.includes("return current === 'quick' ? 'optimize' : 'quick'"))
+  check('点切换按钮 = 换另一半（走纯函数 toggleSection；切到优化那半顺手展开收起的结果框）',
+    panel.includes('toggleSection(section)') && panel.includes('setSection(next)')
+    && panel.includes("if (next === 'optimize') actions.dockShow()")
+    && sections.includes("return current === 'quick' ? 'optimize' : 'quick'"))
   check('两半互斥：内容区各由 section 决定渲染',
     panel.includes("dock !== null && section === 'optimize'") && panel.includes("section === 'quick' && ("))
   check('有结果框就显示优化那半（渲染期同步调整 —— effect 会先闪一帧，SSR 也测不到）',
-    panel.includes('sectionForDock(dockPresent, section)') && panel.includes('const prevDockPresent = useRef(false)')
-    && panel.includes('if (prevDockPresent.current !== dockPresent) {')
+    panel.includes('sectionForDock(dockVisible, section)') && panel.includes('const prevDockPresent = useRef(false)')
+    && panel.includes('if (prevDockPresent.current !== dockVisible) {')
     && !/useEffect\(\(\) => \{\s*setSection/.test(panel))
+  check('0.13.2：**收起**的结果框不触发自动切换（✕ 的意图就是别自动弹）',
+    panel.includes('const dockVisible = dockPresent && !dockHidden')
+    && panel.includes('dock: SnapshotStore<OptimizeDockState | null>') && panel.includes('dockHidden: SnapshotStore<boolean>'))
+  check('结果框拿到「丢弃」（与收起分开的两个动作）',
+    panel.includes('discard: () => { actions.dockDiscard(); setSection(DEFAULT_PANEL_SECTION) }'))
   check('档位与 ✨ 按钮在两半之外（标题行，跑优化永远一步）',
     panel.indexOf('quickTierRow') < panel.indexOf('quickSectionToggle')
     && panel.indexOf('quickPrimaryButton') < panel.indexOf('quickSectionToggle'))
   check('关掉结果框顺手切回快捷指令那半',
     panel.includes('actions.dockClose(); setSection(DEFAULT_PANEL_SECTION)'))
+  check('0.13.2：「丢弃」要点两次（第一次只换成确认文案，4 秒后复位）',
+    dock.includes('const [discardArmed, setDiscardArmed] = useState(false)')
+    && dock.includes('setTimeout(() => { setDiscardArmed(false) }, 4000)')
+    && dock.includes("discardArmed ? '点第二次丢弃' : '丢弃'"))
+  check('0.13.2：✕ 的文案是「收起」而不是「丢弃」',
+    dock.includes('aria-label="收起结果框"')
+    && !dock.includes('丢弃框里的内容')
+    && dock.includes('0.13.2 起只是收起')),
+  check('0.13.2：结果框不再画成独立卡片（去掉自己的背景/圆角边框）',
+    /dockBox[\s\S]{0,700}borderTop: '0.5px solid/.test(styles)
+    && !/dockBox[\s\S]{0,700}background: 'var\(--dsw-alias-bg-layer-1\)'/.test(styles))
   check('❗结果框底部三个按钮在可滚内容区**之外**（这正是被裁掉的那排）',
     dock.includes('...dockButtons, ...dockButtonsPinned')
     && dock.indexOf('dockBody') < dock.indexOf('dockButtonsPinned')

@@ -93,6 +93,14 @@ export function apply(ctx: any): void {
   /** 优化结果框（0.12.0）；null = 框收起。 */
   const dock = createSnapshotStore<OptimizeDockState | null>(null)
   /**
+   * 结果框是否被「收起」（0.13.2）。
+   *
+   * 为什么不干脆把 dock 置 null：用户 2026-09-30 报「点 ✕ 之后居然恢复不了」—— ✕ 应该是
+   * **收起**（结果留着、随时能再展开），丢弃必须是另一个动作。所以内容留在 dock 里，
+   * 这里只记「先别显示」，并且跟状态一起存盘（重启后保持收起）。
+   */
+  const dockHidden = createSnapshotStore<boolean>(false)
+  /**
    * 结果框的**落盘**（0.13.0 ①）。
    *
    * 存的是一整份快照（`$DSH_HOME/composer-ux/optimize-dock.json`，原子写 + 损坏隔离）——
@@ -107,7 +115,7 @@ export function apply(ctx: any): void {
   const DOCK_SAVE_DEBOUNCE_MS = 1_200
   const persistDock = (): void => {
     if (!keepDockOn()) return
-    void saveDockState(dock.getSnapshot())
+    void saveDockState(dock.getSnapshot(), dockHidden.getSnapshot())
   }
   const clearPersistedDock = (): void => {
     // 无论开关是否开着都清：用户点的是"清空"，那就该把磁盘上那份也弄掉。
@@ -160,6 +168,8 @@ export function apply(ctx: any): void {
       let alive = true
       void loadDockState().then((reply) => {
         if (!alive || !reply.ok || reply.state === null) return
+        // 收起状态跟着一起恢复（0.13.2）：否则重启后结果自己弹回来，看着像 ✕ 没生效。
+        dockHidden.set(reply.hidden === true)
         // 只在框仍空着时恢复：期间用户可能已经自己开了一轮。
         if (dock.getSnapshot() === null) dock.set(dockReducer(null, { type: 'restore', snapshot: reply.state }))
       })
@@ -168,13 +178,17 @@ export function apply(ctx: any): void {
     // 结果框一变化就（去抖）存一次。
     ctx.effect(() => {
       let timer: ReturnType<typeof setTimeout> | null = null
-      const unsubscribe = dock.subscribe(() => {
+      const schedule = (): void => {
         if (timer !== null) clearTimeout(timer)
         timer = setTimeout(() => { timer = null; persistDock() }, DOCK_SAVE_DEBOUNCE_MS)
-      })
+      }
+      const unsubscribe = dock.subscribe(schedule)
+      // 「收起」也要存：它是跨重启记的（0.13.2）。
+      const unsubscribeHidden = dockHidden.subscribe(schedule)
       return () => {
         if (timer !== null) clearTimeout(timer)
         unsubscribe()
+        unsubscribeHidden()
       }
     }, 'composer-ux: persist optimize dock')
   }
@@ -421,6 +435,8 @@ export function apply(ctx: any): void {
     optimizeAbort?.abort()
     const controller = new AbortController()
     optimizeAbort = controller
+    // 新一轮 = 用户要看它，收起状态先打开（否则刚跑的结果被自己藏在收起态里）。
+    dockHidden.set(false)
     dock.set(dockReducer(dock.getSnapshot(), {
       type: 'start',
       source: input.source,
@@ -550,9 +566,25 @@ export function apply(ctx: any): void {
       dock.set(dockReducer(state, { type: 'cancel', at: Date.now() }))
       note('已取消这一轮：上面是已经生成的部分')
     },
-    /** 收起结果框（丢弃框里的内容；输入框里已插入的内容不受影响）。 */
+    /**
+     * 收起结果框（0.13.2 起**不再丢内容**）。
+     *
+     * 内容一直在 dock 里（也一直在盘上），只是标记成「先别显示」；面板那一半的切换按钮会写
+     * 「上次的结果在这儿」，点它就能再展开。想真丢掉用 `dockDiscard`。
+     */
     dockClose: (): void => {
+      dockHidden.set(true)
+      note('已收起结果框 —— 结果留着，点「优化提示词」那一半就能再看到')
+    },
+    /** 丢弃结果框（真的清掉，磁盘那份也删）。 */
+    dockDiscard: (): void => {
       dock.set(dockReducer(dock.getSnapshot(), { type: 'clear' }))
+      dockHidden.set(false)
+      note('已丢弃这份结果')
+    },
+    /** 展开结果框（收起状态的对面）。 */
+    dockShow: (): void => {
+      dockHidden.set(false)
     },
     /** 用户在框里手改了成品。 */
     dockEdit: (text: string): void => {
@@ -588,6 +620,7 @@ export function apply(ctx: any): void {
           // 先清磁盘再清内存：反过来的话，去抖存盘可能把刚清掉的内容又写回去。
           clearPersistedDock()
           dock.set(null)
+          dockHidden.set(false)
         },
       },
     }),
@@ -635,7 +668,7 @@ export function apply(ctx: any): void {
     name: 'shell.overlay',
     id: 'composer-ux-quick-panel',
     inject: () => ({
-      hooks: { live, panel, busy: optimizing, startedAt: optimizeStartedAt, notice: panelNotice, book, bookStatus, dock },
+      hooks: { live, panel, busy: optimizing, startedAt: optimizeStartedAt, notice: panelNotice, book, bookStatus, dock, dockHidden },
       actions: {
         toggle: quickActions.toggle,
         close: quickActions.close,
@@ -645,6 +678,8 @@ export function apply(ctx: any): void {
         dockRetry: quickActions.dockRetry,
         dockCancel: quickActions.dockCancel,
         dockClose: quickActions.dockClose,
+        dockDiscard: quickActions.dockDiscard,
+        dockShow: quickActions.dockShow,
         dockEdit: quickActions.dockEdit,
         setTier: quickActions.setTier,
         setInsertMode: quickActions.setInsertMode,

@@ -51,8 +51,10 @@ export interface QuickPanelInjected {
     book: SnapshotStore<QuickPromptBook>
     /** '' = 正常；'saving' = 正在写；其余 = 上一次的错误文案。 */
     bookStatus: SnapshotStore<string>
-    /** 优化结果框（0.12.0）；null = 框收起。 */
+    /** 优化结果框（0.12.0）；null = 没有结果。 */
     dock: SnapshotStore<OptimizeDockState | null>
+    /** 结果框是否处于「收起」（0.13.2）：内容还在，只是用户按过 ✕。 */
+    dockHidden: SnapshotStore<boolean>
   }
   actions: {
     /** 关闭面板。 */
@@ -67,8 +69,12 @@ export interface QuickPanelInjected {
     dockRetry: () => void
     /** 中止这一轮并保留已生成的部分。 */
     dockCancel: () => void
-    /** 收起结果框（丢弃框里的内容）。 */
+    /** 收起结果框（0.13.2：结果留着，可再展开）。 */
     dockClose: () => void
+    /** 丢弃结果框（真的清掉）。 */
+    dockDiscard: () => void
+    /** 把收起的结果框展开（点切换按钮时用）。 */
+    dockShow: () => void
     /** 用户在框里手改了成品。 */
     dockEdit: (text: string) => void
     /** 切换优化档位。 */
@@ -97,7 +103,7 @@ const GAP = 8
 
 /** 展开面板。 */
 export function QuickCommandsPanel({
-  useLive, usePanel, useBusy, useStartedAt, useNotice, useBook, useBookStatus, useDock, actions,
+  useLive, usePanel, useBusy, useStartedAt, useNotice, useBook, useBookStatus, useDock, useDockHidden, actions,
 }: QuickCommandsPanelProps) {
   const settings = useLive(item => item)
   const anchor = usePanel(item => item)
@@ -107,6 +113,8 @@ export function QuickCommandsPanel({
   const book = useBook(item => item)
   const status = useBookStatus(item => item)
   const dock = useDock(item => item)
+  /** 收起状态（0.13.2）：内容还在，只是别自动显示。 */
+  const dockHidden = useDockHidden(item => item)
   const ref = useRef<HTMLDivElement | null>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
   const [activeId, setActiveId] = useState('')
@@ -194,10 +202,12 @@ export function QuickCommandsPanel({
    */
   // ⚠️ 初值必须是 false（默认那一半假设"没有结果框"），不能写成 `useRef(dockPresent)`：
   //   后者让首帧的"变化"永远不成立，于是"面板重开时结果框本来就在"这种情况不会切过去。
+  // 收起的结果框不该触发自动切换 —— 那正是用户按 ✕ 的意图（用户 2026-09-30 的问题）。
+  const dockVisible = dockPresent && !dockHidden
   const prevDockPresent = useRef(false)
-  if (prevDockPresent.current !== dockPresent) {
-    prevDockPresent.current = dockPresent
-    const next = sectionForDock(dockPresent, section)
+  if (prevDockPresent.current !== dockVisible) {
+    prevDockPresent.current = dockVisible
+    const next = sectionForDock(dockVisible, section)
     if (next !== section) setSection(next)
   }
 
@@ -259,7 +269,12 @@ export function QuickCommandsPanel({
           ? '收起「优化提示词」，回到「快捷指令」'
           : '展开「优化提示词」（结果框就在里面；上面点 ✨ 也会自动展开）'}
         onMouseDown={event => { event.preventDefault() }}
-        onClick={() => { setSection(toggleSection(section)) }}
+        onClick={() => {
+          const next = toggleSection(section)
+          // 切到「优化提示词」= 用户要看它：顺手把收起状态打开。
+          if (next === 'optimize') actions.dockShow()
+          setSection(next)
+        }}
       >
         <span style={quickSectionToggleArrow} aria-hidden>{section === 'optimize' ? '▾' : '▸'}</span>
         <span>优化提示词</span>
@@ -282,6 +297,7 @@ export function QuickCommandsPanel({
               cancel: actions.dockCancel,
               // 关掉结果框顺手切回快捷指令那半：此时优化半已经没内容了。
               close: () => { actions.dockClose(); setSection(DEFAULT_PANEL_SECTION) },
+              discard: () => { actions.dockDiscard(); setSection(DEFAULT_PANEL_SECTION) },
               edit: actions.dockEdit,
             }}
           />

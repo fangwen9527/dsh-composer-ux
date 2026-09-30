@@ -34,6 +34,13 @@ export function optimizeStatePath(home: string = dshHome()): string {
 /** 读盘结果。`state === null` 表示"没有可恢复的状态"（首次运行、被关掉、或文件已损坏被隔离）。 */
 export interface DockStateRead {
   readonly state: Record<string, unknown> | null
+  /**
+   * 结果框被**收起**了（0.13.2 起）—— 用户按过 ✕。
+   *
+   * 为什么要存这个：✕ 从 0.13.2 起是「收起」而不是「丢弃」，重启后得保持收起
+   * （否则结果会自己弹回来，用户会以为 ✕ 没生效）。状态本身照旧存着，只是标记成「先别显示」。
+   */
+  readonly hidden: boolean
   /** 文件读不出来（已隔离留证据）。 */
   readonly corrupt: boolean
   /** 被隔离到哪（非空说明原文件保住了）。 */
@@ -60,33 +67,34 @@ export function quarantineDockState(file: string, at: number = Date.now()): stri
  * @returns 读盘结果（任何异常都退化成"没有可恢复的状态"，不让插件起不来）。
  */
 export function readDockState(file: string = optimizeStatePath()): DockStateRead {
-  if (!existsSync(file)) return { state: null, corrupt: false }
+  if (!existsSync(file)) return { state: null, corrupt: false, hidden: false }
   let text = ''
   try {
     text = readFileSync(file, 'utf8')
   } catch {
-    return { state: null, corrupt: false }
+    return { state: null, corrupt: false, hidden: false }
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    return { state: null, corrupt: true, quarantined: quarantineDockState(file) }
+    return { state: null, corrupt: true, hidden: false, quarantined: quarantineDockState(file) }
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { state: null, corrupt: true, quarantined: quarantineDockState(file) }
+    return { state: null, corrupt: true, hidden: false, quarantined: quarantineDockState(file) }
   }
   const envelope = parsed as Record<string, unknown>
   const version = Number(envelope.version)
   if (version !== OPTIMIZE_STATE_VERSION) {
     // 版本不认识：**不动文件**（可能是用户从新版降级回来，那份状态还在），只是这次不恢复。
-    return { state: null, corrupt: false, ...(Number.isFinite(version) ? { unknownVersion: version } : {}) }
+    return { state: null, corrupt: false, hidden: false, ...(Number.isFinite(version) ? { unknownVersion: version } : {}) }
   }
   const state = envelope.state
   if (typeof state !== 'object' || state === null || Array.isArray(state)) {
-    return { state: null, corrupt: true, quarantined: quarantineDockState(file) }
+    return { state: null, corrupt: true, hidden: false, quarantined: quarantineDockState(file) }
   }
-  return { state: state as Record<string, unknown>, corrupt: false }
+  // `hidden === true` 才认：写成别的值（或老文件没这个字段）一律当成「没收起」。
+  return { state: state as Record<string, unknown>, corrupt: false, hidden: envelope.hidden === true }
 }
 
 /** 写盘结果。 */
@@ -103,14 +111,25 @@ export interface DockStateWrite {
  *
  * @param state - 要存的形状（调用方已经过净化）；`null` 表示删除文件。
  * @param file - 状态文件路径。
+ * @param hidden - 结果框当前是否被收起（0.13.2）。只有 `true` 才写进信封 —— 这样「没收起」的
+ *   文件形状与 0.13.0/0.13.1 完全一致，降级回旧版也认得。
  */
-export function writeDockState(state: Record<string, unknown> | null, file: string = optimizeStatePath()): DockStateWrite {
+export function writeDockState(
+  state: Record<string, unknown> | null,
+  file: string = optimizeStatePath(),
+  hidden = false,
+): DockStateWrite {
   try {
     if (state === null) {
       if (existsSync(file)) rmSync(file)
       return { written: true, bytes: 0 }
     }
-    const payload = `${JSON.stringify({ version: OPTIMIZE_STATE_VERSION, at: new Date().toISOString(), state })}\n`
+    const payload = `${JSON.stringify({
+      version: OPTIMIZE_STATE_VERSION,
+      at: new Date().toISOString(),
+      state,
+      ...(hidden ? { hidden: true } : {}),
+    })}\n`
     const bytes = Buffer.byteLength(payload, 'utf8')
     if (bytes > OPTIMIZE_STATE_MAX_BYTES) return { written: false, tooBig: true, bytes }
     mkdirSync(dirname(file), { recursive: true })

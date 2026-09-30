@@ -80,7 +80,7 @@ console.log('2. 读：损坏隔离而不是覆盖')
   const file = join(dir, 'composer-ux', 'optimize-dock.json')
   mkdirSync(join(file, '..'), { recursive: true })
   check('文件不在 = 没有可恢复的状态（不是损坏）',
-    JSON.stringify(pure.readDockState(file)) === JSON.stringify({ state: null, corrupt: false }))
+    JSON.stringify(pure.readDockState(file)) === JSON.stringify({ state: null, corrupt: false, hidden: false }))
 
   writeFileSync(file, '{"version":1,"state":{"phase":"done"}}')
   const good = pure.readDockState(file)
@@ -308,12 +308,43 @@ console.log('5. 宿主路由：真注册 + 真读写（假 webServer）')
   }
 }
 
+console.log('5b. hidden：✕ 收起之后重启要记得（0.13.2）')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-dock-hidden-'))
+  homes.push(dir)
+  const file = join(dir, 'optimize-dock.json')
+
+  pure.writeDockState({ phase: 'done', text: '成品' }, file, true)
+  const rawHidden = JSON.parse(readFileSync(file, 'utf8'))
+  check('收起状态会落盘（hidden:true）', rawHidden.hidden === true && rawHidden.version === 1)
+  check('读回来 hidden=true，状态本身照旧在',
+    pure.readDockState(file).hidden === true && pure.readDockState(file).state?.text === '成品')
+
+  pure.writeDockState({ phase: 'done', text: '成品' }, file)
+  const rawShown = readFileSync(file, 'utf8')
+  check('没收起时不写 hidden 字段（文件形状与 0.13.0/0.13.1 一致，降级也认得）', !rawShown.includes('hidden'))
+  check('读回来 hidden=false', pure.readDockState(file).hidden === false)
+
+  writeFileSync(file, `${JSON.stringify({ version: 1, at: new Date().toISOString(), state: { phase: 'done' } })}\n`)
+  check('老文件没有 hidden 字段 ⇒ 未收起（向后兼容）', pure.readDockState(file).hidden === false)
+
+  writeFileSync(file, `${JSON.stringify({ version: 1, state: { phase: 'done' }, hidden: 'yes' })}\n`)
+  check('hidden 写成非布尔 ⇒ 未收起', pure.readDockState(file).hidden === false)
+  writeFileSync(file, `${JSON.stringify({ version: 1, state: { phase: 'done' }, hidden: 1 })}\n`)
+  check('hidden 写成 1 ⇒ 未收起（不做真值转换）', pure.readDockState(file).hidden === false)
+
+  pure.writeDockState({ phase: 'done' }, file, true)
+  pure.writeDockState(null, file, true)
+  check('清空（state=null）连文件一起删，不留 hidden 残骸',
+    !existsSync(file) && pure.readDockState(file).hidden === false)
+}
+
 console.log('6. 客户端接线（源码级：组件行为在浏览器，这里盯接线是否还在）')
 {
   const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
   check('启动时会读一次并恢复', client.includes("loadDockState()") && client.includes("type: 'restore'"))
   check('只在框还空着时恢复', client.includes("if (dock.getSnapshot() === null) dock.set("))
-  check('结果框变化会（去抖）存盘', client.includes('DOCK_SAVE_DEBOUNCE_MS') && client.includes('saveDockState(dock.getSnapshot())'))
+  check('结果框变化会（去抖）存盘', client.includes('DOCK_SAVE_DEBOUNCE_MS') && client.includes('saveDockState(dock.getSnapshot(), dockHidden.getSnapshot())'))
   check('关掉开关就不再白发请求', client.includes('if (!keepDockOn()) return'))
   check('设置页动作接了清空', client.includes('clearDockState: () =>') && client.includes('clearDockStateOnHost()'))
 
@@ -323,7 +354,18 @@ console.log('6. 客户端接线（源码级：组件行为在浏览器，这里�
 
   const layer = readFileSync('src/client/optimize-state.ts', 'utf8')
   check('客户端读回来的 state 一定过净化', layer.includes('state: sanitizeDockSnapshot(row.state)'))
-  check('失败不弹错、退化成"没有可恢复的状态"', layer.includes('state: null, keep: true, error:'))
+  check('失败不弹错、退化成"没有可恢复的状态"', /state: null, hidden: false, keep: true, error:/.test(layer))
+  // 0.13.2：✕ = 收起（不再丢状态），另给一个「丢弃」
+  check('✕ 只置收起标记（不再 dispatch clear）',
+    /dockClose: \(\): void => \{[\s\S]{0,240}dockHidden\.set\(true\)/.test(client)
+    && !/dockClose: \(\): void => \{[\s\S]{0,120}type: 'clear'/.test(client))
+  check('「丢弃」才真的清状态', /dockDiscard: \(\): void => \{[\s\S]{0,240}type: 'clear'/.test(client))
+  check('新跑一轮会把收起状态打开（否则结果被自己藏起来）',
+    /type: 'start'[\s\S]{0,500}dockHidden\.set\(false\)/.test(client)
+    || /dockHidden\.set\(false\)[\s\S]{0,500}type: 'start'/.test(client))
+  check('存盘把 hidden 一起发', client.includes('saveDockState(dock.getSnapshot(), dockHidden.getSnapshot())'))
+  check('恢复时把 hidden 一起读回来', client.includes('dockHidden.set(') && client.includes('hidden === true'))
+  check('客户端层把 hidden 发出去', /hidden/.test(layer) && layer.includes('hidden === true'))
 }
 
 for (const dir of homes) rmSync(dir, { recursive: true, force: true })

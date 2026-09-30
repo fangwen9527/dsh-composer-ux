@@ -1251,13 +1251,14 @@ export function apply(ctx: Context, config?: unknown): void {
       const file = optimizeStatePath()
       if (method === 'GET') {
         if (!keep) {
-          sendJson(res, 200, { ok: true, state: null, keep: false, file })
+          sendJson(res, 200, { ok: true, state: null, hidden: false, keep: false, file })
           return
         }
         const read = readDockState(file)
         sendJson(res, 200, {
           ok: true,
           state: read.state,
+          hidden: read.hidden,
           keep: true,
           file,
           bytes: dockStateBytes(file),
@@ -1292,7 +1293,8 @@ export function apply(ctx: Context, config?: unknown): void {
         sendJson(res, 200, { ok: true, cleared: true, keep: false, file })
         return
       }
-      const result = writeDockState(candidate as Record<string, unknown> | null, file)
+      // `hidden` 缺省 false：0.13.0/0.13.1 的客户端只发 state，语义就是「没收起」。
+      const result = writeDockState(candidate as Record<string, unknown> | null, file, payload.hidden === true)
       if (!result.written) {
         // 太大（或写不进去）：如实回报，**不截半**、也不假装存上了。
         sendJson(res, 200, {
@@ -1304,7 +1306,7 @@ export function apply(ctx: Context, config?: unknown): void {
         })
         return
       }
-      sendJson(res, 200, { ok: true, keep: true, file, bytes: result.bytes ?? 0 })
+      sendJson(res, 200, { ok: true, hidden: payload.hidden === true, keep: true, file, bytes: result.bytes ?? 0 })
     }
 
     optCtx.effect(() => optCtx.webServer.register({

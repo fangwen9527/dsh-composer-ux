@@ -2427,7 +2427,7 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     helper.includes('probe.destroy()') && !helper.includes('.listen('))
   check('端口空出来后还多等 300ms（Windows 的 TIME_WAIT 尾巴）', helper.includes('const settleMs = 300'))
   check('起新宿主带 windowsHide（没控制台的助手 spawn 控制台程序会新建可见窗口）',
-    helper.includes('windowsHide: true'))
+    /shell: viaShell, windowsHide: true \}\)/.test(helper))
   check('stdout/stderr 各一个日志文件',
     helper.includes('fs.openSync(logOut, "a")') && helper.includes('fs.openSync(logErr, "a")'))
   check('spawn 的失败单独接住（异步报错，try/catch 抓不到）', helper.includes('child.on("error"'))

@@ -243,7 +243,13 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
 
 出网请求由宿主的模型适配器发出，浏览器侧碰不到模型路由；宿主半与客户端半之间也没有别的受支持通道。所以「优化提示词」是一次往返：浏览器 `POST /composer-ux/optimize` → 宿主用 `ctx.get('llm').stream(...)` 独立跑一次模型调用 → 把装配好的正文回给浏览器填进输入框。这条路径与 [WestFox-AwA/dsh-prompt-optimizer](https://github.com/WestFox-AwA/dsh-prompt-optimizer) 同构。
 
-**提示词的来历（如实写）**：0.5.x 那三档是逐字提取自它 0.5 线的 `lib/index.js`（BSD-3-Clause，作者「啃轮胎的西狐」）。0.6.0 起机制与提示词都改按它 **0.6 线**（`po06/lib/interpreter.js` 的 `SYSTEM_PROMPT` + `validateProvenance`、`po06/lib/compiler.js` 的固定节序与预算丢弃）**重写**，不再是逐字提取 —— 那些文件里没有现成可抄的"三档改写提示词"，能借的是机制本身：条目化产出、逐字引文、只丢单条、降级出声。落在 `src/optimizer-prompt.ts`（提示词）与 `src/optimizer-assemble.ts`（校验 + 装配）两个文件，署名与来源说明保留在各个文件头。
+**提示词的来历（如实写）**：**0.14.0 起，解释层的提示词与条目本体是逐字移植它的**（见 [NOTICE](NOTICE)）：
+`po06/lib/interpreter.js` 的 `SYSTEM_PROMPT`（硬规则 1–8）与 `HARD_NOTE_SYSTEM`（硬邦邦基调）、
+`po06/lib/strategy.js` 的 `TIER_STRATEGY`（四档策略）与 `DOMAINS`（六领域质量维度）一字未改，
+只把【输出格式】那一节改写成我们自己的成品契约（我们产出条目、由宿主装配成「原话 + 辅助小节」）。
+三处刻意差异与理由写在 `src/optimizer-transplant.ts` 的文件头。
+
+更早的来历：0.5.x 那三档是逐字提取自它 0.5 线的 `lib/index.js`（BSD-3-Clause，作者「啃轮胎的西狐」）。0.6.0 起机制与提示词都改按它 **0.6 线**（`po06/lib/interpreter.js` 的 `SYSTEM_PROMPT` + `validateProvenance`、`po06/lib/compiler.js` 的固定节序与预算丢弃）**重写**，不再是逐字提取 —— 那些文件里没有现成可抄的"三档改写提示词"，能借的是机制本身：条目化产出、逐字引文、只丢单条、降级出声。落在 `src/optimizer-prompt.ts`（提示词）与 `src/optimizer-assemble.ts`（校验 + 装配）两个文件，署名与来源说明保留在各个文件头。
 
 优化用的模型**跟随你当前的默认模型**（`agentDefaultModel.currentSelection()`），不额外配置；每次优化会花一次模型调用，但**不占对话轮次、不进会话历史**。
 

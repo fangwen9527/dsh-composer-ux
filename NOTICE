@@ -1,0 +1,60 @@
+dsh-composer-ux（本插件）
+Copyright (c) 2026 fangwen9527
+本项目按 MIT 许可发布，全文见 LICENSE。
+
+================================================================================
+第三方组件与移植文本的归属（0.14.0 起）
+================================================================================
+
+上游项目：dsh-prompt-optimizer
+  仓库：https://github.com/WestFox-AwA/dsh-prompt-optimizer
+  作者：啃轮胎的西狐（WestFox-AwA）
+  版权：Copyright (c) 2026 啃轮胎的西狐
+  许可：BSD 3-Clause License（全文见本文件末尾）
+
+本插件在 0.14.0 里**逐字移植**了它的下列内容（只把「输出格式」那一节改写成我们自己的成品契约，
+其余一字未改；三处刻意差异与理由写在对应源文件的文件头）：
+
+  · `po06/lib/interpreter.js` 的 `SYSTEM_PROMPT`（硬规则 1–8）与 `HARD_NOTE_SYSTEM`（硬邦邦基调）
+  · `po06/lib/strategy.js` 的 `TIER_STRATEGY`（四档策略：mode / candidates / maxItems / qualityDims / depth）
+  · `po06/lib/strategy.js` 的 `DOMAINS`（六个领域的质量维度与两条不许越的线）
+
+落在本插件的这些文件里（每个文件头都写明了出处与差异）：
+  · src/optimizer-transplant.ts —— 上述移植文本本体
+  · src/optimizer-prompt.ts      —— 装配顺序与档位策略的接线
+  · src/optimizer-assemble.ts    —— 条目本体（六类）、必填依据校验、成品装配
+
+接口与机制层面另有借鉴（0.6 线）：条目化产出、逐字引文、只丢单条、降级出声、
+固定节序与篇幅预算。这些是机制而非文本，同样致谢。
+
+================================================================================
+BSD 3-Clause License（dsh-prompt-optimizer 的原许可，随附全文）
+================================================================================
+
+Copyright (c) 2026 啃轮胎的西狐
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

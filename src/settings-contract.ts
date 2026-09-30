@@ -344,6 +344,73 @@ export const OPTIMIZE_KEEP_DOCK_FIELD = 'optimizeKeepDock'
  */
 export const OPTIMIZE_READ_TOOLS_FIELD = 'optimizeReadTools'
 
+// ── 0.14.0：优化选项卡片（照 dsh-prompt-optimizer 的界面搬进来的六项）──────────
+
+/**
+ * 协作基调：`neutral` 普通 / `hard` 硬邦邦。
+ *
+ * 照搬上游语义：硬邦邦**只改写法**（整份辅助包的语域），不改条目集合、不改来源规则；
+ * 未决项与防御性限制照字面写（一修辞就漏语义）。默认 `neutral` —— 硬邦邦会改变执行姿态，
+ * 对正式类任务并不总是合适（上游 0.7.8 的原话如此）。
+ */
+export type OptimizerFraming = 'neutral' | 'hard'
+export const OPTIMIZER_FRAMING_FIELD = 'optimizerFraming'
+export const OPTIMIZER_FRAMINGS: readonly { readonly id: OptimizerFraming; readonly label: string; readonly hint: string }[] = [
+  { id: 'neutral', label: '普通', hint: '照常的书面语域。' },
+  { id: 'hard', label: '硬邦邦', hint: '整份辅助包都用口语、直给、带劲的写法（只改写法，条目与依据规则不变）。' },
+]
+export const DEFAULT_OPTIMIZER_FRAMING: OptimizerFraming = 'neutral'
+
+/**
+ * 成品出来之后怎么办：`review` 给你看（进结果框，你点「插入输入框」）/ `auto` 自动插入输入框。
+ *
+ * ⚠️ **不是上游那个"审查/自动"**：上游管的是"发送前要不要先给你看要注入的内容"，
+ * 我们不改发送路径（用户 2026-09-30 选 C），所以这里指的是**成品**的两种处理。
+ * 两者都**不会自动发送**消息。默认 `review`（与 0.12.0 起的行为一致）。
+ */
+export type OptimizerPermission = 'review' | 'auto'
+export const OPTIMIZER_PERMISSION_FIELD = 'optimizerPermission'
+export const OPTIMIZER_PERMISSIONS: readonly { readonly id: OptimizerPermission; readonly label: string; readonly hint: string }[] = [
+  { id: 'review', label: '审查', hint: '成品进结果框，你看过再点「插入输入框」写回。' },
+  { id: 'auto', label: '自动', hint: '跑完自动把成品写回输入框（覆盖全文，Ctrl+Z 可还原）；不会自动发送。' },
+]
+export const DEFAULT_OPTIMIZER_PERMISSION: OptimizerPermission = 'review'
+
+/** 解释层用哪个模型；空串 = 跟随当前会话的模型（默认）。 */
+export const OPTIMIZER_MODEL_FIELD = 'optimizerModel'
+/** 模型 id 的长度上限（防手写超长串）。 */
+export const OPTIMIZER_MODEL_MAX = 120
+
+/**
+ * 上下文取多少：`turns` 按回合（默认，可调 0–10）/ `full` 尽量给全。
+ *
+ * 上游的默认是 6 回合；`full` 会明显更慢更贵，所以它是一个显式选择而不是默认。
+ */
+export type OptimizerHistory = 'turns' | 'full'
+export const OPTIMIZER_HISTORY_FIELD = 'optimizerHistory'
+export const OPTIMIZER_TURNS_FIELD = 'optimizerTurns'
+/** 回合模式窗口范围（照上游 0–10）。 */
+export const OPTIMIZER_TURNS_MIN = 0
+export const OPTIMIZER_TURNS_MAX = 10
+/** 默认回合数（照上游 0.7.8 的默认 6）。 */
+export const DEFAULT_OPTIMIZER_TURNS = 6
+
+/**
+ * 内置 Bash（0.14.0，默认**关**）。
+ *
+ * 开了解释层会多一个真能执行 shell 命令的工具（限定在会话工作目录内、有超时与输出上限、
+ * 逐条记账）。上游默认开，我们默认关 —— 与只读工具同一套纪律：不替用户决定放大成本与自主权。
+ */
+export const OPTIMIZE_BASH_FIELD = 'optimizeBash'
+
+/**
+ * 回合数的归一化：非数字/越界一律落回默认值（读取层与 UI 共用，避免两处各写一套钳法）。
+ */
+export function normalizeOptimizerTurns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_OPTIMIZER_TURNS
+  return Math.min(OPTIMIZER_TURNS_MAX, Math.max(OPTIMIZER_TURNS_MIN, Math.round(value)))
+}
+
 /** 上下文里最多各带几条（你的话 / 助手的话）。 */
 export const OPTIMIZER_CONTEXT_TURNS = 4
 
@@ -857,6 +924,12 @@ export type SettingsField =
   | typeof OPTIMIZER_LEDGER_FIELD
   | typeof OPTIMIZE_KEEP_DOCK_FIELD
   | typeof OPTIMIZE_READ_TOOLS_FIELD
+  | typeof OPTIMIZER_FRAMING_FIELD
+  | typeof OPTIMIZER_PERMISSION_FIELD
+  | typeof OPTIMIZER_MODEL_FIELD
+  | typeof OPTIMIZER_HISTORY_FIELD
+  | typeof OPTIMIZER_TURNS_FIELD
+  | typeof OPTIMIZE_BASH_FIELD
   | typeof OPTIMIZER_PROMPT_FIELDS.basic
   | typeof OPTIMIZER_PROMPT_FIELDS.advanced
   | typeof OPTIMIZER_PROMPT_FIELDS.extreme
@@ -942,6 +1015,18 @@ export interface ComposerUxSettings {
   optimizeKeepDock: boolean
   /** 允许解释层用只读工具查证项目内容（见 OPTIMIZE_READ_TOOLS_FIELD）。 */
   optimizeReadTools: boolean
+  /** 协作基调（0.14.0，默认普通）。 */
+  optimizerFraming: OptimizerFraming
+  /** 成品出来之后：审查 / 自动插入输入框（0.14.0，默认审查）。 */
+  optimizerPermission: OptimizerPermission
+  /** 解释层用哪个模型；空串 = 跟随会话（0.14.0）。 */
+  optimizerModel: string
+  /** 上下文模式：回合 / 全文（0.14.0，默认回合）。 */
+  optimizerHistory: OptimizerHistory
+  /** 回合模式的窗口大小（0–10，默认 6）。 */
+  optimizerTurns: number
+  /** 内置 Bash（0.14.0，默认关；开了解释层能跑 shell 命令）。 */
+  optimizeBash: boolean
   /**
    * 三档的**自定义**系统提示词；留空 = 用 `optimizer-prompt.ts` 里的内置那份。
    *
@@ -1028,6 +1113,12 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   optimizeKeepDock: true,
   // 只读工具默认**关**：它会真的多花时间与 token（开了才走工具轮次）。
   optimizeReadTools: false,
+  optimizerFraming: DEFAULT_OPTIMIZER_FRAMING,
+  optimizerPermission: DEFAULT_OPTIMIZER_PERMISSION,
+  optimizerModel: '',
+  optimizerHistory: 'turns',
+  optimizerTurns: DEFAULT_OPTIMIZER_TURNS,
+  optimizeBash: false,
   // 空串 = 用内置提示词。默认必须是空串：它同时就是「恢复内置」要写回去的值。
   optimizerPromptBasic: '',
   optimizerPromptAdvanced: '',
@@ -1351,6 +1442,15 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     optimizerLedger: asBool(OPTIMIZER_LEDGER_FIELD),
     optimizeKeepDock: asBool(OPTIMIZE_KEEP_DOCK_FIELD),
     optimizeReadTools: asBool(OPTIMIZE_READ_TOOLS_FIELD),
+    // 枚举只认白名单里的值：写坏了就落回默认（与其它枚举字段同一做法）。
+    optimizerFraming: source[OPTIMIZER_FRAMING_FIELD] === 'hard' ? 'hard' : DEFAULT_OPTIMIZER_FRAMING,
+    optimizerPermission: source[OPTIMIZER_PERMISSION_FIELD] === 'auto' ? 'auto' : DEFAULT_OPTIMIZER_PERMISSION,
+    optimizerModel: typeof source[OPTIMIZER_MODEL_FIELD] === 'string'
+      ? source[OPTIMIZER_MODEL_FIELD].trim().slice(0, OPTIMIZER_MODEL_MAX)
+      : '',
+    optimizerHistory: source[OPTIMIZER_HISTORY_FIELD] === 'full' ? 'full' : 'turns',
+    optimizerTurns: normalizeOptimizerTurns(source[OPTIMIZER_TURNS_FIELD]),
+    optimizeBash: asBool(OPTIMIZE_BASH_FIELD),
     optimizerPromptBasic: asPrompt(OPTIMIZER_PROMPT_FIELDS.basic, OPTIMIZER_PROMPT_MAX),
     optimizerPromptAdvanced: asPrompt(OPTIMIZER_PROMPT_FIELDS.advanced, OPTIMIZER_PROMPT_MAX),
     optimizerPromptExtreme: asPrompt(OPTIMIZER_PROMPT_FIELDS.extreme, OPTIMIZER_PROMPT_MAX),

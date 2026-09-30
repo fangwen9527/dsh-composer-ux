@@ -261,10 +261,11 @@ console.log('2.0c 结果框接线（0.12.0）')
     source.includes('if (controller.signal.aborted) return'))
   check('重新优化用的是框里那一轮的原文（不是输入框现在的内文）',
     /startOptimize\(\{[^}]*source: state\.source/s.test(source))
-  check('记忆链：接着改时把上一轮成品一起给（门槛在 previousForChain 里，纯函数单测）',
-    source.includes('previousForChain(dock.getSnapshot(), source)'))
-  check('记忆链：框里手改过才带上一轮成品（同文重跑不带）',
-    /previous: state\.edited \? state\.text : ''/.test(source))
+  // 0.14.0：记忆链整条撤销（上游硬规则 7）。这两条从「什么时候带」改成「怎么都不带」。
+  check('记忆链已撤销：面板不再算/传上一轮成品',
+    source.includes('previousForChain') === false && source.includes('previous:') === false)
+  check('记忆链已撤销：宿主侧也不再有 hadPrevious 台账字段',
+    source.includes('hadPrevious') === false)
   // 这条要卡住的是"Esc 在跑的时候**中止**而不是关面板"这个分支本身 —— 只查 `dockCancel()`
   // 出现过是不够的：把整段包进 `if (false)` 也照样出现（变异 CY 就是这么干的）。
   check('取消时面板不关（只是中止等待）',

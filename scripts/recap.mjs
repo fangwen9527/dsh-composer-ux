@@ -24,7 +24,7 @@ import { join } from 'node:path'
 /** 与 src/optimize-ledger.ts 的 LEDGER_RUN_KEYS 保持同步（有测试盯着）。 */
 const RUN_KEYS = [
   'kind', 'at', 'sessionId', 'tier', 'provider', 'model', 'draftChars', 'contextTurns', 'contextChars',
-  'hadPrevious', 'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
+  'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
   'promptSource', 'ms', 'ok', 'failure',
   'toolRounds', 'toolCalls', 'toolNames', 'toolCapped', 'toolFallback', 'toolRejected', 'toolError',
 ]

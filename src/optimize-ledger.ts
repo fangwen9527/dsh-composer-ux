@@ -31,7 +31,7 @@ export const LEDGER_MAX_BYTES = 512 * 1024
 /** 允许出现在台账里的键 —— 测试拿它当白名单核对（多一个键就要有人解释它为什么不算隐私）。 */
 export const LEDGER_RUN_KEYS = [
   'kind', 'at', 'sessionId', 'tier', 'provider', 'model', 'draftChars', 'contextTurns', 'contextChars',
-  'hadPrevious', 'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
+  'items', 'dropped', 'droppedReasons', 'warnings', 'fallback', 'retried',
   'promptSource', 'ms', 'ok', 'failure',
   // 只读工具（0.13.0 ⑤）：全数字/短串，同样不含任何文件内容。
   'toolRounds', 'toolCalls', 'toolNames', 'toolCapped', 'toolFallback', 'toolRejected', 'toolError',
@@ -47,7 +47,6 @@ export interface LedgerRunInput {
   readonly draftChars: number
   readonly contextTurns: number
   readonly contextChars: number
-  readonly hadPrevious: boolean
   readonly items: number
   readonly dropped: number
   /** 丢弃原因（我们自己写的固定短语），去重后记录。 */
@@ -137,7 +136,6 @@ export function buildLedgerRun(input: LedgerRunInput, at: string = new Date().to
     draftChars: Math.max(0, Math.trunc(input.draftChars)),
     contextTurns: Math.max(0, Math.trunc(input.contextTurns)),
     contextChars: Math.max(0, Math.trunc(input.contextChars)),
-    hadPrevious: input.hadPrevious === true,
     items: Math.max(0, Math.trunc(input.items)),
     dropped: Math.max(0, Math.trunc(input.dropped)),
     // 原因先消毒再去重（见 ledgerSafeReason：那几条模板里嵌着模型给的值）。

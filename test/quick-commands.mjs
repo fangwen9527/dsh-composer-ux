@@ -799,17 +799,10 @@ console.log('3e. 会话上下文：挑往来 / 收敛预算 / 渲染成块；记
     truncated: false, fallback: false, retried: false, promptSource: 'builtin', itemCount: 1,
     startedAt: 0, elapsedMs: 1, draftAtStart: '原文', source: '原文', slashPrefix: '',
   }
-  check('记忆链：上一轮成功 + 草稿变了 → 带上上一版成品',
-    pure.previousForChain(base, '原文，另外加个导出') === '成品正文')
-  check('记忆链：草稿与上一轮原文逐字相同（同文重试）→ 不带',
-    pure.previousForChain(base, '原文') === '')
-  check('记忆链：草稿就是上一轮成品（原样插进去又点一次）→ 不带',
-    pure.previousForChain(base, '成品正文') === '')
-  check('记忆链：上一轮失败/取消 → 不带',
-    pure.previousForChain({ ...base, phase: 'error' }, '新草稿') === ''
-    && pure.previousForChain({ ...base, phase: 'cancelled' }, '新草稿') === '')
-  check('记忆链：没有上一轮 → 不带', pure.previousForChain(null, '新草稿') === '')
-  check('记忆链：上一轮成品是空的 → 不带', pure.previousForChain({ ...base, text: '  ' }, '新草稿') === '')
+  // 0.14.0：记忆链**整条撤销**（上游硬规则 7「轮次之间不遗传」）。所以这里不再测"什么时候带"，
+  // 而是钉住"怎么都不带"：请求体里不许再出现 previous 字段，宿主也不再读它。
+  check('记忆链已撤销：请求体里没有 previous 字段',
+    pure.optimizeDraftStream.toString().includes('previous') === false)
 }
 
 // ══════════════ 4. 提示词资产（0.6 线机制：条目 + 逐字依据） ══════════════════
@@ -1877,21 +1870,9 @@ console.log('5d. 宿主半：上下文进提示词、开关能真关、记忆链
     text: '把那个页面弄好看点，另外加个导出', tier: 'standard', previous: '上一版成品：把设置页做得好看点',
   })), res)
   const user = host.llmCalls[0].messages[0].content[0].text
-  check('记忆链：上一轮成品进了 user 块', user.includes('<上一轮成品>') && user.includes('上一版成品'), user.slice(0, 120))
-  check('记忆链：块里写明"沿用已确认的决策、不要整段重写"',
-    user.includes('沿用其中已经确认的决策'), user.slice(0, 200))
-  check('记忆链：回报 hadPrevious', json(res).hadPrevious === true)
-
-  const noPrev = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), noPrev)
-  check('记忆链：没带就是没有（不凭空造一个空块）',
-    host.llmCalls[1].messages[0].content[0].text.includes('<上一轮成品>') === false && json(noPrev).hadPrevious === false)
-
-  const long = makeRes()
-  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', previous: 'x'.repeat(2_000) })), long)
-  const block = /<上一轮成品>\n([\s\S]*?)\n<\/上一轮成品>/.exec(host.llmCalls[2].messages[0].content[0].text)
-  check('记忆链：超长上一轮截断到 1500（不让它把草稿挤掉）',
-    block !== null && block[1].length === 1_500, String(block?.[1]?.length))
+  // 0.14.0：记忆链整条撤销（上游硬规则 7）。所以这里钉的是「**就算客户端还发 previous，宿主也不认**」。
+  check('记忆链已撤销：previous 不再进 user 块', user.includes('上一轮成品') === false, user.slice(0, 120))
+  check('记忆链已撤销：回报里不再有 hadPrevious 字段', json(res).hadPrevious === undefined)
 }
 
 // ══════════════ 5e. 逐轮台账（0.13.0）：真路由跑一轮，磁盘上只有元数据 ══════════════════
@@ -2782,6 +2763,38 @@ console.log('5i. 上游六类本体（0.14.0 S3a）：必填字段与装配')
     assembled.text.includes('【你要的') && assembled.text.includes('【对质量词的理解】')
     && assembled.text.includes('【可逆的实现选择') && assembled.text.includes('【建议'))
   check('质量解读把小节里带上 rationale（指回原话字眼）', assembled.text.includes('真实、帅气'))
+}
+
+console.log('5j. 模型选择与协作基调（0.14.0 S4）：设置真的生效')
+{
+  // 模型选择：设置里写 `provider/model` ⇒ 这一轮走它，而不是会话当前选的模型。
+  const host = await bootHost({
+    settings: { optimizerModel: 'other/some-model' },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+  })
+  const res = makeRes()
+  await handler0(host, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
+  check('设置里的模型生效（provider/model 拆开用）',
+    json(res).provider === 'other' && json(res).model === 'some-model', JSON.stringify({ p: json(res).provider, m: json(res).model }))
+
+  // 只写模型名 ⇒ 沿用会话的 provider（既精确指定，也只换模型不换厂商）
+  const host2 = await bootHost({
+    settings: { optimizerModel: 'another-model' },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+  })
+  await handler0(host2, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), makeRes())
+  check('只写模型名时沿用会话 provider',
+    host2.llmCalls[0].model === 'another-model', String(host2.llmCalls[0].model))
+
+  // 协作基调：设置成 hard ⇒ 系统提示词里出现「硬邦邦模式」段；默认不出现。
+  const hard = await bootHost({
+    settings: { optimizerFraming: 'hard' },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+  })
+  await handler0(hard, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), makeRes())
+  check('基调=硬邦邦 ⇒ 系统提示词里有那一段',
+    hard.llmCalls[0].system.includes('硬邦邦模式 · 整份辅助包的写法'))
+  check('默认（普通）⇒ 没有那一段', host.llmCalls[0].system.includes('硬邦邦模式') === false)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

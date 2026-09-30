@@ -40,7 +40,7 @@ import {
   insertIntoDraft, optimizeDraftStream, replaceDraft,
 } from './client/quick-commands.ts'
 import {
-  dockReducer, dockSummary, insertDecision, previousForChain, type OptimizeDockState,
+  dockReducer, dockSummary, insertDecision, type OptimizeDockState,
 } from './client/optimize-dock.ts'
 import { clearDockStateOnHost, loadDockState, saveDockState } from './client/optimize-state.ts'
 
@@ -425,7 +425,7 @@ export function apply(ctx: any): void {
    *
    * @param input - 这一轮的输入（默认读输入框；「重新优化」用的是框里那一轮的原文）。
    */
-  const startOptimize = (input: { source: string; draftAtStart: string; prefix: string; previous?: string }): void => {
+  const startOptimize = (input: { source: string; draftAtStart: string; prefix: string }): void => {
     if (optimizing.getSnapshot()) return
     const startedAt = Date.now()
     optimizing.set(true)
@@ -448,7 +448,7 @@ export function apply(ctx: any): void {
     void optimizeDraftStream(input.source, live.getSnapshot().optimizerTier, {
       onItem: (item) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'item', item })) },
       onDropped: (row) => { dock.set(dockReducer(dock.getSnapshot(), { type: 'dropped', row })) },
-    }, controller.signal, input.previous).then(
+    }, controller.signal).then(
       (result) => {
         // 取消/被新一轮替换：状态由那两路自己写，这里再写一次会把它覆盖成"失败"。
         if (controller.signal.aborted) return
@@ -487,12 +487,8 @@ export function apply(ctx: any): void {
       return
     }
     const source = slash.prefix === '' ? draft : slash.body
-    startOptimize({
-      source,
-      draftAtStart: draft,
-      prefix: slash.prefix,
-      previous: previousForChain(dock.getSnapshot(), source),
-    })
+    // 记忆链已撤销（0.14.0，上游硬规则 7：轮次之间不遗传）。
+    startOptimize({ source, draftAtStart: draft, prefix: slash.prefix })
   }
 
   const quickActions = {
@@ -552,7 +548,6 @@ export function apply(ctx: any): void {
         source: state.source,
         draftAtStart: currentDraft(),
         prefix: state.slashPrefix,
-        previous: state.edited ? state.text : '',
       })
     },
     /** 中止这一轮并保留已生成的部分（条目流水留着，成品本来就不存在）。 */

@@ -777,7 +777,6 @@ export function apply(ctx: Context, config?: unknown): void {
     /** 单次优化的墙钟上限：够慢模型跑完，但不会让请求永远挂着。 */
     const LLM_TIMEOUT_MS = 180_000
     /** 记忆链里"上一轮成品"的长度上限（再多就本末倒置了）。 */
-    const PREVIOUS_MAX = 1_500
     /** 请求体上限（输入框里的原文，正常都是几 KB）。 */
     const BODY_MAX_BYTES = 1_000_000
     /**
@@ -810,10 +809,8 @@ export function apply(ctx: Context, config?: unknown): void {
     }
 
     /** 解析本次优化用哪条路由：请求体优先，其次当前默认模型。 */
-    const resolveRoute = (payload: Record<string, unknown>): { provider: string; model: string } => {
-      const provider = textOf(payload.provider)
-      const model = textOf(payload.model)
-      if (provider !== '' && model !== '') return { provider, model }
+    /** 会话当前选的模型（拿不到就是空）。 */
+    const sessionRoute = (): { provider: string; model: string } => {
       try {
         const selector = optCtx.get('agentDefaultModel') as
           { currentSelection?: () => { provider?: unknown; model?: unknown } } | undefined
@@ -822,6 +819,27 @@ export function apply(ctx: Context, config?: unknown): void {
       } catch {
         return { provider: '', model: '' }
       }
+    }
+
+    /**
+     * 这一轮用哪条路由。
+     *
+     * 优先级：客户端显式指定 > 设置里的「模型」（0.14.0）> 会话当前选的模型。
+     * 设置里写 `provider/model`（推荐）时按斜杠拆；只写模型名时沿用会话的 provider ——
+     * 这样用户既能精确指定，也能只换模型不换厂商。
+     */
+    const resolveRoute = (payload: Record<string, unknown>): { provider: string; model: string } => {
+      const provider = textOf(payload.provider)
+      const model = textOf(payload.model)
+      if (provider !== '' && model !== '') return { provider, model }
+      const configured = readOwnSetting(optCtx, config, OPTIMIZER_MODEL_FIELD).trim()
+      if (configured !== '') {
+        const slash = configured.indexOf('/')
+        if (slash > 0) return { provider: configured.slice(0, slash), model: configured.slice(slash + 1) }
+        const fallback = sessionRoute()
+        return { provider: fallback.provider, model: configured }
+      }
+      return sessionRoute()
     }
 
     /**
@@ -962,11 +980,14 @@ export function apply(ctx: Context, config?: unknown): void {
         : []
       const contextText = contextBlock(contextTurns)
 
-      // 记忆链（0.12.0）：上一轮成品。客户端只在"用户在上一版基础上又改了原文"时才带它。
-      const previous = textOf(payload.previous).trim().slice(0, PREVIOUS_MAX)
+      // 记忆链在 0.14.0 **整条撤掉**：上游硬规则 7 是「轮次之间不遗传」（提示词里也写着），
+      // 宿主再传上一轮成品就是白花 token 的死载荷 —— 客户端也不再发这个字段。
+
+      // 协作基调（0.14.0）：`hard` 时提示词追加「硬邦邦模式」段（只改写法，不改条目与依据规则）。
+      const framing = readOwnSetting(optCtx, config, OPTIMIZER_FRAMING_FIELD)
 
       // 达到了上下文就加"只用于消歧义、不算依据"那段纪律。
-      const system = buildOptimizeSystem(tier, customPrompt, { intent: contextText !== '' })
+      const system = buildOptimizeSystem(tier, customPrompt, { intent: contextText !== '', framing })
 
       const controller = new AbortController()
       const timer = setTimeout(() => { controller.abort() }, LLM_TIMEOUT_MS)
@@ -1101,7 +1122,7 @@ export function apply(ctx: Context, config?: unknown): void {
             provider: route.provider,
             model: route.model,
             system: `${system}${READ_TOOLS_SYSTEM_NOTE}`,
-            userText: buildOptimizeUser(body, { context: contextText, previous }),
+            userText: buildOptimizeUser(body, { context: contextText }),
             root: cwd,
             signal: controller.signal,
             onDelta: onStreamDelta,
@@ -1136,13 +1157,13 @@ export function apply(ctx: Context, config?: unknown): void {
       let retried = false
       let result: { out: string; failure: string }
       try {
-        result = tooledResult ?? await runOnce(buildOptimizeUser(body, { context: contextText, previous }), onStreamDelta)
+        result = tooledResult ?? await runOnce(buildOptimizeUser(body, { context: contextText }), onStreamDelta)
         // 空产出重试一次：机制与话术取自对方 0.6 的 `retryEmpty` —— 对方真机上的
         // "思考完成却没有产出"多半是模型把 JSON 忘在脑后，点一遍规则就能救回来。
         // 只在**没报错**时重试（报错重试一次只是白等一轮）。
         if (result.out.trim() === '' && result.failure === '') {
           retried = true
-          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目', context: contextText, previous }), onStreamDelta)
+          const second = await runOnce(buildOptimizeUser(body, { retry: true, reason: '宿主没有收到任何条目', context: contextText }), onStreamDelta)
           if (second.out.trim() !== '') result = second
           else if (result.failure === '') result = second
         }
@@ -1198,7 +1219,6 @@ export function apply(ctx: Context, config?: unknown): void {
           promptSource: optimizePromptSource(customPrompt),
           // 这一轮带了几个往来（0 = 没带上下文：关了开关 / 没有会话 / 读不到快照）。
           contextTurns: contextTurns.length,
-          hadPrevious: previous !== '',
           retried,
           fallback: assembled.fallback,
           itemCount: assembled.itemCount,
@@ -1223,7 +1243,6 @@ export function apply(ctx: Context, config?: unknown): void {
           draftChars: body.length,
           contextTurns: contextTurns.length,
           contextChars: contextText.length,
-          hadPrevious: previous !== '',
           items: summary.items,
           dropped: summary.droppedReasons.length,
           droppedReasons: summary.droppedReasons,

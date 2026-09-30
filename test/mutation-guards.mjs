@@ -906,14 +906,6 @@ const cases = [
     expect: '只取真正来自用户的',
   },
   {
-    name: 'DD 记忆链门槛拆掉（同文重试/对成品重跑也带上参考，污染模型判断）',
-    file: 'src/client/optimize-dock.ts',
-    from: "  if (sameDraft(dock.source, nextSource)) return ''",
-    to: "  if (false) return ''",
-    test: 'test/quick-commands.mjs',
-    expect: '同文重试',
-  },
-  {
     // 0.12.0 引入 typecheck 时抓到的真 bug 原样复现：常量没 import，用到它的路径一点就
     // ReferenceError（设置页「恢复默认」），而当时 18 套件全绿 —— 静态护栏补上了这一课。
     name: 'DE 字段常量少了 import（用到的路径一点就 ReferenceError）',
@@ -1246,6 +1238,23 @@ const cases = [
     to: "  '- quality_interpretation：质量词怎么理解。',",
     test: "test/quick-commands.mjs",
     expect: "契约写清了各类的必填字段",
+  },
+
+  {
+    name: "ET 设置里的模型不生效（用户指定了模型，宿主仍走会话默认）",
+    file: "src/host.ts",
+    from: "      const configured = readOwnSetting(optCtx, config, OPTIMIZER_MODEL_FIELD).trim()\n      if (configured !== '') {",
+    to: "      const configured = readOwnSetting(optCtx, config, OPTIMIZER_MODEL_FIELD).trim()\n      if (false) {",
+    test: "test/quick-commands.mjs",
+    expect: "设置里的模型生效（provider/model 拆开用）",
+  },
+  {
+    name: "EU 协作基调不接进提示词（选了硬邦邦也没用）",
+    file: "src/host.ts",
+    from: "const system = buildOptimizeSystem(tier, customPrompt, { intent: contextText !== '', framing })",
+    to: "const system = buildOptimizeSystem(tier, customPrompt, { intent: contextText !== '' })",
+    test: "test/quick-commands.mjs",
+    expect: "基调=硬邦邦 ⇒ 系统提示词里有那一段",
   },
 
 ]

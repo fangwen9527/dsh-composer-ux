@@ -151,30 +151,6 @@ function elapsed(startedAt: number, at: number): number {
   return at > startedAt ? at - startedAt : 0
 }
 
-/**
- * 记忆链（0.12.0）：这一轮该不该把上一轮成品当参考一起给模型。
- *
- * 场景是"在你上一版的基础上接着改"：你把成品插进输入框、改了几个地方、又点了一次优化。
- * 不给参考，模型就会从零重写一遍（你已经确认过的地方可能被改回去）；给了参考，它只需
- * 围绕变化点调整。
- *
- * 三条门槛（都为了不误导模型）：
- *  1. 上一轮必须**装配成功**且有成品（失败/取消没有可沿用的东西）；
- *  2. 草稿必须**真的变了**（与上一轮的原文逐字相同 = 同文重试，那不是续改）；
- *  3. 草稿**不等于上一轮成品**（原样插进去又点一次 = 对成品重跑，也不需要参考）。
- *
- * @param dock - 结果框状态（上一轮）。
- * @param nextSource - 这一轮要送去优化的正文。
- * @returns 要作为 `previous` 传下去的文本；不该带时返回空串。
- */
-export function previousForChain(dock: OptimizeDockState | null, nextSource: string): string {
-  if (dock === null || dock.phase !== 'done') return ''
-  const text = dock.text.trim()
-  if (text === '') return ''
-  if (sameDraft(dock.source, nextSource)) return ''
-  if (sameDraft(text, nextSource)) return ''
-  return dock.text
-}
 
 /**
  * 「插入输入框」这一下该干什么。

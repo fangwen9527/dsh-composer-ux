@@ -178,8 +178,10 @@ console.log('4. 状态机：restore 是整份替换')
   check('空框 → 直接拿到这份快照', restored === snapshot)
   check('restore 不走增量规则（不会被当成 start 清空）', restored.items.length === 1 && restored.text === '上一轮的成品')
 
-  // 恢复后「重新优化」用的正文与记忆链都对得上（否则恢复等于白恢复）。
-  check('恢复后能算出记忆链要的上一轮成品', pure.previousForChain(restored, '新草稿').includes('上一轮的成品'))
+  // 0.14.0：记忆链已撤销，恢复后只需保证「重新优化」用的正文（source）还在。
+  // 净化必须留下 source：没有它，「重新优化」在重启后就无从下手（记忆链已撤销，只靠正文）。
+  check('净化保留重新优化要的原文（source）',
+    pure.sanitizeDockSnapshot({ phase: 'done', text: '成品', source: '原文' }).source === '原文')
   const fromRunning = pure.dockReducer(null, { type: 'restore', snapshot: pure.sanitizeDockSnapshot({ phase: 'running' }) })
   check('恢复被中断的那一轮后，文案说的是"已取消"而不是"在跑"',
     pure.dockPhaseText(fromRunning).includes('取消'), pure.dockPhaseText(fromRunning))

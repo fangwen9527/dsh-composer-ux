@@ -62,7 +62,6 @@ console.log('1. 记录形状：只有数字与机器短串，没有文本载体'
     draftChars: 42.7,
     contextTurns: 4,
     contextChars: 1234,
-    hadPrevious: true,
     items: 3,
     dropped: 2,
     droppedReasons: ['text 是空的', 'text 是空的', 'kind 不在允许列表里（rewrite）'],
@@ -78,14 +77,15 @@ console.log('1. 记录形状：只有数字与机器短串，没有文本载体'
   check('键全在白名单里（多一个键就要解释它为什么不算隐私）', extra.length === 0, extra.join(','))
   check('kind 是 run、at 是 ISO 时间', record.kind === 'run' && /^\d{4}-\d{2}-\d{2}T/.test(record.at))
   check('数字都被取整（42.7 → 42、17500.9 → 17500）', record.draftChars === 42 && record.ms === 17500)
-  check('hadPrevious / retried 是布尔（不是真值）', record.hadPrevious === true && record.retried === true)
+  // 0.14.0：记忆链撤销 ⇒ hadPrevious 字段也退场了（recap 的 RUN_KEYS 与之一致）。
+  check('retried 是布尔（不是真值）', record.retried === true)
   check('丢弃原因去重', record.droppedReasons.length === 2, record.droppedReasons.join('|'))
   check('sessionId 截到 64 字', record.sessionId.length === 64)
   check('失败时才有 failure 键', !('failure' in record))
 
   const failed = ledger.buildLedgerRun({
     sessionId: '', tier: 'light', provider: 'go', model: 'm', draftChars: 0, contextTurns: 0,
-    contextChars: 0, hadPrevious: false, items: 0, dropped: 0, droppedReasons: [], warnings: 0,
+    contextChars: 0, items: 0, dropped: 0, droppedReasons: [], warnings: 0,
     fallback: false, retried: false, promptSource: 'builtin', ms: 10, ok: false,
     failure: '优化失败：模型返回错误\n第二行会被压平',
   })
@@ -115,7 +115,7 @@ console.log('1b. 原因消毒：模型给的值不许被写进台账')
 
   const record = ledger.buildLedgerRun({
     sessionId: 's', tier: 'standard', provider: 'go', model: 'm', draftChars: 10, contextTurns: 0,
-    contextChars: 0, hadPrevious: false, items: 0, dropped: 1, droppedReasons: [raw], warnings: 0,
+    contextChars: 0, items: 0, dropped: 1, droppedReasons: [raw], warnings: 0,
     fallback: false, retried: false, promptSource: 'builtin', ms: 5, ok: false,
     failure: `优化失败：模型返回错误「${secret}」`,
   })
@@ -146,7 +146,7 @@ console.log('2. 轮转：超上限保留尾部整行，并留一条轮转标记'
   writeFileSync(file, big)
   const result = ledger.appendLedger(ledger.buildLedgerRun({
     sessionId: 's', tier: 'light', provider: 'p', model: 'm', draftChars: 1, contextTurns: 0, contextChars: 0,
-    hadPrevious: false, items: 1, dropped: 0, droppedReasons: [], warnings: 0, fallback: false, retried: false,
+    items: 1, dropped: 0, droppedReasons: [], warnings: 0, fallback: false, retried: false,
     promptSource: 'builtin', ms: 5, ok: true,
   }), file)
   check('追加时触发轮转', result.written === true && result.rotated === true)

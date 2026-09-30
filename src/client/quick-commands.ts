@@ -486,7 +486,6 @@ export async function optimizeDraftStream(
   tier: string,
   handlers: OptimizeStreamHandlers = {},
   signal?: AbortSignal,
-  previous?: string,
 ): Promise<OptimizeOutcome> {
   const body = text.trim()
   if (body === '') return { ok: false, error: '输入框是空的，先写点什么再优化' }
@@ -501,7 +500,6 @@ export async function optimizeDraftStream(
         text: body,
         tier,
         sessionId: currentSessionId(),
-        ...(previous === undefined || previous.trim() === '' ? {} : { previous }),
       }),
       ...(signal === undefined ? {} : { signal }),
     })

@@ -43,7 +43,7 @@ export {
  * 这些是行为契约，在浏览器里很难逐例复现，所以整组出口在 node 里钉住。
  */
 export {
-  DOCK_RESTORE_MAX_ITEMS, dockPhaseText, dockReducer, dockSummary, insertDecision, previousForChain,
+  DOCK_RESTORE_MAX_ITEMS, dockPhaseText, dockReducer, dockSummary, insertDecision,
   sanitizeDockSnapshot,
 } from '../src/client/optimize-dock.ts'
 export {

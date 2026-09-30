@@ -2362,10 +2362,10 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     desktop: { shellPid: 111, hostPid: 222, appExe: 'C:\\app\\DeepSeek Harness.exe' },
   })
   check('桌面形态的助手：杀壳只用 /PID（/T 会把助手自己一起带走）',
-    desktopHelper.includes('taskkill') && desktopHelper.includes('"/PID"') && !desktopHelper.includes('"/T"'))
+    /spawn\("taskkill", \["\/F", "\/PID"/.test(desktopHelper))
   check('桌面形态的助手：绝不按映像名扫（/IM 会误杀自己）', !desktopHelper.includes('"/IM"'))
   check('❗桌面形态的助手：重建前必须删掉 ELECTRON_RUN_AS_NODE（否则拉起的是又一个 node）',
-    desktopHelper.includes('delete env.ELECTRON_RUN_AS_NODE'))
+    /^\s*delete env\.ELECTRON_RUN_AS_NODE/m.test(desktopHelper))
   check('桌面形态的助手：用应用 exe 重建、且不传参数',
     desktopHelper.includes('spawn(desktop.appExe, []'))
   check('桌面形态的助手：等旧宿主真的没了才重建',

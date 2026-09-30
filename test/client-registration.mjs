@@ -262,6 +262,11 @@ console.log('2.0c 结果框接线（0.12.0）')
   check('重新优化用的是框里那一轮的原文（不是输入框现在的内文）',
     /startOptimize\(\{[^}]*source: state\.source/s.test(source))
   // 0.14.0：记忆链整条撤销（上游硬规则 7）。这两条从「什么时候带」改成「怎么都不带」。
+  // 0.14.0 权限「自动」：跑完自动写回输入框 —— 但**只在输入框没被动过**时（否则会吃掉你在跑的时候手写的字）。
+  check('权限「自动」跑完自动插入',
+    /optimizerPermission === 'auto'[\s\S]{0,400}quickActions\.dockInsert\(\)/.test(source))
+  check('自动插入前先确认输入框没被改过（不吃掉手写内容）',
+    /currentDraft\(\) === input\.draftAtStart[\s\S]{0,200}quickActions\.dockInsert\(\)/.test(source))
   check('记忆链已撤销：面板不再算/传上一轮成品',
     source.includes('previousForChain') === false && source.includes('previous:') === false)
   check('记忆链已撤销：宿主侧也不再有 hadPrevious 台账字段',

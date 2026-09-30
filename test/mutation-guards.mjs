@@ -1274,6 +1274,31 @@ const cases = [
     expect: "超长命令 ⇒ 拒绝",
   },
 
+  {
+    name: "EX 上下文回合数不生效（滑条拖到 0 也照样把往来发出去）",
+    file: "src/host.ts",
+    from: "      const wantContext = contextOn && sessionId !== '' && !(historyMode !== 'full' && turnsWanted === 0)",
+    to: "      const wantContext = contextOn && sessionId !== ''",
+    test: "test/quick-commands.mjs",
+    expect: "回合=0 ⇒ 不带上下文",
+  },
+  {
+    name: "EY「全文」不生效（永远只给最近几轮）",
+    file: "src/host.ts",
+    from: "recentTurns(await readSessionSnapshot(sessionId), historyMode === 'full' ? CONTEXT_TURNS_FULL : turnsWanted)",
+    to: "recentTurns(await readSessionSnapshot(sessionId), turnsWanted)",
+    test: "test/quick-commands.mjs",
+    expect: "全文 ⇒ 最早的几轮也带上",
+  },
+  {
+    name: "EZ「自动」权限不看输入框是否被动过（直接覆盖你手写的内容）",
+    file: "src/client.tsx",
+    from: "          if (currentDraft() === input.draftAtStart) {",
+    to: "          if (true) {",
+    test: "test/client-registration.mjs",
+    expect: "自动插入前先确认输入框没被改过（不吃掉手写内容）",
+  },
+
 ]
 
 let allBit = true

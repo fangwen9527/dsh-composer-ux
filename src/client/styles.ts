@@ -703,3 +703,123 @@ export const dockButtonPrimary: CSSProperties = {
   color: 'var(--dsw-alias-label-primary-foreground)',
   fontWeight: 600,
 }
+
+// ── 0.14.0：优化选项卡片（照 dsh-prompt-optimizer 的卡片搬进面板）─────────────────
+
+/** 卡片外框：面板里的一段（不画独立浮窗感，与结果框同一做法）。 */
+export const optCard: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '8px 12px 10px',
+  borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+}
+
+/** 卡片标题行。 */
+export const optCardTitle: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  fontWeight: 600,
+}
+
+/** 一行：左边标签、右边控件。 */
+export const optRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+}
+
+/** 行标签（固定宽度，让右边控件对齐）。 */
+export const optLabel: CSSProperties = {
+  color: 'var(--dsw-alias-label-secondary)',
+  fontSize: 11.5,
+  flex: '0 0 52px',
+}
+
+/** 分段控件容器。 */
+export const optSegmented: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  flex: '1 1 auto',
+  minWidth: 0,
+}
+
+/** 分段按钮。 */
+export const optSegButton: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  padding: '3px 6px',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  borderRadius: 6,
+  fontSize: 11,
+  lineHeight: 1.6,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+/** 选中的分段按钮。 */
+export const optSegButtonActive: CSSProperties = {
+  ...optSegButton,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  color: 'var(--dsw-alias-label-primary)',
+  borderColor: 'var(--dsw-alias-label-primary)',
+  fontWeight: 600,
+}
+
+/** 单行文本输入（模型 id）。 */
+export const optInput: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  padding: '3px 8px',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 11.5,
+}
+
+/** 滑条（上下文回合数）。 */
+export const optSlider: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  accentColor: 'var(--dsw-alias-label-primary)',
+}
+
+/** 数字显示（滑条右边）。 */
+export const optNumber: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  flex: '0 0 auto',
+  minWidth: 34,
+  textAlign: 'right',
+}
+
+/** 详情里的提示词输入框。 */
+export const optPromptBox: CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  minHeight: 96,
+  maxHeight: '22vh',
+  resize: 'vertical',
+  padding: '6px 8px',
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 11.5,
+  lineHeight: 1.6,
+  fontFamily: 'inherit',
+}
+
+/** 卡片的说明行（弱化，用来说清这个开关到底做什么）。 */
+export const optHint: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 10.5,
+  lineHeight: 1.5,
+}

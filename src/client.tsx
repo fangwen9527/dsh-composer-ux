@@ -461,6 +461,18 @@ export function apply(ctx: any): void {
           note(`优化失败（用时 ${used} 秒）：${result.error ?? '未知原因'}`)
           return
         }
+        // 权限「自动」（0.14.0）：跑完直接写回输入框。
+        // ⚠️ 绝不吃掉用户在优化期间手写的内容：只有输入框仍停在发起时那份原文才自动写；
+        // 动过就回落成"你看一眼再点插入"，并说明原因。
+        if (live.getSnapshot().optimizerPermission === 'auto') {
+          if (currentDraft() === input.draftAtStart) {
+            // 复用同一个动作：它自己会给成功/失败提示（且此时草稿未被动过，不会有覆盖确认）。
+            quickActions.dockInsert()
+          } else {
+            note(`成品已就绪（用时 ${used} 秒）：你在优化期间改过输入框，所以没有自动写回 —— 点「插入输入框」即可`)
+          }
+          return
+        }
         note(`优化完成（${result.route ?? ''}）· ${next === null ? '' : dockSummary(next)} · 用时 ${used} 秒 · 在结果框里点「插入输入框」写回`)
       },
       (error: unknown) => {
@@ -675,6 +687,8 @@ export function apply(ctx: any): void {
         dockClose: quickActions.dockClose,
         dockDiscard: quickActions.dockDiscard,
         dockShow: quickActions.dockShow,
+        // 0.14.0「优化选项」卡片：面板直接写设置字段（与设置页同一个写入路径）。
+        setField,
         dockEdit: quickActions.dockEdit,
         setTier: quickActions.setTier,
         setInsertMode: quickActions.setInsertMode,

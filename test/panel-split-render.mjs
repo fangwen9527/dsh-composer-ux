@@ -154,10 +154,25 @@ console.log('2. 有结果框：自动切到「优化提示词」那半，快捷�
   check('❗两半互斥：这一屏**不**渲染快捷指令列表', !text.includes('＋ 新分类') && !text.includes('点条目'))
 }
 
+console.log('2b. 「优化选项」卡片（0.14.0）：七个控件都在，且反映当前设置')
+{
+  const html = render({ dock: doneDock() })
+  check('卡片标题在', html.includes('优化选项'))
+  for (const label of ['权限', '协作基调', '模型', '上下文', '只读工具', '内置 Bash', '详情']) {
+    check(`卡片里有「${label}」这一行`, html.includes(`>${label}</span>`))
+  }
+  check('开关反映当前设置（只读工具/内置 Bash 两行都在）',
+    html.includes('aria-label="只读工具"') && html.includes('aria-label="内置 Bash"'))
+  check('说明写清了边界（Bash 默认关、锁定工作目录、超时）',
+    html.includes('锁定会话工作目录') && html.includes('单条超时 20 秒'))
+}
+
 console.log('3. ❗底部按钮在可滚内容区之外（用户报的"展开后看不到按钮"就是这条）')
 {
   const html = render({ dock: doneDock() })
-  const buttonsAt = html.indexOf('插入输入框')
+  // 按**按钮文本**定位（0.14.0 起「优化选项」卡片的 tooltip 里也会出现「插入输入框」这几个字，
+  // 用 indexOf 直接找会命中提示文案、把这条布局断言变成假红）。
+  const buttonsAt = html.indexOf('>插入输入框<')
   const lastScrollAt = html.lastIndexOf('overflow-y:auto')
   check('三个按钮都在 DOM 里', buttonsAt > 0 && html.includes('重新优化') && html.includes('复制'))
   check('按钮出现在最后一个滚动容器**之后**', lastScrollAt > 0 && buttonsAt > lastScrollAt,

@@ -31,6 +31,7 @@ import {
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
+  normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
   LEGACY_OPTIMIZER_PROMPT_FIELDS,
   OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
@@ -224,6 +225,23 @@ function readOwnFlag(scope: unknown, config: unknown, field: string, fallback: b
     const service = get.call(scope, 'settings') as SettingsLike | undefined
     const value = makeReader(service, config)(NAMESPACE)?.[field]
     return typeof value === 'boolean' ? value : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * 读一个**数字**字段（与 `readOwnFlag` 同一套兜底：读不到/类型不对/抛错都回落）。
+ *
+ * 为什么单独要一个：上下文回合数是数字，而 `readOwnSetting` 走的是字符串口径。
+ */
+function readOwnNumber(scope: unknown, config: unknown, field: string, fallback: number): number {
+  try {
+    const get = (scope as { get?: (name: string) => unknown } | undefined)?.get
+    if (typeof get !== 'function') return fallback
+    const service = get.call(scope, 'settings') as SettingsLike | undefined
+    const value = makeReader(service, config)(NAMESPACE)?.[field]
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback
   } catch {
     return fallback
   }
@@ -810,6 +828,12 @@ export function apply(ctx: Context, config?: unknown): void {
     }
 
     /** 解析本次优化用哪条路由：请求体优先，其次当前默认模型。 */
+    /**
+     * 「全文」模式向 `recentTurns` 要的回合数：一个足够大的上限，真正的收口在字符预算那一步
+     * （`contextWithinBudget`）——所以这里不需要精确等于会话长度。
+     */
+    const CONTEXT_TURNS_FULL = 100
+
     /** 会话当前选的模型（拿不到就是空）。 */
     const sessionRoute = (): { provider: string; model: string } => {
       try {
@@ -979,8 +1003,15 @@ export function apply(ctx: Context, config?: unknown): void {
       // 它与只读工具共用同一个工作目录围栏：拿不到会话工作目录就不开。
       const bashOn = readOwnFlag(optCtx, config, OPTIMIZE_BASH_FIELD, DEFAULT_SETTINGS.optimizeBash)
       const sessionId = textOf(payload.sessionId)
-      const contextTurns = contextOn && sessionId !== ''
-        ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId)))
+      // 上下文取多少（0.14.0）：`full` = 尽量给全（仍受字符预算约束）；`turns` = 最近 N 回合，
+      // N = 0 时干脆不带（用户明确说"不要上下文"）。回合数走归一化，坏值回落默认。
+      const historyMode = readOwnSetting(optCtx, config, OPTIMIZER_HISTORY_FIELD)
+      const turnsWanted = normalizeOptimizerTurns(
+        readOwnNumber(optCtx, config, OPTIMIZER_TURNS_FIELD, DEFAULT_SETTINGS.optimizerTurns),
+      )
+      const wantContext = contextOn && sessionId !== '' && !(historyMode !== 'full' && turnsWanted === 0)
+      const contextTurns = wantContext
+        ? contextWithinBudget(recentTurns(await readSessionSnapshot(sessionId), historyMode === 'full' ? CONTEXT_TURNS_FULL : turnsWanted))
         : []
       const contextText = contextBlock(contextTurns)
 

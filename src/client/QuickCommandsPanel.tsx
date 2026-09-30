@@ -14,11 +14,14 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
-  DEFAULT_CATEGORY_NAME, OPTIMIZER_TIERS, QUICK_CATEGORY_MAX, insertModeOf,
+  DEFAULT_CATEGORY_NAME, OPTIMIZE_BASH_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZER_FRAMING_FIELD,
+  OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD, OPTIMIZER_TIERS,
+  OPTIMIZER_TURNS_FIELD, QUICK_CATEGORY_MAX, insertModeOf, optimizerPromptFieldOf,
   type ComposerUxSettings, type InsertMode, type OptimizerTier, type QuickPromptBook,
 } from '../settings-contract.ts'
 import { bookCounts } from './prompt-book.ts'
 import { AddPromptRow } from './AddPromptRow.tsx'
+import { OptimizeOptionsCard } from './OptimizeOptionsCard.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { useOptimizeElapsed } from './optimize-clock.ts'
 import { DEFAULT_PANEL_SECTION, sectionForDock, toggleSection, type PanelSection } from './panel-sections.ts'
@@ -89,6 +92,8 @@ export interface QuickPanelInjected {
     movePrompt: (promptId: string, toCategoryId: string) => void
     /** 从磁盘重读（文件被手工改过时的兜底）。 */
     reloadBook: () => void
+    /** 写一个设置字段（0.14.0 的「优化选项」卡片用它；字段名由面板给）。 */
+    setField: (field: string, value: unknown) => void
   }
 }
 
@@ -291,6 +296,26 @@ export function QuickCommandsPanel({
       </button>
 
       <div style={quickSectionBody}>
+      {/* 0.14.0「优化选项」卡片：优化那半的顶部（档位仍留在标题行，见 0.13.1 的决定）。 */}
+      {section === 'optimize' && (
+        <OptimizeOptionsCard
+          settings={settings}
+          actions={{
+            setFraming: value => { actions.setField(OPTIMIZER_FRAMING_FIELD, value) },
+            setPermission: value => { actions.setField(OPTIMIZER_PERMISSION_FIELD, value) },
+            setModel: value => { actions.setField(OPTIMIZER_MODEL_FIELD, value) },
+            setHistory: value => { actions.setField(OPTIMIZER_HISTORY_FIELD, value) },
+            setTurns: value => { actions.setField(OPTIMIZER_TURNS_FIELD, value) },
+            setReadTools: on => { actions.setField(OPTIMIZE_READ_TOOLS_FIELD, on) },
+            setBash: on => { actions.setField(OPTIMIZE_BASH_FIELD, on) },
+            setPrompt: value => {
+              // 关闭档没有提示词字段（`optimizerPromptFieldOf` 返回空串）：这时不写。
+              const field = optimizerPromptFieldOf(settings.optimizerTier)
+              if (field !== '') actions.setField(field, value)
+            },
+          }}
+        />
+      )}
       {dock !== null && section === 'optimize' && (
         <div style={{ padding: '8px 12px 8px', flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <OptimizeDock

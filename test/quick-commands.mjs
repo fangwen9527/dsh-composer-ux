@@ -2830,5 +2830,40 @@ console.log('5k. 内置 Bash 的开关（0.14.0 S5）：关着时模型**看不�
     on.llmCalls[0].system.includes('关于 bash 工具') && on.llmCalls[0].system.includes('不要写文件'))
 }
 
+console.log('5l. 上下文「回合 0–10 / 全文」（0.14.0 S6）：设置真的改变发出去的内容')
+{
+  // 造 8 轮往来：第 i 轮的原话里带一个可识别记号 R<i>。
+  const events = []
+  for (let i = 1; i <= 8; i += 1) {
+    events.push({ type: 'user/message', data: { id: `u${String(i)}`, role: 'user', content: [{ type: 'text', text: `第 ${String(i)} 轮原话 R${String(i)}` }], source: { kind: 'user' } } })
+    events.push({ type: 'assistant/message', data: { message: { id: `a${String(i)}`, role: 'assistant', content: [{ type: 'text', text: `第 ${String(i)} 轮回复` }] } } })
+  }
+  const snapshot = { events }
+  const query = { readSession: async () => snapshot }
+  const selection = { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) }
+  const draft = '把那个页面弄好看点'
+  const sent = async (extraSettings) => {
+    const host = await bootHost({ model: selection, sessionQuery: query, settings: extraSettings })
+    await handler0(host, makeReq('POST', JSON.stringify({ text: draft, tier: 'standard', sessionId: 's-ctx' })), makeRes())
+    return String(host.llmCalls[0].messages[0].content[0].text)
+  }
+
+  const byDefault = await sent({})
+  check('默认：带最近几轮（出现会话上下文块）', byDefault.includes('会话上下文'))
+
+  // 回合 = 2：只带最后两轮（R8 在、R1 不在）
+  const two = await sent({ optimizerHistory: 'turns', optimizerTurns: 2 })
+  check('回合=2 ⇒ 只带最后两轮', two.includes('R8') && two.includes('R1') === false)
+
+  // 回合 = 0：干脆不带上下文
+  const zero = await sent({ optimizerHistory: 'turns', optimizerTurns: 0 })
+  check('回合=0 ⇒ 不带上下文（用户明确说不要）',
+    zero.includes('会话上下文') === false && zero.includes('R8') === false)
+
+  // 全文：连最早的 R1 也带上
+  const full = await sent({ optimizerHistory: 'full' })
+  check('全文 ⇒ 最早的几轮也带上', full.includes('R1') && full.includes('R8'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

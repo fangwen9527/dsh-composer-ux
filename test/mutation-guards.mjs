@@ -1380,6 +1380,23 @@ const cases = [
     expect: "❗入口不像 dsh（桌面壳那条路）也逐字重放，绝不退化成裸 dsh",
   },
 
+  {
+    name: "FN 重建时忘了删 ELECTRON_RUN_AS_NODE（拉起的是又一个 node，不是应用）",
+    file: "src/restart.ts",
+    from: "    '  delete env.ELECTRON_RUN_AS_NODE',",
+    to: "    '  // delete env.ELECTRON_RUN_AS_NODE',",
+    test: "test/quick-commands.mjs",
+    expect: "❗桌面形态的助手：重建前必须删掉 ELECTRON_RUN_AS_NODE（否则拉起的是又一个 node）",
+  },
+  {
+    name: "FO 杀壳时带上 /T（递归杀会把负责重启的助手自己一起带走）",
+    file: "src/restart.ts",
+    from: "    '    const killer = spawn(\"taskkill\", [\"/F\", \"/PID\", String(desktop.shellPid)], { windowsHide: true, stdio: [\"ignore\", out, err] })',",
+    to: "    '    const killer = spawn(\"taskkill\", [\"/F\", \"/T\", \"/PID\", String(desktop.shellPid)], { windowsHide: true, stdio: [\"ignore\", out, err] })',",
+    test: "test/quick-commands.mjs",
+    expect: "桌面形态的助手：杀壳只用 /PID（/T 会把助手自己一起带走）",
+  },
+
 ]
 
 let allBit = true

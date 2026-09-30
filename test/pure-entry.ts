@@ -123,7 +123,7 @@ export {
   RESTART_STOP_FALLBACK_MS,
   bootId, detectedDebugger, detectedSupervisor, gracefulStop, isLoopbackAddress, launchCommand,
   nodeExecutableOf, planRestart, quotePowerShell, respawnCommand, restartHelperSource,
-  explainRestartTrust, restartTrustText, scheduleRestart, servingPort, trustedRestartRequest,
+  desktopKindOf, explainRestartTrust, restartTrustText, scheduleRestart, servingPort, trustedRestartRequest,
 } from '../src/restart.ts'
 /** 「每一栏一个开关」的判据与总闸合成（两半共用，必须逐条钉住）。 */
 export { sectionEnabledOf, activeSections, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD, TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD } from '../src/settings-contract.ts'

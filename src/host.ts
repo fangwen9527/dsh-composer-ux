@@ -2413,6 +2413,7 @@ export function apply(ctx: Context, config?: unknown): void {
     const buildIo = (): RestartIo => ({
       platform: process.platform,
       pid: process.pid,
+      ppid: process.ppid,
       argv0: process.argv0,
       execPath: process.execPath,
       argv1: process.argv[1],

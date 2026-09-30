@@ -341,12 +341,31 @@ export function detectedSupervisor(input: {
   return null
 }
 
+/**
+ * 这个宿主跑在桌面壳里吗（Electron 二进制 + Node 模式）。
+ *
+ * 为什么这决定"怎么重启"：桌面壳把宿主的退出当成崩溃（宿主子进程一 close 它就 fail()），
+ * 所以桌面形态必须连壳一起换掉；`dsh web` 形态没有壳，照旧等端口重拉即可。
+ */
+export function desktopKindOf(input: {
+  readonly env: Readonly<Record<string, string | undefined>>
+  readonly execPath: string
+}): boolean {
+  return input.env.ELECTRON_RUN_AS_NODE === '1' && /\.exe$/iu.test(input.execPath)
+}
+
 /** 助手源码的注入面。 */
 export interface HelperInput {
   readonly spawned: Respawn
   readonly cwd: string
   readonly logs: { readonly out: string; readonly err: string }
   readonly port: number | null
+  /** 桌面形态：要杀掉的壳、要等的旧宿主、用来重建的应用 exe；web 形态为 null。 */
+  readonly desktop: {
+    readonly shellPid: number
+    readonly hostPid: number
+    readonly appExe: string
+  } | null
 }
 
 /**
@@ -356,7 +375,11 @@ export interface HelperInput {
  * 每一部分单看都是对的，合起来才错）。它的职责只有三件：等端口 → 起新宿主 → 验证并留证据。
  */
 export function restartHelperSource(input: HelperInput): string {
-  const { spawned, cwd, logs, port } = input
+  const { spawned, cwd, logs, port, desktop } = input
+  // 老调用点（测试）没传这个字段 ⇒ 用 ?? null 兜住，不要因为 undefined 就崩。
+  const desktopFacts = desktop === null || desktop === undefined
+    ? 'null'
+    : `{ shellPid: ${String(desktop.shellPid)}, hostPid: ${String(desktop.hostPid)}, appExe: ${JSON.stringify(desktop.appExe)} }`
   return [
     "const { spawn } = require('node:child_process')",
     "const fs = require('node:fs')",
@@ -369,6 +392,7 @@ export function restartHelperSource(input: HelperInput): string {
     `const logOut = ${JSON.stringify(logs.out)}`,
     `const logErr = ${JSON.stringify(logs.err)}`,
     `const port = ${JSON.stringify(port)}`,
+    `const desktop = ${desktopFacts}`,
     `const pollMs = ${String(RESTART_POLL_MS)}`,
     `const portWaitMs = ${String(RESTART_PORT_WAIT_MS)}`,
     `const settleMs = ${String(RESTART_PORT_SETTLE_MS)}`,
@@ -419,7 +443,39 @@ export function restartHelperSource(input: HelperInput): string {
     '  while (Date.now() < upBy && !(await listening())) await sleep(500)',
     '  if (!(await listening())) note("the replacement did not bind port " + port + " within " + replacementWaitMs + "ms — see the output log beside this one")',
     '}',
-    'main()',
+    'const alive = (pid) => new Promise((resolve) => {',
+    '  let out = ""',
+    '  const probe = spawn("tasklist", ["/FI", "PID eq " + pid, "/FO", "CSV", "/NH"], { windowsHide: true })',
+    '  probe.stdout.on("data", (chunk) => { out += String(chunk) })',
+    '  probe.on("close", () => resolve(out.includes("\\"" + pid + "\\"")))',
+    '  probe.on("error", () => resolve(false))',
+    '})',
+    '// 桌面形态：连壳一起换掉 —— 壳看不到自己子进程的退出，就不会弹恢复框。',
+    'const desktopMain = async () => {',
+    '  const out = fs.openSync(logOut, "a")',
+    '  const err = fs.openSync(logErr, "a")',
+    '  // 只 /PID：/T 会把"负责重启的助手自己"一起带走（参考插件踩过的坑）。',
+    '  try {',
+    '    const killer = spawn("taskkill", ["/F", "/PID", String(desktop.shellPid)], { windowsHide: true, stdio: ["ignore", out, err] })',
+    '    killer.on("error", (error) => note("could not kill the shell: " + (error && error.message ? error.message : String(error))))',
+    '    killer.unref()',
+    '  } catch (error) { note("could not kill the shell: " + String(error)) }',
+    '  const until = Date.now() + portWaitMs',
+    '  while (Date.now() < until && await alive(desktop.hostPid)) await sleep(pollMs)',
+    '  if (await alive(desktop.hostPid)) note("the old host was still alive after " + portWaitMs + "ms; relaunching anyway")',
+    '  await sleep(settleMs)',
+    '  // 必须删掉 ELECTRON_RUN_AS_NODE：留着它拉起来的会是"又一个 node 进程"，不是应用。',
+    '  const env = { ...process.env }',
+    '  delete env.ELECTRON_RUN_AS_NODE',
+    '  try {',
+    '    const child = spawn(desktop.appExe, [], { detached: true, stdio: ["ignore", out, err], env, windowsHide: true })',
+    '    child.on("error", (error) => note("could not relaunch the app: " + (error && error.message ? error.message : String(error))))',
+    '    child.unref()',
+    '  } catch (error) { note("could not relaunch the app: " + String(error)) }',
+    '  await sleep(lingerMs)',
+    '}',
+    'if (desktop === null) main()',
+    'else desktopMain()',
   ].join('\n')
 }
 
@@ -442,6 +498,8 @@ export interface SpawnOptionsLike {
 export interface RestartIo {
   readonly platform: string
   readonly pid: number
+  /** 父进程：桌面壳。桌面形态重启时要杀掉它。 */
+  readonly ppid: number
   readonly argv0: string | undefined
   readonly execPath: string
   readonly argv1: string | undefined
@@ -486,6 +544,10 @@ export function planRestart(io: RestartIo, port: number | null): RestartPlan {
     resolve: io.resolve,
     dirname: io.dirname,
   })
+  // 桌面形态：连壳一起换掉（壳把宿主的退出当崩溃，所以不能只换宿主）。
+  const desktop = desktopKindOf({ env: io.env, execPath: io.execPath })
+    ? { shellPid: io.ppid, hostPid: io.pid, appExe: io.execPath }
+    : null
   const respawn = respawnCommand(launch, io.platform)
   const logOut = io.join(io.tmpdir, `${RESTART_LOG_PREFIX}${io.stamp}.out.log`)
   const logErr = io.join(io.tmpdir, `${RESTART_LOG_PREFIX}${io.stamp}.err.log`)
@@ -493,7 +555,7 @@ export function planRestart(io: RestartIo, port: number | null): RestartPlan {
     node,
     launch,
     respawn,
-    helper: restartHelperSource({ spawned: respawn, cwd: launch.cwd, logs: { out: logOut, err: logErr }, port }),
+    helper: restartHelperSource({ spawned: respawn, cwd: launch.cwd, logs: { out: logOut, err: logErr }, port, desktop }),
     logOut,
     logErr,
     port,

@@ -2347,6 +2347,36 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
         && text.includes('origin=http://127.0.0.1:3080') && text.includes('转发头=无')
     })())
   check('放行时不啰嗦（空串）', pure.restartTrustText(pure.explainRestartTrust(trust())) === '')
+
+  // ---- 桌面形态（0.16.0）：连壳一起换掉，壳就看不到子进程退出、不会弹恢复框 ----
+  check('桌面形态判定：Electron 二进制 + Node 模式',
+    pure.desktopKindOf({ env: { ELECTRON_RUN_AS_NODE: '1' }, execPath: 'C:\\app\\DeepSeek Harness.exe' }) === true)
+  check('web 形态判定：普通 node（不带那个变量）',
+    pure.desktopKindOf({ env: {}, execPath: 'C:\\node\\node.exe' }) === false)
+  check('web 形态判定：有变量但 execPath 不是 .exe',
+    pure.desktopKindOf({ env: { ELECTRON_RUN_AS_NODE: '1' }, execPath: '/usr/bin/node' }) === false)
+
+  const desktopHelper = pure.restartHelperSource({
+    spawned: { file: 'C:\\node\\node.exe', args: ['x.js'], viaShell: false, detached: true },
+    cwd: 'D:\\work', logs: { out: 'o.log', err: 'e.log' }, port: 19387,
+    desktop: { shellPid: 111, hostPid: 222, appExe: 'C:\\app\\DeepSeek Harness.exe' },
+  })
+  check('桌面形态的助手：杀壳只用 /PID（/T 会把助手自己一起带走）',
+    desktopHelper.includes('taskkill') && desktopHelper.includes('"/PID"') && !desktopHelper.includes('"/T"'))
+  check('桌面形态的助手：绝不按映像名扫（/IM 会误杀自己）', !desktopHelper.includes('"/IM"'))
+  check('❗桌面形态的助手：重建前必须删掉 ELECTRON_RUN_AS_NODE（否则拉起的是又一个 node）',
+    desktopHelper.includes('delete env.ELECTRON_RUN_AS_NODE'))
+  check('桌面形态的助手：用应用 exe 重建、且不传参数',
+    desktopHelper.includes('spawn(desktop.appExe, []'))
+  check('桌面形态的助手：等旧宿主真的没了才重建',
+    desktopHelper.includes('alive(desktop.hostPid)'))
+  const webHelper = pure.restartHelperSource({
+    spawned: { file: 'dsh', args: ['web'], viaShell: true, detached: true },
+    cwd: 'D:\\work', logs: { out: 'o.log', err: 'e.log' }, port: 3080, desktop: null,
+  })
+  check('web 形态的助手：桌面事实是 null ⇒ 那段换壳代码永远不会被调用',
+    webHelper.includes('const desktop = null')
+    && webHelper.includes('if (desktop === null) main()'))
   check('跨站 Origin → 拒（DNS rebinding / 跨站调用挡在这里）',
     pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080', origin: 'http://evil.example' } })) === false)
   check('非 http(s) 的 Origin → 拒',

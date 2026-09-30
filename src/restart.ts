@@ -108,10 +108,19 @@ function isAbsolutePath(value: string): boolean {
  * 否则退回裸 `dsh`（Windows 上是 .cmd，只能过 shell）。
  */
 export function launchCommand(facts: LaunchFacts): Launch {
-  const { argv1, execArgv, rest, cwd, platform, resolve, dirname } = facts
-  if (argv1 !== undefined && /[\\/](?:bin\.(?:js|ts)|dsh)$/.test(argv1)) {
-    const absolute = resolve(argv1)
-    return { file: facts.node, args: [...execArgv, absolute, ...rest], cwd: dirname(absolute), viaShell: false }
+  const { node, argv1, execArgv, rest, cwd, platform } = facts
+  // 逐字重放原命令：`node <execArgv> <argv1> <rest...>`，cwd 用**原 cwd**
+  // （相对入口靠它才解析得到；这也正是两个参考插件的做法）。
+  //
+  // 为什么不再用「argv1 长得像 bin.js 才重放」那个启发式：桌面壳起宿主用的是
+  // `dsh-desktop-host/lib/cli.js`，不匹配 ⇒ 旧代码退回裸 `dsh` 并把 argv1 丢掉 ⇒
+  // 替换进程报 `invalid profile name` 当场退出（实机日志为证：助手一直没成功过）。
+  if (argv1 !== undefined && argv1 !== '') {
+    // Windows 的 `.cmd` shim：node 跑不了它，只能把这条命令交给 shell。
+    if (/\.(?:cmd|bat)$/iu.test(argv1)) {
+      return { file: argv1, args: [...rest], cwd, viaShell: true }
+    }
+    return { file: node, args: [...execArgv, argv1, ...rest], cwd, viaShell: false }
   }
   return { file: 'dsh', args: [...rest], cwd, viaShell: platform === 'win32' }
 }

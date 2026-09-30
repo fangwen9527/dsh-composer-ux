@@ -1371,6 +1371,15 @@ const cases = [
     expect: "任何转发痕迹 → 拒（说明中间站着代理，不是用户）",
   },
 
+  {
+    name: "FM 又可以把 argv1 丢掉、退回裸 dsh（就是那个让重启一直失败的真机 bug）",
+    file: "src/restart.ts",
+    from: "  if (argv1 !== undefined && argv1 !== '') {",
+    to: "  if (false) {",
+    test: "test/quick-commands.mjs",
+    expect: "❗入口不像 dsh（桌面壳那条路）也逐字重放，绝不退化成裸 dsh",
+  },
+
 ]
 
 let allBit = true

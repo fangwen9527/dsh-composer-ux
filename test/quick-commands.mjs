@@ -2234,17 +2234,30 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     winLaunch.file === 'D:\\node\\node.exe'
     && winLaunch.args.join('|') === 'D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js|web',
     JSON.stringify(winLaunch))
-  check('cwd 取入口所在目录（源码启动的 --import tsx/esm 才解析得到）',
-    winLaunch.cwd === 'D:\\DeepSeek Harness\\apps\\cli\\lib', winLaunch.cwd)
+  // 0.15.5：cwd 改成**原 cwd**（逐字重放的一部分）—— 相对入口靠它解析，
+  // 而不是靠「入口所在目录」（那是旧启发式的产物）。
+  check('cwd 用原 cwd（逐字重放）', winLaunch.cwd === 'D:\\DeepSeek Harness', winLaunch.cwd)
   check('execArgv 排在入口之前',
     pure.launchCommand(facts({ execArgv: ['--import', 'tsx/esm'] })).args.join('|')
       === '--import|tsx/esm|D:\\DeepSeek Harness\\apps\\cli\\lib\\bin.js|web')
-  check('相对入口先 resolve 成绝对（否则子进程按自己的 cwd 找 → MODULE_NOT_FOUND）',
-    pure.launchCommand(facts({ argv1: 'apps/cli/lib/bin.js', resolve: p => 'D:\\DSH\\' + p }))
-      .args.includes('D:\\DSH\\apps/cli/lib/bin.js'))
-  const bare = pure.launchCommand(facts({ argv1: 'D:\\tools\\other.js' }))
-  check('入口不像 dsh → 退回裸 dsh', bare.file === 'dsh' && bare.args.join('|') === 'web', JSON.stringify(bare))
-  check('裸 dsh 在 Windows 上必须过 shell（它是 .cmd shim）', bare.viaShell === true)
+  check('相对入口原样重放（子进程继承同一个 cwd，所以解析得到）',
+    pure.launchCommand(facts({ argv1: 'apps/cli/lib/bin.js' })).args.join('|')
+      === 'apps/cli/lib/bin.js|web')
+  // ❗这条就是真机那个 bug 的回归：桌面壳起宿主用的是 dsh-desktop-host/lib/cli.js，
+  // 旧实现「入口不像 dsh 就退回裸 dsh」、把 argv1 丢掉 ⇒ 替换进程报 invalid profile name
+  // 当场退出（助手日志里就是这条，一直没成功过）。现在必须**逐字重放**。
+  const others = pure.launchCommand(facts({
+    argv1: 'D:\\deepseekharness\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js',
+    rest: ['D:\\deepseekharness\\resources\\app.asar\\dsh'],
+  }))
+  check('❗入口不像 dsh（桌面壳那条路）也逐字重放，绝不退化成裸 dsh',
+    others.file === 'D:\\node\\node.exe'
+    && others.args.join('|') === 'D:\\deepseekharness\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js|D:\\deepseekharness\\resources\\app.asar\\dsh',
+    JSON.stringify(others))
+  check('重放不带 shell（node 直接跑入口）', others.viaShell === false)
+  const shim = pure.launchCommand(facts({ argv1: 'C:\\npm\\dsh.cmd', rest: ['web'] }))
+  check('argv1 是 .cmd shim ⇒ 交给 shell（node 跑不了它）',
+    shim.file === 'C:\\npm\\dsh.cmd' && shim.viaShell === true && shim.args.join('|') === 'web', JSON.stringify(shim))
   check('裸 dsh 在 POSIX 上不过 shell',
     pure.launchCommand(facts({ argv1: undefined, platform: 'linux' })).viaShell === false)
   check('node 可执行文件优先用 argv0（Android 上 execPath 是动态链接器）',
@@ -2264,10 +2277,13 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
     winSpawn.args[4])
   check('detached=false：真正的隐藏交给助手那层的 windowsHide（CREATE_NO_WINDOW）',
     winSpawn.detached === false && winSpawn.viaShell === false)
+  const bareDsh = pure.launchCommand(facts({ argv1: undefined }))
+  check('没有 argv1 ⇒ 退回裸 dsh（Windows 上过 shell）',
+    bareDsh.file === 'dsh' && bareDsh.viaShell === true, JSON.stringify(bareDsh))
   check('裸 dsh 在 Windows 上补成 dsh.cmd（PowerShell 会优先选被策略拒绝的 .ps1）',
-    pure.respawnCommand(bare, 'win32').args[4].startsWith("& 'dsh.cmd'"))
+    pure.respawnCommand(bareDsh, 'win32').args[4].startsWith("& 'dsh.cmd'"))
   check('已经是 .cmd 就不重复补',
-    pure.respawnCommand({ ...bare, file: 'dsh.cmd' }, 'win32').args[4].startsWith("& 'dsh.cmd'"))
+    pure.respawnCommand({ ...bareDsh, file: 'dsh.cmd' }, 'win32').args[4].startsWith("& 'dsh.cmd'"))
   const posixSpawn = pure.respawnCommand(winLaunch, 'linux')
   check('POSIX 就是原命令 + detached',
     posixSpawn.file === winLaunch.file && posixSpawn.detached === true && posixSpawn.viaShell === false)

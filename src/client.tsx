@@ -30,6 +30,8 @@ import { installSettingsCardStyle } from './client/settings-style.ts'
 import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
+import { RestartFooterAction } from './client/RestartFooterAction.tsx'
+import { maybeShowRestartDone } from './client/restart-screen.ts'
 import { SettingsSection } from './client/SettingsSection.tsx'
 import { StatsLineEntry } from './client/StatsLineEntry.tsx'
 import { CostChipEntry } from './client/CostChipEntry.tsx'
@@ -608,6 +610,37 @@ export function apply(ctx: any): void {
       commitBook(withInsertMode(book.getSnapshot(), promptId, mode))
     },
   }
+
+  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
+  // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
+  slots.inject('sidebar.footer.action', () => slots.register({
+    name: 'sidebar.footer.action',
+    id: 'composer-ux-restart',
+    order: 50,
+    label: '重启',
+  }, RestartFooterAction))
+
+  // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
+  // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
+  maybeShowRestartDone()
+
+  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
+  // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
+
+  // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
+  // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
+
+  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
+  // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
+
+  // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
+  // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
+
+  // 侧边栏脚注那枚「重启」（0.15.0，照 dsh-quick-restart 的位置）：宽栏显示文字、窄栏只显示图标。
+  // 槽位契约：list 槽，注册要 `id`；组件会收到 `wide`。
+
+  // 每次加载都看一眼：这次加载是不是「重启后自动刷新」回来的？是就提示一句「重启完成」。
+  // 为什么放在这里：自动刷新是整页替换，不提示的话用户只看到「页面闪了一下」。
 
   // 设置页条目。
   slots.inject('settings.section', () => slots.register({

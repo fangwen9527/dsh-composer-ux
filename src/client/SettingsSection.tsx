@@ -28,6 +28,7 @@ import {
   type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from '../settings-contract.ts'
+import { enterRestartScreen } from './restart-screen.ts'
 import {
   bookCounts, withCategoryAdded, withCategoryMoved, withCategoryRemoved, withCategoryRenamed,
   withInsertMode, withPromptAdded, withPromptMoved, withPromptMovedToCategory, withPromptPatched,
@@ -907,7 +908,14 @@ function useRestart(): RestartController {
       } catch {
         // 宿主可能死在响应发完之前：那不是失败，继续等新进程。
       }
-      await awaitNewBoot(previousBoot, logHint)
+      // 0.15.0：进入**独立重启屏** —— 它自己轮询（等旧进程下线、等新 boot 号回来），
+      // 恢复后带 ?restarted=1 自动刷新，刷新页面/多标签也有 localStorage 兜底。
+      // 宿主半还是上一版（读不到 boot 号）时退回老办法：新屏判断不了"新进程回来了"。
+      if (previousBoot === null) {
+        await awaitNewBoot(previousBoot, logHint)
+        return
+      }
+      enterRestartScreen({ oldBoot: previousBoot, logPath: logHint })
     })()
   }
 

@@ -201,7 +201,9 @@ moduleExports.apply(ctx)
 const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
-check('注册了 7 个槽位条目', registrations.length === 7, JSON.stringify(registrations.map(r => r.id)))
+// 0.15.0 起是 8 个（多了侧边栏脚注那枚「重启」）。
+check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
+check('侧边栏脚注的重启入口', byId('composer-ux-restart')?.name === 'sidebar.footer.action')
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
 check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
 check('面板缩放手柄', byId('composer-ux-panel-resize')?.name === 'shell.overlay')
@@ -556,6 +558,8 @@ console.log('2.3 宿主半取数（session-cost）：0.10.0 多回的字段')
 console.log('3. 只注册到真实存在的槽位名')
 const knownSlots = new Set([
   'settings.section', 'shell.overlay', 'conversation.input.right', 'conversation.composer.dock',
+  // 0.15.0：侧边栏脚注（DSH 真实声明过；契约见 cordis_inspect Slots）。
+  'sidebar.footer.action',
 ])
 check(
   '槽位名都在白名单里',

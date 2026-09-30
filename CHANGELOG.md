@@ -2,6 +2,43 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.15.5] — 2026-09-30（**真凶**：重启时重放的启动命令是坏的 —— 桌面版一直没成功过）
+
+前一轮查壳的判定时顺手翻了自己的助手日志，发现一个比弹框严重得多的问题。
+
+**证据**（`%TEMP%\composer-ux-restart-*.err.log`，就是用户那两次重启的产物）：
+
+```
+Error: dsh: invalid profile name "D:\\deepseekharness\\resources\\app.asar\\dsh"
+    at resolveProfileDir (…/@deepseek-ai/dsh-app-boot/lib/index.js:525)
+[dsh-composer-ux] the replacement did not bind port 19387 within 20000ms
+```
+
+另一份（端口 3080 那次）是 `error: --profile <name> is required`。
+
+**原因**：`launchCommand()` 只在 argv1 长得像 `bin.js`/`bin.ts`/`dsh` 时才忠实重放，**否则退回裸
+`dsh` 并把 argv1 整个丢掉**。桌面壳起宿主用的是 `@deepseek-ai/dsh-desktop-host/lib/cli.js`
+（不匹配那个正则）⇒ 重放成 `dsh "<asar>/dsh"` ⇒ 替换进程当场报 "invalid profile name" 退出。
+**也就是说：桌面版的重启从来没成功过，一直是壳那个「应用无法启动」恢复框在兜底** —— 而那个框里的
+「退出」会把应用真的关掉。
+
+**改法**：改成**逐字重放原命令** —— `node <execArgv> <argv1> <rest...>`，cwd 用原 cwd
+（相对入口靠它解析）。只给 Windows 的 `.cmd`/`.bat` shim 保留「过一层 shell」那条分支。
+这也正是两个参考插件（Noah0509 / HHHEEEWWW 两版 dsh-quick-restart）的做法。
+
+## 验证
+
+- `npm test`：**2359 passed / 0 failed**（23 个套件；新增 7 条，含一条**真机回归**：
+  「入口不像 dsh（桌面壳那条路）也逐字重放，绝不退化成裸 dsh」）。
+- 变异：**162/162 全部咬住**（新增 FM：又可以把 argv1 丢掉 ⇒ 那条回归报警）。
+
+## 仍未解决
+
+桌面壳那个恢复框**仍然会弹**：读它的 `lib/main.js` 证实，宿主的子进程一 close 它就 `fail()`，
+不管退出码是 0 还是别的；唯一的「恢复式重启」是它自己弹框里那个按钮（`app.relaunch()`）。
+所以只要还是「我们自己退出」，那一步就去不掉 —— 待用户决定：机制不动只把话说明白，还是换成
+「杀掉壳自己拉起 exe」（会先杀掉整个窗口，且有它自带的两个致命坑）。
+
 ## [0.15.4] — 2026-09-30（移除侧边栏那枚重启按钮）
 
 起因（用户原话）：**「移除这里的重启按钮」**（配图是侧边栏底部，「移动访问」下面那枚）。

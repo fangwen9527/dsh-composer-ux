@@ -542,7 +542,7 @@ console.log('3c. 流式传输层：帧切分 / 载荷收窄 / 取消与坏流')
 {
   const realFetch = globalThis.fetch
   const frames = [
-    'data: {"type":"item","index":1,"id":"item#1","kind":"rewrite","text":"把设置页做得好看点","quote":"把那个页面弄好看点","quoteSource":"user"}\n\n',
+    'data: {"type":"item","index":1,"id":"item#1","kind":"user_requirement","text":"把设置页做得好看点","quote":"把那个页面弄好看点","quoteSource":"user"}\n\n',
     'data: {"type":"dropped","id":"item#2","kind":"requirement","reason":"引文不是原话里的逐字片段"}\n\n',
     'data: {"type":"done","ok":true,"text":"把设置页做得好看点","provider":"go","model":"deepseek-flash","itemCount":1}\n\n',
   ]
@@ -874,7 +874,7 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   // ── 解析：单点不得废整轮
   const json = JSON.stringify({
     items: [
-      { kind: 'rewrite', quote: '弄好看点', text: '做得更好看' },
+      { kind: 'user_requirement', quote: '弄好看点', text: '做得更好看' },
       { kind: 'requirement', quote: '动画也加上', text: '动画不要拖慢交互' },
       { kind: 'requirement', quote: '必须离线可用', text: '必须离线可用' },
       { kind: 'quality', text: '好看=界面精致' },
@@ -893,30 +893,33 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   check('容忍 ```json 围栏', pure.parseOptimizeOutput('```json\n' + json + '\n```', original).ok === true)
   check('容忍前后废话', pure.parseOptimizeOutput('好的，这是结果：\n' + json + '\n希望有帮助', original).ok === true)
   // 兼容对方 0.6 的 ops 形态（模型见过那份契约时会写成这样）
-  const opsJson = JSON.stringify({ ops: [{ op: 'add_item', item: { kind: 'rewrite', quote: '弄好看点', text: '更精致' } }, { op: 'set_item_status', id: 'x', status: 'superseded' }] })
+  const opsJson = JSON.stringify({ ops: [{ op: 'add_item', item: { kind: 'user_requirement', quote: '弄好看点', text: '更精致' } }, { op: 'set_item_status', id: 'x', status: 'superseded' }] })
   const opsParsed = pure.parseOptimizeOutput(opsJson, original)
   check('认得 ops[].item 形态', opsParsed.ok === true && opsParsed.items.length === 1)
   check('不支持的 op 如实记账', opsParsed.warnings.some(w => w.includes('add_item')))
 
   // ── 装配：原话为骨架
   const assembled = pure.assembleCommand(original, parsed.items, { tier: 'standard' })
-  check('rewrite 按位置回填，未被覆盖的原文原样保留',
-    assembled.text.startsWith('把那个页面做得更好看，动画也加上'), assembled.text)
+  // 0.14.0 ③：成品**以你的原话开头、一个字不改写**，辅助内容只作为小节追加在后面。
+  check('❗原话原样保留（不再回填改写）',
+    assembled.text.startsWith('把那个页面弄好看点，动画也加上'), assembled.text)
   check('补全要求带逐字依据',
     assembled.text.includes('【补全要求') && assembled.text.includes('（依据："动画也加上"）'))
   check('成品在预算内', assembled.chars <= assembled.budget, `${String(assembled.chars)}/${String(assembled.budget)}`)
-  check('记账：被改写的原话字符数', assembled.rewrittenChars === '弄好看点'.length)
+  check('记账：被改写的原话字符数恒为 0', assembled.rewrittenChars === 0)
   check('记账：进入成品的条目数', assembled.itemCount === 2)
 
   // ── 同一段原话被两条 rewrite 引用 → 只留一条（回填顺序才可解释）
   const dup = pure.parseOptimizeOutput(JSON.stringify({
     items: [
-      { kind: 'rewrite', quote: '弄好看点', text: '甲' },
-      { kind: 'rewrite', quote: '弄好看点', text: '乙' },
+      { kind: 'user_requirement', quote: '弄好看点', text: '甲' },
+      { kind: 'user_requirement', quote: '弄好看点', text: '乙' },
     ],
   }), original)
-  check('重复引用同一段原话 → 第二条被丢',
-    dup.items.length === 1 && dup.dropped.some(d => d.reason.includes('同一段原话')))
+  // 0.14.0：回填撤掉之后，同一段原话被两条引用不再有"顺序不可解释"的问题 ——
+  // 两条都留着（它们会各自成为一条要求），不再互相丢弃。
+  check('同一段原话的两条都保留（不再互相丢弃）',
+    dup.items.length === 2 && dup.dropped.length === 0)
 
   // ── 上限：截断并记账，而不是整轮作废
   const many = pure.parseOptimizeOutput(JSON.stringify({
@@ -985,7 +988,7 @@ console.log('4b. 依据校验与装配：模型能不能凭空加需求')
   const viaPipeline = pure.runOptimizePipeline(json, original, { tier: 'standard' })
   check('整条流水线：解析→核对→装配一次跑通',
     viaPipeline.ok === true && viaPipeline.fallback === false
-    && viaPipeline.text.startsWith('把那个页面做得更好看') && viaPipeline.dropped.length === 3)
+    && viaPipeline.text.startsWith('把那个页面弄好看点') && viaPipeline.dropped.length === 3)
 }
 
 
@@ -996,7 +999,7 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   const original = '把那个页面弄好看点，另外加个导出'
   // 手写 JSON（不用 JSON.stringify）是为了能精确知道"第几个 } 闭合了第几条"。
   const raw = '{"items":['
-    + '{"kind":"rewrite","quote":"把那个页面弄好看点","text":"把设置页做得好看点"},'
+    + '{"kind":"user_requirement","quote":"把那个页面弄好看点","text":"把设置页做得好看点"},'
     + '{"kind":"requirement","quote":"弄好看点","text":"改完页面能正常打开"},'
     + '{"kind":"requirement","quote":"我没说过这句话","text":"顺便把数据库也换了"}'
     + ']}'
@@ -1100,14 +1103,13 @@ console.log('4c. 逐条流式：只交出已闭合且已通过校验的条目')
   // rewrite 重复段只留一条（与批次同判据）。
   const dup = JSON.stringify({
     items: [
-      { kind: 'rewrite', quote: '把那个页面', text: 'A' },
-      { kind: 'rewrite', quote: '把那个页面', text: 'B' },
+      { kind: 'user_requirement', quote: '把那个页面', text: 'A' },
+      { kind: 'user_requirement', quote: '把那个页面', text: 'B' },
     ],
   })
   const dupScan = pure.scanOptimizeStream(dup, original, 'standard')
-  check('同一段原话的两条 rewrite：只留靠前那条，另一条如实丢弃',
-    dupScan.items.length === 1 && dupScan.items[0].text === 'A'
-    && dupScan.dropped.some(d => /重复/.test(d.reason)), JSON.stringify(dupScan.dropped))
+  check('同一段原话的两条（流式）：两条都收下、不误丢',
+    dupScan.items.length === 2 && dupScan.dropped.length === 0, JSON.stringify(dupScan.dropped))
 
   // 单轮上限（12 条）：与批次同口径。
   const many = JSON.stringify({
@@ -1155,7 +1157,7 @@ async function bootHost(options = {}) {
       index: 0,
       text: JSON.stringify({
         items: [
-          { kind: 'rewrite', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
+          { kind: 'user_requirement', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
           { kind: 'requirement', quote: '弄好看点', text: '改完页面能正常打开' },
         ],
       }),
@@ -1307,7 +1309,9 @@ const json = res => JSON.parse(res.captured.body)
   await handler(makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard' })), res)
   const body = json(res)
   check('HTTP 200', res.captured.status === 200, String(res.captured.status))
-  check('按条目装配：rewrite 回填原话', body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
+  check('按条目装配：成品以原话开头（原话原样）',
+    body.ok === true && body.text.startsWith('把那个页面弄好看点'), JSON.stringify(body.text).slice(0, 120))
+  check('装配出的条目落在【你要的】小节的正文里', body.text.includes('把设置页做得好看点'))
   check('补全要求带逐字依据', body.text.includes('（依据："弄好看点"）'), JSON.stringify(body.text))
   check('回报实际路由', body.provider === 'go' && body.model === 'deepseek-flash')
   check('回报记账信息（条数/丢弃/降级/重试/提示词来源）',
@@ -1382,7 +1386,7 @@ const json = res => JSON.parse(res.captured.body)
   const host = await bootHost({
     model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
     chunks: [
-      { type: 'text-delta', index: 0, text: '{"items":[{"kind":"rewrite",' },
+      { type: 'text-delta', index: 0, text: '{"items":[{"kind":"user_requirement",' },
       { type: 'finish', reason: { kind: 'stop' } },
     ],
   })
@@ -1398,7 +1402,7 @@ const json = res => JSON.parse(res.captured.body)
     chunksSeq: [
       [{ type: 'finish', reason: { kind: 'stop' } }],
       [
-        { type: 'text-delta', index: 0, text: JSON.stringify({ items: [{ kind: 'rewrite', quote: '原文', text: '改过的原文' }] }) },
+        { type: 'text-delta', index: 0, text: JSON.stringify({ items: [{ kind: 'user_requirement', quote: '原文', text: '改过的原文' }] }) },
         { type: 'finish', reason: { kind: 'stop' } },
       ],
     ],
@@ -1406,7 +1410,9 @@ const json = res => JSON.parse(res.captured.body)
   const res = makeRes()
   await handler0(host, makeReq('POST', JSON.stringify({ text: '原文' })), res)
   const body = json(res)
-  check('空产出重试一次后成功', body.ok === true && body.retried === true && body.text === '改过的原文', JSON.stringify(body))
+  check('空产出重试一次后成功（成品 = 原话 + 小节）',
+    body.ok === true && body.retried === true
+    && body.text.startsWith('原文') && body.text.includes('改过的原文'), JSON.stringify(body).slice(0, 140))
   check('确实调了两次模型', host.llmCalls.length === 2, String(host.llmCalls.length))
   check('第二次的用户消息点明了"上一次是空的"',
     host.llmCalls[1].messages[0].content[0].text.includes('你上一次的输出是空的'))
@@ -1432,7 +1438,7 @@ const json = res => JSON.parse(res.captured.body)
         index: 0,
         text: JSON.stringify({
           items: [
-            { kind: 'rewrite', quote: '原文', text: '改过的原文' },
+            { kind: 'user_requirement', quote: '原文', text: '改过的原文' },
             { kind: 'requirement', quote: '用户根本没说过的话', text: '凭空加的需求' },
           ],
         }),
@@ -1445,7 +1451,8 @@ const json = res => JSON.parse(res.captured.body)
   const body = json(res)
   check('凭空加的需求进不了成品', body.ok === true && !body.text.includes('凭空加的需求'), JSON.stringify(body.text))
   check('那条被丢弃并记账', body.dropped.length === 1 && body.dropped[0].reason.includes('逐字片段'))
-  check('其余条目照常成成品', body.itemCount === 1 && body.text === '改过的原文')
+  check('其余条目照常成成品（原话原样 + 小节）',
+    body.itemCount === 1 && body.text.startsWith('原文') && body.text.includes('改过的原文'))
 }
 {
   const host = await bootHost({ model: { currentSelection: () => ({ provider: 'go', model: 'm' }) } })
@@ -1570,8 +1577,8 @@ console.log('5b. 0.11.1：信任关卡、斜杠命令、推理强度、断连中
   check('斜杠命令：前缀不进模型（不然命令词会被改坏）', sent.includes('/goal') === false, sent.slice(0, 60))
   check('斜杠命令：返回的成品不含前缀（拼回由调用方负责）',
     body.ok === true && body.text.includes('/goal') === false, JSON.stringify(body.text))
-  check('斜杠命令：引文按正文比对，rewrite 正常回填',
-    body.ok === true && body.text.startsWith('把设置页做得好看点'), JSON.stringify(body.text))
+  check('斜杠命令：引文按正文比对，成品以原话开头（原话原样）',
+    body.ok === true && body.text.startsWith('把那个页面弄好看点'), JSON.stringify(body.text))
 
   const onlyCmd = makeRes()
   await handler0(host, makeReq('POST', JSON.stringify({ text: '/goal', tier: 'standard' })), onlyCmd)
@@ -1719,7 +1726,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
 
   const items = events.filter(event => event.type === 'item')
   check('SSE：逐条事件按数组顺序给出已校验的条目',
-    items.length === 2 && items[0].index === 1 && items[1].index === 2 && items[0].kind === 'rewrite',
+    items.length === 2 && items[0].index === 1 && items[1].index === 2 && items[0].kind === 'user_requirement',
     JSON.stringify(items.map(row => `${String(row.index)}|${row.kind}`)))
   check('SSE：条目带逐字引文（与成品里的「依据」同源）',
     items[0].quote === '把那个页面弄好看点' && items[0].quoteSource === 'user', JSON.stringify(items[0]))
@@ -1745,7 +1752,7 @@ const streamReq = body => makeReq('POST', body, { headers: { accept: 'text/event
   const host = await bootHost({
     model: { currentSelection: () => ({ provider: 'go', model: 'm' }) },
     stream: () => (async function* () {
-      yield { type: 'text-delta', index: 0, text: '{"items":[{"kind":"rewrite","quote":"把那个页面弄好看点","text":"把设置页做得好看点"}' }
+      yield { type: 'text-delta', index: 0, text: '{"items":[{"kind":"user_requirement","quote":"把那个页面弄好看点","text":"把设置页做得好看点"}' }
       sawItemBeforeFinish = resRef !== null && resRef.captured.events.some(event => event.type === 'item')
       yield { type: 'text-delta', index: 0, text: ']}' }
       yield { type: 'finish', reason: { kind: 'stop' } }
@@ -1921,9 +1928,9 @@ console.log('5e. 逐轮台账：真路由跑一轮 → 磁盘上一条元数据�
         index: 0,
         text: JSON.stringify({
           items: [
-            { kind: 'rewrite', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
+            { kind: 'user_requirement', quote: '把那个页面弄好看点', text: '把设置页做得好看点' },
             // 引文**不是**原话里的逐字片段（多了一个字） ⇒ 整条丢弃，原因里带它前 40 字。
-            { kind: 'rewrite', quote: `${secret}要更好看`, text: '随便写点什么' },
+            { kind: 'user_requirement', quote: `${secret}要更好看`, text: '随便写点什么' },
           ],
         }),
       }, { type: 'finish', reason: { kind: 'stop' } }],
@@ -1974,7 +1981,7 @@ console.log('5g. 只读查证工具：默认关、开了才派、查完不是条
     const sessionQuery = { readSession: async () => ({ header: { cwd: dir } }) }
     const selection = { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) }
     const draft = '把那个页面弄好看点'
-    const finalJson = JSON.stringify({ items: [{ kind: 'rewrite', quote: '弄好看点', text: '把这一页做得好看点' }] })
+    const finalJson = JSON.stringify({ items: [{ kind: 'user_requirement', quote: '弄好看点', text: '把这一页做得好看点' }] })
     const readCall = [
       { type: 'text-delta', index: 0, text: '我先看一眼。' },
       { type: 'tool-call-delta', index: 1, id: 'call-1', name: 'read', argumentsDelta: '{"path":"README.md"}' },

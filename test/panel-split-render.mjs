@@ -82,7 +82,7 @@ export function doneDock() {
   return {
     phase: 'done',
     items: [
-      { index: 1, id: 'i1', kind: 'rewrite', text: '把设置页做得好看点', quote: '把那个页面弄好看点', quoteSource: 'user' },
+      { index: 1, id: 'i1', kind: 'user_requirement', text: '把设置页做得好看点', quote: '把那个页面弄好看点', quoteSource: 'user' },
       { index: 2, id: 'i2', kind: 'requirement', text: '改完能正常打开', quote: '弄好看点', quoteSource: 'user' },
     ],
     dropped: [{ id: 'i3', kind: 'quality', reason: '引文不是原话里的逐字片段：「x」' }],

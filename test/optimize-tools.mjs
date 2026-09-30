@@ -229,7 +229,7 @@ console.log('6. 工具循环：消息形状、轮次封顶、异常必须降级'
     }
   }
   const userText = '把那个页面弄好看点'
-  const finalJson = JSON.stringify({ items: [{ kind: 'rewrite', quote: '弄好看点', text: '把这一页做得好看点' }] })
+  const finalJson = JSON.stringify({ items: [{ kind: 'user_requirement', quote: '弄好看点', text: '把这一页做得好看点' }] })
 
   {
     const llm = fakeLlm([
@@ -246,7 +246,7 @@ console.log('6. 工具循环：消息形状、轮次封顶、异常必须降级'
     const out = await pure.runOptimizeToolLoop({ llm, provider: 'go', model: 'm', system: 'SYS', userText, root })
     check('循环跑了两轮', out.rounds === 2, String(out.rounds))
     check('派了一次工具、记下了工具名', out.calls === 1 && out.names.join(',') === 'read', JSON.stringify(out.names))
-    check('最终产出是第 2 轮的 JSON', out.out.includes('"rewrite"'), out.out.slice(0, 60))
+    check('最终产出是第 2 轮的 JSON', out.out.includes('"user_requirement"'), out.out.slice(0, 60))
     check('第 1 次调用带了 tools 与系统提示', llm.calls[0].tools?.length === 3 && llm.calls[0].system === 'SYS')
     const second = llm.calls[1].messages
     check('第 2 轮带上了用户的原始消息', second[0].role === 'user')

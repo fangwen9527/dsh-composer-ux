@@ -114,7 +114,7 @@ console.log('3. 净化：脏数据不糊界面')
 {
   const good = pure.sanitizeDockSnapshot({
     phase: 'done',
-    items: [{ index: 1, id: 'i1', kind: 'rewrite', text: '改写后的句子', quote: '原话片段', quoteSource: 'user' }],
+    items: [{ index: 1, id: 'i1', kind: 'user_requirement', text: '改写后的句子', quote: '原话片段', quoteSource: 'user' }],
     dropped: [{ id: 'i2', kind: 'requirement', reason: '缺少 quote（这一类条目必须有逐字引文）' }],
     text: '成品正文',
     edited: true,
@@ -148,7 +148,7 @@ console.log('3. 净化：脏数据不糊界面')
   const messy = pure.sanitizeDockSnapshot({
     phase: 'done',
     items: [
-      ...Array.from({ length: 40 }, (_, index) => ({ id: `i${index}`, kind: 'rewrite', text: 't', quote: 'q', quoteSource: 'user' })),
+      ...Array.from({ length: 40 }, (_, index) => ({ id: `i${index}`, kind: 'user_requirement', text: 't', quote: 'q', quoteSource: 'user' })),
       'not-an-object',
       { id: '', text: '' },
     ],
@@ -173,7 +173,7 @@ console.log('3. 净化：脏数据不糊界面')
 
 console.log('4. 状态机：restore 是整份替换')
 {
-  const snapshot = pure.sanitizeDockSnapshot({ phase: 'done', text: '上一轮的成品', items: [{ id: 'i1', kind: 'rewrite', text: 't', quote: 'q', quoteSource: 'user' }] })
+  const snapshot = pure.sanitizeDockSnapshot({ phase: 'done', text: '上一轮的成品', items: [{ id: 'i1', kind: 'user_requirement', text: 't', quote: 'q', quoteSource: 'user' }] })
   const restored = pure.dockReducer(null, { type: 'restore', snapshot })
   check('空框 → 直接拿到这份快照', restored === snapshot)
   check('restore 不走增量规则（不会被当成 start 清空）', restored.items.length === 1 && restored.text === '上一轮的成品')

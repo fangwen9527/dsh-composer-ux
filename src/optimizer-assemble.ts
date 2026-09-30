@@ -698,27 +698,15 @@ export function assembleCommand(
     dropped.push({ id: item.id, kind: item.kind, reason: `当前档位（${options.tier}）不产出「${item.kind}」这一类条目` })
   }
 
-  // ── 1) rewrite 回填
-  const rewrites = usable
-    .filter(item => item.kind === 'rewrite' && item.span !== undefined)
-    .slice()
-    .sort((a, b) => (a.span!.start - b.span!.start) || (a.span!.end - b.span!.end))
-  const keptRewrites: OptimizeItem[] = []
-  let cursor = -1
-  for (const item of rewrites) {
-    if (item.span!.start < cursor) {
-      dropped.push({ id: item.id, kind: item.kind, reason: '改写区间与另一条 rewrite 重叠，只保留靠前的那条' })
-      continue
-    }
-    cursor = item.span!.end
-    keptRewrites.push(item)
-  }
-  let body = body0
-  let rewrittenChars = 0
-  for (let i = keptRewrites.length - 1; i >= 0; i -= 1) {
-    const span = keptRewrites[i]!.span!
-    body = body.slice(0, span.start) + keptRewrites[i]!.text + body.slice(span.end)
-    rewrittenChars += span.end - span.start
+  // ── 1) 原话**一个字都不动**（0.14.0 ③）
+  //
+  // 旧本体的 `rewrite` 会按引文位置回填成品 —— 那是唯一能改写用户原话的路径，而上游最硬的
+  // 一条是「用户原话会被原样保留，你不改写它」。所以这条路整个撤掉：模型若还吐 `rewrite`
+  // （老提示词、或用户自己写的自定义提示词里提到它），就**如实丢掉并记账**，绝不动原话。
+  const body = body0
+  for (const item of usable) {
+    if (item.kind !== 'rewrite') continue
+    dropped.push({ id: item.id, kind: item.kind, reason: '这一类已停用：成品不再改写你的原话（0.14.0 起原话原样保留）' })
   }
 
   // ── 2) 其余条目按节装桶
@@ -776,7 +764,7 @@ export function assembleCommand(
   }
   if (overBy > 0) warnings.push(`装了必保节后仍超出预算约 ${overBy} 字符，已在成品里如实说明`)
 
-  const itemCount = keptRewrites.length + SECTIONS.reduce((sum, section) => sum + (included[section.key] ?? []).length, 0)
+  const itemCount = SECTIONS.reduce((sum, section) => sum + (included[section.key] ?? []).length, 0)
   return {
     text,
     sections: SECTIONS.filter(section => (included[section.key] ?? []).length > 0).map(section => section.label),
@@ -786,7 +774,9 @@ export function assembleCommand(
     budget,
     overBudget: overBy > 0,
     overBy,
-    rewrittenChars,
+    // 0.14.0 起原话原样保留（回填路径已撤），所以这个数**恒为 0**；
+    // 字段留着是为了不破坏台账/面板的既有读取方，语义见接口上的说明。
+    rewrittenChars: 0,
     itemCount,
   }
 }

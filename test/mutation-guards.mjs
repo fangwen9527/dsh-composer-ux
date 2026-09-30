@@ -1299,6 +1299,15 @@ const cases = [
     expect: "自动插入前先确认输入框没被改过（不吃掉手写内容）",
   },
 
+  {
+    name: "FA 成品改写用户原话（\"原话原样\"这条不变量破了 —— 上游最硬的一条）",
+    file: "src/optimizer-assemble.ts",
+    from: "  const body = body0",
+    to: "  const body = body0.replace('弄好看点', '做得更好看')",
+    test: "test/quick-commands.mjs",
+    expect: "❗原话原样保留（不再回填改写）",
+  },
+
 ]
 
 let allBit = true

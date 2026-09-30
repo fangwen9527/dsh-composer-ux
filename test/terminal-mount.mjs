@@ -380,6 +380,14 @@ try {
     if (entry.isDirectory()) realRoots.push(`${realProfiles}/${entry.name}/node_modules`)
   }
 } catch { /* 没有 profiles 目录：realRoots 只有共享那一个 */ }
+// ⚠️ 候选必须与守卫**完全一致**（0.13.1 修）：守卫除了 `DSH_HOME` 下的 profiles，还会看
+//   `DSH_PROFILE_DIR`（环境变量）与 `profileContext`。第一版只查了前者 —— 于是当运行环境里
+//   `DSH_HOME` 被指向空目录、而 `DSH_PROFILE_DIR` 仍指向真实 profile 时，守卫说「能解析」、
+//   测试自己算的却是「解析不到」，这条断言就红了（**是测试镜像不完整，不是守卫错**）。
+const envProfileDir = (typeof process.env.DSH_PROFILE_DIR === 'string' && process.env.DSH_PROFILE_DIR.length > 0)
+  ? process.env.DSH_PROFILE_DIR.replace(/\\/g, '/')
+  : ''
+if (envProfileDir !== '') realRoots.push(`${envProfileDir}/node_modules`)
 const realPresent = realRoots.some((root) => {
   try { createRequire(`${root}/package.json`).resolve(TOOL); return true } catch { return false }
 })

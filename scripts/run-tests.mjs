@@ -10,6 +10,12 @@
  *   node scripts/run-tests.mjs --json   # 只打 JSON
  *
  * 失败语义：任一套件非零退出或出现 "✗" 行 ⇒ 整体非零退出（CI 就是靠这个红的）。
+ *
+ * ⚠️ **不在这里统一改子进程的 `DSH_HOME`**（试过，撤回）：`terminal-mount.mjs` 有一条
+ * 「真环境一致性」用例，拿守卫的真实答案与"测试自己按同样候选算一遍"对比 —— 而守卫还有
+ * `DSH_PROFILE_DIR` 这个额外候选，只改 `DSH_HOME` 会让两边对不上（那是**测试镜像不完整**，
+ * 已在该套件里补全）。**要隔离就由套件自己隔离**：凡是会真调宿主路由的套件，开头就把
+ * `$DSH_HOME` 指到临时目录（`quick-commands.mjs` 顶部有原因说明）。
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'

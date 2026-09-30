@@ -17,6 +17,17 @@ import { join } from 'node:path'
 import { build } from 'esbuild'
 import { apply } from '../lib/index.js'
 
+/**
+ * **整份套件**把 `$DSH_HOME` 指到临时目录。
+ *
+ * 为什么必须整份隔离（2026-09-30 真机发现）：这套件里只有 5e/5g 两节自己设了 DSH_HOME，
+ * 而**其余各节也会真的调优化路由** —— 那条路由会往 `$DSH_HOME/composer-ux/optimize-log.jsonl`
+ * 追加一行台账。于是每次 `npm test`（更别说变异要跑一百多轮）都往**用户的真实状态目录**里写垃圾：
+ * 实测攒了 1422 行、465 KB，全是我测试的产物（`provider:"go"`、`sessionId:""`）。
+ * 测试不许碰用户的真实目录 —— 这是脏数据，不是"顺便的副作用"。
+ */
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-quick-commands-home-'))
+
 let failures = 0
 let passes = 0
 

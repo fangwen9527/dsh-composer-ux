@@ -2297,6 +2297,29 @@ console.log('10. 重启 DSH（机制照搬插件市场；spawn/定时/退出/取
   check('缺 Origin 或 Host → 拒',
     pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080' } })) === false
     && pure.trustedRestartRequest(trust({ headers: { origin: 'http://127.0.0.1:3080' } })) === false)
+
+  // 0.15.2：403 要说清是哪一条不满足（用户截图里两枚按钮只报一句「不许」，查不出原因）。
+  check('放行时 reason = ok', pure.explainRestartTrust(trust()).reason === 'ok')
+  check('非回环 ⇒ peer-not-loopback',
+    pure.explainRestartTrust(trust({ remoteAddress: '10.0.0.9' })).reason === 'peer-not-loopback')
+  check('带转发头 ⇒ forwarded-header',
+    pure.explainRestartTrust(trust({ headers: { ...trust().headers, 'x-forwarded-for': '1.1.1.1' } })).reason === 'forwarded-header')
+  check('缺 Origin ⇒ no-origin',
+    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080' } })).reason === 'no-origin')
+  check('缺 Host ⇒ no-host',
+    pure.explainRestartTrust(trust({ headers: { origin: 'http://127.0.0.1:3080' } })).reason === 'no-host')
+  check('❗localhost 与 127.0.0.1 不算同源（原因写得明明白白，不是一句「不许」）',
+    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080', origin: 'http://localhost:3080' } })).reason === 'origin-host-mismatch')
+  check('Origin 解析不出来 ⇒ origin-unparsable',
+    pure.explainRestartTrust(trust({ headers: { host: '127.0.0.1:3080', origin: 'null' } })).reason === 'origin-unparsable')
+  check('给用户的那句话带原因与当时看到的事实',
+    (() => {
+      const facts = pure.explainRestartTrust(trust({ remoteAddress: '10.0.0.9' }))
+      const text = pure.restartTrustText(facts)
+      return text.includes('不是从本机回环地址') && text.includes('peer=10.0.0.9')
+        && text.includes('origin=http://127.0.0.1:3080') && text.includes('转发头=无')
+    })())
+  check('放行时不啰嗦（空串）', pure.restartTrustText(pure.explainRestartTrust(trust())) === '')
   check('跨站 Origin → 拒（DNS rebinding / 跨站调用挡在这里）',
     pure.trustedRestartRequest(trust({ headers: { host: '127.0.0.1:3080', origin: 'http://evil.example' } })) === false)
   check('非 http(s) 的 Origin → 拒',

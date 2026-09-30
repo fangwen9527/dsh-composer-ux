@@ -1,6 +1,6 @@
 {
   "name": "dsh-composer-ux",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "DSH Web 输入体验增强插件：可配置发送/换行键位 + 自定义输入框右键菜单 + 面板尺寸记忆 + 快捷指令（分类 / 跨分类移动 / 关·每次·仅首次三种插入模式 / 存 ~/.dsh/quick-prompts.json）+ 提示词优化（0.11.1 起工具行有独立「优化」按钮、带秒表与斜杠命令保护、写回前比对草稿） + OpenCode 会话请求头 + Windows 默认终端切换（把模型的 PowerShell 工具换成 Git Bash）+ 官方持久终端六件套（terminal_open/read/send/signal/close/list，常驻挂载 + 缺包自检退化，见 cordis.patch.yml）+ 统计行缓存命中三位小数 + 输入框下方极简金额胶囊（点开看本会话费用与峰谷状态）+ 设置页「金额」栏：按模型改高峰/空闲单价（留空即官方价）、法定节假日（0.11.0 起自动获取国务院办公厅安排，手填则整份覆盖）、峰谷切换提醒、DeepSeek 账号余额、一键同步官方价与第三方价目（models.dev）、非 DeepSeek 模型定价；价格带生效时间的历史档，每笔用量按发生时刻的价目结算；设置页另有「计价说明」一块（刊例价快照 / 价格档 / 峰谷判定 / 非 DeepSeek 口径） + 设置页抬头一键重启 DSH（助手进程 + 等端口 + 隐藏控制台）",
   "type": "module",
   "main": "./lib/index.js",

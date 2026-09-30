@@ -19,8 +19,8 @@ const cases = [
   {
     name: 'A 去掉同源回环那道关卡（host.ts）',
     file: 'src/host.ts',
-    from: '        if (!trustedRestartRequest({',
-    to: '        if (false && !trustedRestartRequest({',
+    from: '        if (trust.reason !== \'ok\') {',
+    to: '        if (false && trust.reason !== \'ok\') {',
     // 只拆关卡、不真的排重启：否则这个测试会 spawn 一个后台助手。
     also: [{
       from: 'const scheduled = scheduleRestart(buildIo(), servingPort(firstHeaderValue(req.headers?.host)))',
@@ -1348,6 +1348,23 @@ const cases = [
     to: "  void params",
     test: "test/restart-screen.mjs",
     expect: "加 ?restarted=1",
+  },
+
+  {
+    name: "FG 403 又不说是哪一条不满足（restartTrustText 永远给空串）",
+    file: "src/restart.ts",
+    from: "  if (facts.reason === 'ok') return ''",
+    to: "  if (true) return ''",
+    test: "test/quick-commands.mjs",
+    expect: "给用户的那句话带原因与当时看到的事实",
+  },
+  {
+    name: "FH 把 localhost 与 127.0.0.1 当成同源（放松了\"杀进程\"接口的来源判据）",
+    file: "src/restart.ts",
+    from: "    return { ...base, reason: parsed.host === host ? 'ok' : 'origin-host-mismatch' }",
+    to: "    return { ...base, reason: 'ok' }",
+    test: "test/quick-commands.mjs",
+    expect: "❗localhost 与 127.0.0.1 不算同源（原因写得明明白白，不是一句「不许」）",
   },
 
 ]

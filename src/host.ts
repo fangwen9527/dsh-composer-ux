@@ -69,7 +69,7 @@ import { installTerminalPolicy } from './terminal/host.ts'
 import type { BashToolDeps } from './terminal/tool.ts'
 import {
   RESTART_LOG_PREFIX, bootId, detectedDebugger, detectedSupervisor, gracefulStop, planRestart,
-  scheduleRestart, servingPort, trustedRestartRequest,
+  explainRestartTrust, restartTrustText, scheduleRestart, servingPort,
 } from './restart.ts'
 import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
@@ -2499,11 +2499,18 @@ export function apply(ctx: Context, config?: unknown): void {
 
         // 第二道：这是"杀进程"的接口，所以额外要求请求确实来自本机同源页面 ——
         // 回环 peer、无转发痕迹、Origin 与 Host 同源。跨站页面一定带自己的 Origin，挡在这里。
-        if (!trustedRestartRequest({
+        //
+        // 0.15.2：判据拆成具名步骤，403 里带上**是哪一条不满足**与当时看到的事实 ——
+        // 起因是两枚按钮都只报一句"不许"，查不出原因（见 explainRestartTrust 的注释）。
+        const trust = explainRestartTrust({
           remoteAddress: req.socket?.remoteAddress,
           headers: req.headers ?? {},
-        })) {
-          send(403, { ok: false, error: 'restart is limited to same-origin loopback requests' })
+        })
+        if (trust.reason !== 'ok') {
+          send(403, {
+            ok: false,
+            error: 'restart is limited to same-origin loopback requests —— ' + restartTrustText(trust),
+          })
           return
         }
         if (blocked !== null) {

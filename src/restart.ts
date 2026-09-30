@@ -192,21 +192,72 @@ export interface TrustRequest {
  * 所以 DNS rebinding / 跨站调用在这里被挡住 —— 这是官方 `connection.requestRejection`
  * 之外的第二道，而不是替代它。
  */
-export function trustedRestartRequest(request: TrustRequest): boolean {
-  if (!isLoopbackAddress(request.remoteAddress)) return false
+/** 守卫为什么拒（或为什么放行）—— 具名原因，便于把 403 写成能自证的一句话。 */
+export type RestartTrustReason =
+  | 'ok'
+  | 'peer-not-loopback'
+  | 'forwarded-header'
+  | 'no-origin'
+  | 'no-host'
+  | 'origin-unparsable'
+  | 'origin-host-mismatch'
+
+/** 守卫看到的事实（原样回给调用方 —— 都是请求自己的头，不含任何凭据）。 */
+export interface RestartTrustFacts {
+  readonly reason: RestartTrustReason
+  readonly peer: string
+  readonly origin: string
+  readonly host: string
+  readonly forwarded: string
+}
+
+/**
+ * 判据拆成具名步骤：`trustedRestartRequest` 是它的布尔投影，403 用它的 `reason`。
+ *
+ * 为什么值得多这一层：这条守卫挡的是"跨站页面把本机 DSH 杀掉"，报错时只给一句
+ * "不许" 的话，用户与我都只能猜是哪一道不成立（实测两枚按钮都报同一句，查了半天）。
+ */
+export function explainRestartTrust(request: TrustRequest): RestartTrustFacts {
   const headers = request.headers
-  if (headers.forwarded !== undefined
-    || headers['x-forwarded-for'] !== undefined
-    || headers['x-real-ip'] !== undefined) return false
-  const origin = firstHeader(headers.origin)
-  const host = firstHeader(headers.host)
-  if (origin === undefined || host === undefined) return false
+  const origin = firstHeader(headers.origin) ?? ''
+  const host = firstHeader(headers.host) ?? ''
+  const peer = request.remoteAddress ?? ''
+  const forwarded = firstHeader(headers.forwarded) ?? firstHeader(headers['x-forwarded-for']) ?? firstHeader(headers['x-real-ip']) ?? ''
+  const base = { peer, origin, host, forwarded }
+  if (!isLoopbackAddress(request.remoteAddress)) return { ...base, reason: 'peer-not-loopback' }
+  if (forwarded !== '') return { ...base, reason: 'forwarded-header' }
+  if (origin === '') return { ...base, reason: 'no-origin' }
+  if (host === '') return { ...base, reason: 'no-host' }
   try {
     const parsed = new URL(origin)
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host === host
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ...base, reason: 'origin-unparsable' }
+    return { ...base, reason: parsed.host === host ? 'ok' : 'origin-host-mismatch' }
   } catch {
-    return false
+    return { ...base, reason: 'origin-unparsable' }
   }
+}
+
+/** 出问题时给用户/我的一句话（原因 + 当时看到的事实）。 */
+export function restartTrustText(facts: RestartTrustFacts): string {
+  if (facts.reason === 'ok') return ''
+  const why: Record<Exclude<RestartTrustReason, 'ok'>, string> = {
+    'peer-not-loopback': '请求不是从本机回环地址来的',
+    'forwarded-header': '请求带着转发头（中间有代理，不是你的浏览器直连）',
+    'no-origin': '请求没有 Origin 头（浏览器同源 POST 应当会带）',
+    'no-host': '请求没有 Host 头',
+    'origin-unparsable': 'Origin 头解析不出 http/https 来源',
+    'origin-host-mismatch': 'Origin 与 Host 不是同一个来源',
+  }
+  const peer = facts.peer === '' ? '空' : facts.peer
+  const origin = facts.origin === '' ? '空' : facts.origin
+  const host = facts.host === '' ? '空' : facts.host
+  const fwd = facts.forwarded === '' ? '无' : facts.forwarded
+  return why[facts.reason] + '（peer=' + peer + ' · origin=' + origin + ' · host=' + host + ' · 转发头=' + fwd + '）'
+}
+
+/** 信任判定（403 的判据；细节见 {@link explainRestartTrust}）。 */
+export function trustedRestartRequest(request: TrustRequest): boolean {
+  return explainRestartTrust(request).reason === 'ok'
 }
 
 /** 头值可能是数组（Node 对重复头的行为），只取第一个。 */

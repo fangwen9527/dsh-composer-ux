@@ -27,6 +27,11 @@
  * 本模块零 import，host 半与测试共用。
  */
 
+import {
+  DOMAIN_QUALITY_BLOCK, HARD_TONE_BLOCK, OPTIMIZER_OUTPUT_CONTRACT_V2, TIER_STRATEGY_BLOCKS,
+  UPSTREAM_MISSION, UPSTREAM_RULES, UPSTREAM_STYLE,
+} from './optimizer-transplant.ts'
+
 /** 传话者人设：为什么必须单独成段——裸文本会被模型当成「对它说的话」而开始对话。 */
 const RELAY_ROLE = [
   '【你是谁】你是一个**传话器/意图补全器**，站在用户与"工作 AI"之间：',
@@ -80,22 +85,7 @@ const STYLE_RULES = [
  * 整套机制退化成"信任模型"。设置页的说明里对此有明示。
  * 放最后是因为模型对**最后一条指令**的服从度最高（对方 0.6 的 `askTail` 同理）。
  */
-export const OPTIMIZER_OUTPUT_CONTRACT = [
-  '【输出契约（固定，不可更改）】',
-  '只输出一个 JSON 对象，不要 Markdown 代码块、不要在 JSON 前后写任何字：',
-  '{"items":[{"kind":"rewrite","quote":"原话里逐字存在的片段","text":"替换掉该片段的正文"}]}',
-  '字段与取值（`kind` 只能是这六种）：',
-  '- rewrite：语言层修复。`quote` 必填；同一段原话最多一条 rewrite，不要重叠。',
-  '- requirement：从 `quote` 直接推出的补全要求（验收标准/硬约束）。`quote` 必填。',
-  '- quality：对原话里质量词的解释。`quote` 必填（就填那几个质量字）。',
-  '- unknown：未决项。必须带 `unknownClass`（user_preference / lookupable_fact /',
-  '  implementation_detail），可选 `blocking`（true/false，是否挡住下一步）。',
-  '- plan：分阶段执行计划（仅"极端"档用）。',
-  '- risk：多情况预案（仅"极端"档用），每条按"触发信号 → 应对 → 禁止动作"写。',
-  '限制：`text` 每条不超过 300 字；`items` 总共不超过 12 条；id 不需要给。',
-  '没有可补的内容时，输出 {"items":[]} —— 但**先想清楚**：用户这一轮的原话里',
-  '真的没有任何可核对的补全吗？',
-].join('\n')
+
 
 /** 模型可以产出的条目种类（宿主只认这些，其余整条丢弃并记账）。 */
 /**
@@ -134,66 +124,25 @@ export const OPTIMIZE_CANDIDATES_MAX = 3
 export const OPTIMIZE_CANDIDATE_MAX_CHARS = 200
 
 /**
- * 各档的任务段（**可被设置页里的自定义提示词整体替换**的那部分）。
+ * 每一档的 system 正文（**可被设置页的自定义提示词整体替换**）。
  *
- * 三档的差别是"允许补到哪一层"，不是"换一种语气"：
- *   · light    —— 只碰语言；不产出 requirement / plan / risk。
- *   · standard —— 允许补"能指回原话某句"的必要要求，并对质量词作解释。
- *   · heavy    —— 再加分阶段计划与预案。（以上是 0.13.x 的语义；0.14.0 S2 会换成新的档位策略。）
+ * 顺序照上游：人设 → 【最重要的一条】不改写 → 本轮档位策略 → 硬规则 1–8 → 文风 → 领域质量维度。
+ * 输出契约与上下文纪律不由这里控制，永远由 `buildOptimizeSystem` 追加在最后。
  */
-const TIER_TASKS: Record<string, readonly string[]> = {
-  light: [
-    '【本轮任务：只做语言层修复】',
-    '用户原话可能有病句、指代不明、用词含糊。把它改写成通顺、精确、无歧义的**同一段话**。',
-    '只产出 `rewrite`（可以按句子拆成多条，每条引用原话里对应那一句）。',
-    '严禁产出 requirement / plan / risk：这一档**不新增任何要求**，只把话说明白。',
-    '原话确有歧义、且歧义会导致做错时，才补一条 `unknown`（unknownClass 取',
-    'user_preference 或 lookupable_fact）；确实没有可补的就输出空数组。',
-    '长度纪律：成品不超过原话的 1.4 倍；原话 30 字以内时不超过 60 字。',
-  ],
-  standard: [
-    '【本轮任务：在不动目标的前提下把命令说清楚】',
-    '用户原话含糊、缺关键约束。你要补的是"用户显然想要、但没说出口"的必要信息，',
-    '让它一次做对 —— 但每一条都必须是**从原话某一句直接推出**的，并引用那一句。',
-    '允许产出：',
-    '- `rewrite`：把含糊、有病句的地方说清楚（同一段原话最多一条）。',
-    '- `requirement`：从原话直接推出的最低交付要求与验收标准（"改完能跑起来""页面能打开"',
-    '  这类可观测的话），写成对工作 AI 的要求而不是评论。每条都要能指回原话里的某一句。',
-    '- `quality`：用户说的质量词（"好看点""高级感""流畅"）→ 解释成可观察的要求。',
-    '  它是**解释**，不是新增目标：一条质量词最多一条 quality。',
-    '- `unknown`：只有用户能定的取舍（user_preference）/ 该去查证的事实（lookupable_fact）。',
-    '禁止：新增功能、新目标、新依赖；虚构项目事实；写用户没授权的技术选型。',
-    '数量纪律：requirement 最多 3 条，quality 最多 2 条，unknown 最多 2 条。',
-  ],
-  heavy: [
-    '【本轮任务：把诉求固化成一条可直接执行的命令】',
-    '这次是多步执行的复杂任务，工作 AI 会照这条命令干，用户不会再补充。',
-    '在"高级"档允许的全部条目的基础上，再加两类（都要以用户在给工作 AI 下命令的口吻写）：',
-    '- `plan`：分阶段执行计划。每阶段写清动作与产出，并写明纪律（先验证再改、失败即回退、',
-    '  不擅自扩大范围、改完给出证据）。',
-    '- `risk`：多情况预案 2~4 条，每条写成"如果出现 <触发信号>，就先 <应对动作>，',
-    '  不要 <禁止动作>"。',
-    '还要判断这次任务是否值得让工作 AI 用 goal / todo / 计划模式跟踪，并把结论写成',
-    '`requirement` 的一部分（例如"请先建立 goal：…，再按下列阶段推进"）；不需要就完全不提。',
-    '铁律：不得虚构项目事实。需要项目事实时写成"先读取/确认 X"的查证动作。',
-    '数量纪律：plan 最多 1 条，risk 最多 4 条，requirement 最多 3 条。',
-  ],
-}
+const buildTierSystem = (tier: 'light' | 'standard' | 'heavy'): string => [
+  RELAY_ROLE,
+  UPSTREAM_MISSION,
+  TIER_STRATEGY_BLOCKS[tier],
+  UPSTREAM_RULES,
+  UPSTREAM_STYLE,
+  DOMAIN_QUALITY_BLOCK,
+].join('\n\n')
 
 /** 档位 id 与系统提示 / 温度的对应表。 */
 export const OPTIMIZER_SPECS = {
-  light: {
-    temperature: 0.2,
-    system: [RELAY_ROLE, TIER_TASKS.light!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
-  },
-  standard: {
-    temperature: 0.3,
-    system: [RELAY_ROLE, TIER_TASKS.standard!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
-  },
-  heavy: {
-    temperature: 0.3,
-    system: [RELAY_ROLE, TIER_TASKS.heavy!.join('\n'), EVIDENCE_RULES, STYLE_RULES].join('\n\n'),
-  },
+  light: { temperature: 0.2, system: buildTierSystem('light') },
+  standard: { temperature: 0.3, system: buildTierSystem('standard') },
+  heavy: { temperature: 0.3, system: buildTierSystem('heavy') },
 } as const
 
 /** 档位 id 联合（与 settings-contract 的 OptimizerTier 一致，此处不 import 以免循环）。 */
@@ -220,6 +169,9 @@ const OPTIMIZER_INTENT_SEGMENT = `【这一轮能看到会话上下文】
 - 上下文**只用于理解**，不要回应它、不要延续它、不要把它当成要处理的内容。
 - 仍然只产出**能指回 <原文> 某一句**的条目：上下文里出现的东西**不算依据**，不能拿它当引文。`
 
+/** 当前生效的输出契约（= 移植过来的 v2；测试与设置页说明都用这个符号）。 */
+export const OPTIMIZER_OUTPUT_CONTRACT = OPTIMIZER_OUTPUT_CONTRACT_V2
+
 /**
  * 组装一次优化的 system 提示词。
  *
@@ -229,13 +181,20 @@ const OPTIMIZER_INTENT_SEGMENT = `【这一轮能看到会话上下文】
  * @param tier - 强度档位；未知值走 advanced（默认档）。
  * @param custom - 设置页里的自定义提示词；空串 = 用内置那份。
  * @param options.intent - 这一轮是否带了会话上下文（决定要不要加那段纪律）。
+ * @param options.framing - 协作基调（0.14.0）：`hard` 时追加「硬邦邦模式」段。
+ *   注意基调**只改写法**：条目集合、来源规则、防御性限制都不许因此改变（段内写死了）。
  * @returns 该档位的完整系统提示词。
  */
-export function buildOptimizeSystem(tier: string, custom = '', options: { readonly intent?: boolean } = {}): string {
+export function buildOptimizeSystem(
+  tier: string,
+  custom = '',
+  options: { readonly intent?: boolean; readonly framing?: string } = {},
+): string {
   const body = custom.trim() === '' ? specOf(tier).system : custom.trim()
   const parts = [body]
   if (options.intent === true) parts.push(OPTIMIZER_INTENT_SEGMENT)
-  parts.push(OPTIMIZER_OUTPUT_CONTRACT)
+  if (options.framing === 'hard') parts.push(HARD_TONE_BLOCK)
+  parts.push(OPTIMIZER_OUTPUT_CONTRACT_V2)
   return parts.join('\n\n')
 }
 

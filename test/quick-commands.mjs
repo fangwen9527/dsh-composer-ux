@@ -819,18 +819,35 @@ console.log('4. 优化提示词：三档、依据纪律与输出契约')
   // 三档**提示词**规格（off 档不调用模型，没有提示词）；名字已按 0.14.0 的新档位。
   check('三档齐全', Object.keys(pure.OPTIMIZER_SPECS).join(',') === 'light,standard,heavy')
   check('人设段在（传话器）', advanced.includes('传话器/意图补全器'))
-  check('依据纪律段在（要求逐字引文）', advanced.includes('依据纪律') && advanced.includes('逐字存在'))
+  // 0.14.0：提示词换成上游那套（硬规则 1–8 + 档位策略 + 领域维度），断言跟着改。
+  check('硬规则段在（要求逐字引文）', advanced.includes('硬规则') && advanced.includes('逐字存在'))
   check('禁元话语段在', advanced.includes('不要元话语'))
-  check('高级档要求补全没说出口的必要要求', advanced.includes('没说出口'))
-  check('普通档只修语言、不添需求', pure.buildOptimizeSystem('light').includes('只做语言层修复'))
-  check('极端档要求分阶段计划与预案', pure.buildOptimizeSystem('heavy').includes('多情况预案'))
+  check('上游最硬的一条在（不改写你的话）', advanced.includes('你不改写它'))
+  check('标准档策略在（条目内并列 + 8 条上限）',
+    advanced.includes('条目内并列') && advanced.includes('最多 8 条条目'))
+  check('轻度档策略在（单一解读 + 4 条上限）',
+    pure.buildOptimizeSystem('light').includes('单一解读') && pure.buildOptimizeSystem('light').includes('最多 4 条条目'))
+  check('重度档策略在（多假设分支 + 候选≤3 + 12 条上限）',
+    pure.buildOptimizeSystem('heavy').includes('多假设分支') && pure.buildOptimizeSystem('heavy').includes('最多 3 个')
+    && pure.buildOptimizeSystem('heavy').includes('最多 12 条条目'))
+  check('轮次之间不遗传（上游硬规则 7）在', advanced.includes('轮次之间不遗传'))
+  check('领域质量维度在（含具体维度）', advanced.includes('领域质量维度') && advanced.includes('间距与层级'))
+  check('硬邦邦基调**只在** framing=hard 时追加',
+    advanced.includes('硬邦邦模式') === false
+    && pure.buildOptimizeSystem('standard', '', { framing: 'hard' }).includes('硬邦邦模式 · 整份辅助包的写法')
+    && pure.buildOptimizeSystem('standard', '', { framing: 'hard' }).includes('不许因为口气变了而改动内容'))
   check('未知档位回落到高级', pure.buildOptimizeSystem('???') === advanced)
   check('温度：普通 0.2', pure.buildOptimizeTemperature('light') === 0.2)
   check('温度：高级 0.3', pure.buildOptimizeTemperature('standard') === 0.3)
   check('温度：未知回落高级', pure.buildOptimizeTemperature('???') === 0.3)
   // 输出契约必须**永远在最后**（模型对最后一条指令服从度最高），且不可能被自定义提示词顶掉。
   check('输出契约在末尾', advanced.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
-  check('契约里给出 items/kind 的取值', advanced.includes('"items"') && advanced.includes('rewrite'))
+  check('契约里给出 items/kind 的取值（六类都要出现）',
+    advanced.includes('"items"')
+    && ['user_requirement', 'quality_interpretation', 'observed_fact', 'implementation_option', 'proposal', 'unknown']
+      .every(kind => advanced.includes(kind)))
+  check('契约写清了各类的必填字段', advanced.includes('`quote` **必填**')
+    && advanced.includes('`rationale` **必填**') && advanced.includes('`sourceRefs` **必填**'))
   check('自定义提示词整体替换任务段，契约仍追加',
     pure.buildOptimizeSystem('standard', '我的任务段').startsWith('我的任务段')
     && pure.buildOptimizeSystem('standard', '我的任务段').includes(pure.OPTIMIZER_OUTPUT_CONTRACT))
@@ -1309,7 +1326,7 @@ const json = res => JSON.parse(res.captured.body)
   const call = host.llmCalls[0]
   check('用的是当前默认模型的 provider/model', call.provider === 'go' && call.model === 'deepseek-flash')
   check('高级档温度 0.3', call.temperature === 0.3, String(call.temperature))
-  check('system 是高级档提示词', call.system.includes('没说出口'))
+  check('system 是标准档提示词（移植后的策略段）', call.system.includes('条目内并列'))
   check('system 末尾是固定的输出契约', call.system.endsWith(pure.OPTIMIZER_OUTPUT_CONTRACT))
   check('user 消息包了传话框架', call.messages[0].content[0].text.includes('【待转达内容】'))
   check('消息来源标为 user', call.messages[0].source.kind === 'user')
@@ -1350,7 +1367,7 @@ const json = res => JSON.parse(res.captured.body)
   const body = json(res)
   check('读设置抛异常 → 回落内置提示词，优化照常成功',
     body.ok === true && body.promptSource === 'builtin'
-    && host.llmCalls[0].system.includes('没说出口'), JSON.stringify({ ok: body.ok, src: body.promptSource }))
+    && host.llmCalls[0].system.includes('条目内并列'), JSON.stringify({ ok: body.ok, src: body.promptSource }))
 }
 {
   // 模型没按契约输出 → 按旧行为整段照收（保证这次改造不会让原本能用的优化变成失败）。
@@ -1443,7 +1460,7 @@ const json = res => JSON.parse(res.captured.body)
   const res = makeRes()
   await handler(makeReq('POST', JSON.stringify({ text: 'x', tier: 'light' })), res)
   check('basic 档温度 0.2', host.llmCalls[0].temperature === 0.2)
-  check('basic 档 system 正确', host.llmCalls[0].system.includes('只做语言层修复'))
+  check('轻度档 system 正确', host.llmCalls[0].system.includes('单一解读'))
 }
 {
   const host = await bootHost({

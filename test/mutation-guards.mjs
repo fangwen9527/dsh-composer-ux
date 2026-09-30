@@ -1223,6 +1223,31 @@ const cases = [
     expect: "候选最多保留 3 个（多的忽略并记账）",
   },
 
+  {
+    name: "EQ 硬邦邦基调无条件拼接（普通基调也被写成硬邦邦，语域失控）",
+    file: "src/optimizer-prompt.ts",
+    from: "  if (options.framing === 'hard') parts.push(HARD_TONE_BLOCK)",
+    to: "  if (true) parts.push(HARD_TONE_BLOCK)",
+    test: "test/quick-commands.mjs",
+    expect: "硬邦邦基调**只在** framing=hard 时追加",
+  },
+  {
+    name: "ER 标准档串成轻度档策略（档位名存实亡：标准档只给 4 条单一解读）",
+    file: "src/optimizer-prompt.ts",
+    from: "  standard: { temperature: 0.3, system: buildTierSystem('standard') },",
+    to: "  standard: { temperature: 0.3, system: buildTierSystem('light') },",
+    test: "test/quick-commands.mjs",
+    expect: "标准档策略在（条目内并列 + 8 条上限）",
+  },
+  {
+    name: "ES 契约不再写必填字段（模型不知道 rationale/sourceRefs 是硬要求）",
+    file: "src/optimizer-transplant.ts",
+    from: "  '- quality_interpretation：质量词怎么理解。`rationale` **必填**（指出它来自原话哪几个字）。',",
+    to: "  '- quality_interpretation：质量词怎么理解。',",
+    test: "test/quick-commands.mjs",
+    expect: "契约写清了各类的必填字段",
+  },
+
 ]
 
 let allBit = true

@@ -2,6 +2,27 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.16.4] — 2026-10-01（面板可以整块滚了：那排被切的按钮能划到）
+
+起因（用户原话）：**「让这个页面可以滑动，使其一些按钮不被遮挡」**（截图里快捷指令/优化面板
+底部「优化提示词 / 手写优化 / 右键」那一排只露出上半截）。被问到时选择了**「整块面板一起滚」**。
+
+根因：面板根容器 `quickPanel` 是 `maxHeight: min(60vh, 520px)` + **`overflow: hidden`** ⇒ 内容一长
+直接裁掉；内层又有一套"结果框内容区自己滚"（`dockBody` 的 `overflowY: auto`）⇒ 双层结构，
+窗口一矮就把那排按钮切掉。
+
+改法（按用户选择，单一滚动条）：
+
+- `quickPanel`：`overflow: hidden` → `overflowY: auto` + `overflowX: hidden` + `overscrollBehavior: contain`；
+- `dockBox`：`flex: 1 1 auto` / `minHeight: 0` / `overflow: hidden` → `flex: 0 0 auto` / `minHeight: auto` /
+  `overflow: visible`（按内容自然高度排，否则它把内容压进面板高度里、永远不溢出）；
+- `dockBody`：`overflowY: auto` → `visible`（内层再滚会出现双层滚动条）。
+
+## 验证
+
+- `npm test`：**24 个套件 2384 passed / 0 failed**（把旧的「结果框内容区自己滚」那条守护断言
+  换成了三条新断言：根容器统一滚、内层不再滚、结果框按自然高度）。
+
 ## [0.16.3] — 2026-10-01（真机验证通过：恢复框不再出现，窗口自己回来）
 
 用户实测（Windows 桌面版，此前每次重启都会弹「应用无法启动或已意外停止」）：

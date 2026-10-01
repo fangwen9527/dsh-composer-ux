@@ -227,7 +227,11 @@ export const quickPanel: CSSProperties = {
   boxShadow: 'var(--dsw-elevation-prominent)',
   '--dsw-elevation-stroke-color': 'var(--dsw-alias-border-l1)',
   pointerEvents: 'auto',
-  overflow: 'hidden',
+  // 0.16.4（用户原话「让这个页面可以滑动，使其一些按钮不被遮挡」）：**整块面板一起滚** ——
+  // 之前这里是 `overflow: hidden`，把超出 60vh 的内容（含结果框那排按钮）直接裁掉。
+  overflowY: 'auto',
+  overflowX: 'hidden',
+  overscrollBehavior: 'contain',
 } as CSSProperties
 
 /** 面板顶部区（标题 + 档位 + 优化按钮）。 */
@@ -510,10 +514,11 @@ export const quickCategoryAdd: CSSProperties = {
 
 /** 结果框外框。 */
 export const dockBox: CSSProperties = {
-  // 撑满中部容器（`minHeight: 0` 是关键：否则弹性子项按内容高度撑，又会被裁）。
-  flex: '1 1 auto',
-  minHeight: 0,
-  overflow: 'hidden',
+  // 0.16.4：整块面板滚动之后，这里改为**按内容自然高度**排（不再 flex 撑满、不再自己裁），
+  // 否则它会把内容压缩到面板高度内，滚动条永远等不到溢出。
+  flex: '0 0 auto',
+  minHeight: 'auto',
+  overflow: 'visible',
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
@@ -535,10 +540,11 @@ export const dockBody: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-  overflowY: 'auto',
+  // 0.16.4：交给根容器统一滚（内层再滚会出现双层滚动条）。
+  overflowY: 'visible',
 }
 
-/** 底部按钮行：钉在结果框底部，不随内容滚动。 */
+/** 底部按钮行：0.16.4 起随面板一起滚（用户选择「整块面板一起滚」）。 */
 export const dockButtonsPinned: CSSProperties = {
   flex: '0 0 auto',
 }

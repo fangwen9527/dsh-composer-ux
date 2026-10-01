@@ -350,9 +350,20 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
     dock.includes('...dockButtons, ...dockButtonsPinned')
     && dock.indexOf('dockBody') < dock.indexOf('dockButtonsPinned')
     && dock.includes('插入输入框') && dock.includes('重新优化') && dock.includes('复制'))
-  check('❗结果框内容区自己滚（flex 1 + minHeight 0 + overflowY auto）',
-    /dockBody[\s\S]{0,260}overflowY: 'auto'/.test(styles) && /dockBody[\s\S]{0,260}minHeight: 0/.test(styles)
-    && /dockBody[\s\S]{0,260}flex: '1 1 auto'/.test(styles))
+  // 0.16.4（用户原话「让这个页面可以滑动，使其一些按钮不被遮挡」，并选择了「整块面板一起滚」）：
+  // 滚动从"结果框内容区自己滚"改成**面板根容器统一滚** —— 内层再滚会出现双层滚动条，
+  // 而且外层原本的 `overflow: hidden` 会把超出 60vh 的那排按钮直接裁掉（用户截图里被切的那排）。
+  check('❗整块面板统一滚（根容器 overflowY auto + overscroll contain）',
+    (() => {
+      const block = /export const quickPanel[\s\S]*?\} as CSSProperties/.exec(styles)?.[0] ?? ''
+      return block.includes("overflowY: 'auto'") && block.includes("overscrollBehavior: 'contain'")
+        && !block.includes("overflow: 'hidden'")
+    })())
+  check('❗结果框内容区不再自己滚（否则双层滚动条）',
+    /dockBody[\s\S]{0,260}overflowY: 'visible'/.test(styles))
+  check('❗结果框改为按内容自然高度（否则它把内容压进面板高度里，永远不溢出）',
+    /dockBox[\s\S]{0,260}flex: '0 0 auto'/.test(styles)
+    && /dockBox[\s\S]{0,260}minHeight: 'auto'/.test(styles))
   check('❗两半容器与快捷指令列表也必须有 flex/minHeight（否则又互相挤）',
     /quickSectionBody[\s\S]{0,200}minHeight: 0/.test(styles)
     && /quickList: CSSProperties = \{[\s\S]{0,160}minHeight: 0/.test(styles))

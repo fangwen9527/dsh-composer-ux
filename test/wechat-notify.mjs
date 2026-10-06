@@ -9,7 +9,10 @@ import { build } from 'esbuild'
 const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
-    contents: "export { NOTIFY_DEDUPE_MS, PUSHPLUS_ENDPOINT, buildNotifyRequest, interpretNotifyResponse, notifyAllowed, notifySuppressed, notifyText, redactSecret } from './src/notify.ts'\n",
+    contents: [
+      "export { NOTIFY_DEDUPE_MS, PUSHPLUS_ENDPOINT, buildNotifyRequest, interpretNotifyResponse, notifyAllowed, notifySuppressed, notifyText, redactSecret } from './src/notify.ts'",
+      "export { NOTIFY_DETAIL_MAX, describeError, notifyForAgentError, notifyForApproval, notifyForQuestion, notifyForStatus, summarize } from './src/notify-events.ts'",
+    ].join('\n'),
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -100,6 +103,28 @@ check('响应不是 JSON ⇒ 提示地址可能填错',
   pure.interpretNotifyResponse('wecom', 200, '<html>404</html>').includes('不是 JSON'))
 check('❗错误信息里不含凭据本身（不会把 token 回显出去）',
   !pure.interpretNotifyResponse('pushplus', 200, '{"code":1,"msg":"bad"}').includes('abcdef1234567890'))
+
+// ── 官方事件 → 微信消息的适配层（0.17.0）────────────────────────────────────
+check(`摘要去掉换行并截断到 ${pure.NOTIFY_DETAIL_MAX} 字`,
+  pure.summarize('a\n\nb'.padEnd(300, 'x')).length === pure.NOTIFY_DETAIL_MAX)
+check('error 是对象就取 message', pure.describeError(new Error('模型调用失败')) === '模型调用失败')
+check('error 形状陌生也不抛（给中性文案）', pure.describeError({ weird: 1 }) === '原因未知（error 不是常见形状）')
+check('error 是 undefined 也给一句人话', pure.describeError(undefined).includes('原因未知'))
+check('审批 → needs-input，并明说回界面处理',
+  pure.notifyForApproval('会话 A', 'Bash').kind === 'needs-input'
+  && pure.notifyForApproval('会话 A', 'Bash').detail.includes('Bash')
+  && pure.notifyForApproval('会话 A', 'Bash').detail.includes('回 DSH 界面处理'))
+check('提问 → needs-input（拿不到问题正文也给中性文案）',
+  pure.notifyForQuestion('会话 A', undefined).kind === 'needs-input'
+  && pure.notifyForQuestion('会话 A', undefined).detail.includes('回 DSH 界面处理'))
+check('❗只有 running→idle 才算「完成」（开始干活不通知）',
+  pure.notifyForStatus('idle', 'running', 'A') === null
+  && pure.notifyForStatus(undefined, 'idle', 'A') === null
+  && pure.notifyForStatus('running', 'idle', 'A')?.kind === 'done')
+check('❗反复 idle→idle 不发（防刷屏的第一道）', pure.notifyForStatus('idle', 'idle', 'A') === null)
+check('出错 → error，且摘要里带原因',
+  pure.notifyForAgentError('会话 A', 'unexpected end').kind === 'error'
+  && pure.notifyForAgentError('会话 A', 'unexpected end').detail.includes('unexpected end'))
 
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

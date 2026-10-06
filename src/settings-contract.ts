@@ -97,6 +97,22 @@ export const SYNC_API_PATH = '/composer-ux/sync-prices'
 /** 全局总开关字段名。 */
 export const ENABLED_FIELD = 'enabled'
 
+// ── 微信通知（0.17.0，单向）────────────────────────────────────────────────
+//
+// 用户 2026-10-01 明确：「只要通知，不做双向」。所以这里只有"往外推"的配置，
+// 没有任何"往回收"的东西 —— 界面上也必须明说这件事，不能让它看起来像双向。
+
+/** 通知总开关。默认**关**：不打招呼就往手机推消息是越界。 */
+export const NOTIFY_ENABLED_FIELD = 'notifyEnabled'
+/** 渠道：'pushplus' | 'wecom'。 */
+export const NOTIFY_CHANNEL_FIELD = 'notifyChannel'
+/** PushPlus token（推到你关注的公众号对话）。 */
+export const NOTIFY_PUSHPLUS_FIELD = 'notifyPushplusToken'
+/** 企业微信群机器人 webhook 地址。 */
+export const NOTIFY_WECOM_FIELD = 'notifyWecomWebhook'
+/** 三类事件各自的开关：{ needs-input, done, error }。 */
+export const NOTIFY_KINDS_FIELD = 'notifyKinds'
+
 // ── 「每一栏一个开关」 ───────────────────────────────────────────────────────
 //
 // 六张折叠卡各有一个"这一栏要不要生效"的开关，**默认关**；总开关（`enabled`）默认开，
@@ -1008,6 +1024,11 @@ export type SettingsField =
   | typeof OPTIMIZER_CONTEXT_FIELD
   | typeof OPTIMIZER_LEDGER_FIELD
   | typeof OPTIMIZE_KEEP_DOCK_FIELD
+  | typeof NOTIFY_ENABLED_FIELD
+  | typeof NOTIFY_CHANNEL_FIELD
+  | typeof NOTIFY_PUSHPLUS_FIELD
+  | typeof NOTIFY_WECOM_FIELD
+  | typeof NOTIFY_KINDS_FIELD
   | typeof OPTIMIZE_READ_TOOLS_FIELD
   | typeof OPTIMIZER_FRAMING_FIELD
   | typeof OPTIMIZER_PERMISSION_FIELD
@@ -1159,10 +1180,27 @@ export interface ComposerUxSettings {
   syncedPrices?: SyncedPrices
   /** 「金额」（0.10.0）：自动同步官方价（每天最多一次）。默认**关** —— 会自己出网的开关不该默认开。 */
   priceAutoSync: boolean
+  // ── 微信通知（0.17.0）──────────────────────────────────────────────────
+  /** 总开关。默认关。 */
+  notifyEnabled: boolean
+  /** 渠道。默认 PushPlus（token 最省事）。 */
+  notifyChannel: 'pushplus' | 'wecom'
+  /** PushPlus token；存本机，界面与日志里只显示打码形式。 */
+  notifyPushplusToken: string
+  /** 企业微信群机器人 webhook。 */
+  notifyWecomWebhook: string
+  /** 三类事件各自的开关。 */
+  notifyKinds: { readonly 'needs-input': boolean, readonly done: boolean, readonly error: boolean }
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
 export const DEFAULT_SETTINGS: ComposerUxSettings = {
+  // 微信通知：默认全关全空（0.17.0）。
+  notifyEnabled: false,
+  notifyChannel: 'pushplus',
+  notifyPushplusToken: '',
+  notifyWecomWebhook: '',
+  notifyKinds: { 'needs-input': true, done: true, error: true },
   // 总开关默认开：它只是总闸，真正"要不要用这一栏"由下面五个开关决定（默认关）。
   enabled: true,
   // 五栏默认关（老文档由 sectionEnabledOf 迁移成"碰过就开"）。
@@ -1488,7 +1526,28 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     return out
   }
   const asTier = (): OptimizerTier => normalizeOptimizerTier(source[OPTIMIZER_TIER_FIELD])
+  // 微信通知（0.17.0）：渠道只认两个值，非法一律回落 pushplus（不因为存了个怪值就整份配置读不出来）。
+  const asNotifyChannel = (): 'pushplus' | 'wecom' => {
+    const raw = source[NOTIFY_CHANNEL_FIELD]
+    return raw === 'wecom' ? 'wecom' : 'pushplus'
+  }
+  // 三类事件各自的开关：缺省 true（总开关默认关着，所以这里给 true 不会替用户打开什么）。
+  const asNotifyKinds = () => {
+    const raw = source[NOTIFY_KINDS_FIELD]
+    const row = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
+    return {
+      'needs-input': row['needs-input'] !== false,
+      done: row.done !== false,
+      error: row.error !== false,
+    }
+  }
   return {
+    // 微信通知（0.17.0，单向）：默认全关/全空。
+    notifyEnabled: asBool(NOTIFY_ENABLED_FIELD),
+    notifyChannel: asNotifyChannel(),
+    notifyPushplusToken: asString(NOTIFY_PUSHPLUS_FIELD),
+    notifyWecomWebhook: asString(NOTIFY_WECOM_FIELD),
+    notifyKinds: asNotifyKinds(),
     enabled: asBool(ENABLED_FIELD),
     // 五栏开关：显式写过听它的，否则按"用户碰过没"迁移（见 sectionEnabledOf）。
     keysEnabled: sectionEnabledOf(KEYS_ENABLED_FIELD, source),

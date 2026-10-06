@@ -1277,8 +1277,8 @@ const json = res => JSON.parse(res.captured.body)
     pure.BALANCE_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH,
     pure.MODELS_API_PATH,
   ]
-  check('注册了八条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单）',
-    host.routes.length === 8
+  check('注册了九条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单）',
+    host.routes.length === 9
     && host.routes.every(route => route.kind === 'exact')
     && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))

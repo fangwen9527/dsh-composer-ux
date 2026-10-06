@@ -2498,9 +2498,16 @@ export function apply(ctx: Context, config?: unknown): void {
     // 四个官方事件：只观察、不干预（approval/user-questions 是 waterfall，务必透传）。
     // 通知出错只留一行日志 —— 绝不能让"没人收到提醒"变成"审批界面卡住"。
     restartCtx.effect(() => {
+      // 事件总线不一定是 cordis 的 ctx（宿主形态/测试替身可能不同）：没有 on 就**不挂**，
+      // 并留下一句话 —— 绝不能因为通知没挂上而让宿主起不来。
+      const bus = restartCtx as unknown as { on?: (name: string, handler: unknown) => unknown }
+      if (typeof bus.on !== 'function') {
+        console.warn('[composer-ux] 这个宿主没有事件总线（ctx.on），微信通知的事件钩子没挂上')
+        return
+      }
       const lastSent: Record<string, number> = {}
       const dispose = registerNotifyHooks({
-        on: (name, handler) => restartCtx.on(name as never, handler as never) as unknown as (() => void) | void,
+        on: (name, handler) => bus.on?.(name, handler) as unknown as (() => void) | void,
         deliver: (event: NotifyEvent) => {
           void sendNotification(readNotifySettings(), event, { fetchText: notifyFetchText, lastSent })
             .then(outcome => {

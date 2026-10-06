@@ -244,7 +244,7 @@ console.log('5. 宿主路由：真注册 + 真读写（假 webServer）')
   try {
     const routes = await boot()
     // 0.14.1 起是 8 条（多了模型清单那条只读路由）。
-    check('结果框状态路由注册为 exact', routes.length === 8 && routeOf(routes)?.kind === 'exact', String(routes.length))
+    check('结果框状态路由注册为 exact', routes.length === 9 && routeOf(routes)?.kind === 'exact', String(routes.length))
 
     const file = join(dir, 'composer-ux', 'optimize-dock.json')
     const empty = await call(routes, 'GET')

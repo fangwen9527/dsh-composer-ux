@@ -21,6 +21,8 @@ import {
   PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS, SITE_URL,
+  NOTIFY_CHANNEL_FIELD, NOTIFY_ENABLED_FIELD, NOTIFY_KINDS_FIELD, NOTIFY_PUSHPLUS_FIELD,
+  NOTIFY_TEST_API_PATH, NOTIFY_WECOM_FIELD,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
@@ -932,6 +934,68 @@ function useRestart(): RestartController {
 }
 
 /** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
+/** 凭据打码（与宿主 redactSecret 同规则）。设置页可能被投屏或截图，token 不能被看全。 */
+function maskSecret(value: string): string {
+  if (value === '') return ''
+  return value.length < 8 ? '****' : `${value.slice(0, 4)}…${value.slice(-2)}`
+}
+
+/** 微信通知卡（0.17.0，单向：只推不收）。 */
+function NotifyCard({ settings, setField }: {
+  readonly settings: ComposerUxSettings
+  readonly setField: (field: SettingsField, value: unknown) => void
+}) {
+  const on = settings.notifyEnabled
+  const channel = settings.notifyChannel
+  const kinds = settings.notifyKinds
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const send = (): void => {
+    setBusy(true); setNote('')
+    void fetch(NOTIFY_TEST_API_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
+      body: '{}',
+    })
+      .then(async r => await r.json() as { ok?: boolean, reason?: string })
+      .then(v => { setNote(v.ok === true ? '已发出 —— 去微信看一眼（这里不写“已验证”，只有你能确认）' : `没发出去：${v.reason ?? '未知原因'}`) })
+      .catch((e: unknown) => { setNote(`请求失败：${e instanceof Error ? e.message : String(e)}`) })
+      .finally(() => { setBusy(false) })
+  }
+  return (
+    <FoldCard
+      name="微信通知"
+      summary={on ? `已开 · ${channel === 'pushplus' ? 'PushPlus' : '企业微信机器人'} · 只能通知，不能回` : '未启用 · 只能通知，不能回'}
+      toggle={{ checked: on, onChange: next => { setField(NOTIFY_ENABLED_FIELD, next) } }}
+    >
+      <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
+        <strong>只能通知，不能回。</strong>需要你回应 / 完成 / 出错时推一条到你手机；要处理仍回 DSH 界面点。
+      </div>
+      <ToggleRow label="用 PushPlus（到你关注的公众号）" desc="pushplus.plus 用微信登录拿 token，填在下面。"
+        checked={channel === 'pushplus'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'pushplus') }} first />
+      <TextFieldRow title="PushPlus token"
+        desc={settings.notifyPushplusToken === '' ? '还没填（填了才能推送）' : `当前：${maskSecret(settings.notifyPushplusToken)}（要看全文请重新粘贴）`}
+        value={settings.notifyPushplusToken} placeholder="粘贴 token" maxLength={200}
+        onChange={next => { setField(NOTIFY_PUSHPLUS_FIELD, next) }} />
+      <ToggleRow label="用企业微信群机器人" desc="只有你的企业微信群里加个机器人，把 webhook 填下面。"
+        checked={channel === 'wecom'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'wecom') }} />
+      <TextFieldRow title="企业微信 webhook"
+        desc={settings.notifyWecomWebhook === '' ? '还没填' : `当前：${maskSecret(settings.notifyWecomWebhook)}`}
+        value={settings.notifyWecomWebhook} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" maxLength={500}
+        onChange={next => { setField(NOTIFY_WECOM_FIELD, next) }} />
+      <ToggleRow label="需要你回应时通知" desc="等审批、等你回答问题时推一条。" checked={kinds['needs-input']}
+        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, 'needs-input': next }) }} />
+      <ToggleRow label="任务完成时通知" desc="一轮跑完（运行中→空闲）推一条。" checked={kinds.done}
+        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, done: next }) }} />
+      <ToggleRow label="任务出错时通知" desc="某步或某轮报错时推一条。" checked={kinds.error}
+        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, error: next }) }} />
+      <ToggleRow label="测试推送" desc={note === '' ? '点右边按钮，立刻发一条到你微信验证配置。' : note} checked={false}
+        onChange={() => { /* 真动作在右边按钮 */ }} action={{ label: busy ? '发送中…' : '发送测试', onClick: send }} />
+    </FoldCard>
+  )
+}
+
+/** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
 function RestartButton({ restart }: { readonly restart: RestartController }) {
   const busy = restart.stage === 'restarting' || restart.stage === 'asking'
   const blocked = restart.blocked
@@ -1003,7 +1067,7 @@ function RestartBanner({ restart }: { readonly restart: RestartController }) {
 }
 
 /** 设置页主体。 */
-export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotice, actions }: SettingsSectionProps) {
+export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotice, actions, setField }: SettingsSectionProps) {
   const settings = useLive(item => item)
   const book = useBook(item => item)
   const bookStatus = useBookStatus(item => item)
@@ -1144,6 +1208,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             </a>
           </span>
         </div>
+        <NotifyCard settings={settings} setField={setField} />
         <RestartBanner restart={restart} />
         {/*
           写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。

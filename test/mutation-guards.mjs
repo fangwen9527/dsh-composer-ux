@@ -1095,14 +1095,13 @@ const cases = [
     expect: "结果框渲染出来了",
   },
   {
-    name: "EC 结果框内容区不再自己滚（内容把底部按钮顶出去 = 用户报的 bug）",
-    file: "src/client/styles.ts",
-    from: "export const dockBody: CSSProperties = {\n  flex: '1 1 auto',\n  minHeight: 0,",
-    to: "export const dockBody: CSSProperties = {\n  minHeight: 0,",
-    test: "test/client-registration.mjs",
-    expect: "结果框内容区自己滚（flex 1 + minHeight 0 + overflowY auto）",
-  },
-  {
+    name: "EC 结果框内容区又自己滚（双层滚动条回来了）",
+    file: 'src/client/styles.ts',
+    from: "  overflowY: 'visible',",
+    to: "  overflowY: 'auto',",
+    test: 'test/client-registration.mjs',
+    expect: '❗结果框内容区不再自己滚（否则双层滚动条）',
+  },  {
     name: "ED 切换按钮不再换另一半（只能展开不能收起）",
     file: "src/client/panel-sections.ts",
     from: "  return current === 'quick' ? 'optimize' : 'quick'",
@@ -1304,14 +1303,13 @@ const cases = [
     expect: "❗单个 provider 读不到 ⇒ 只有那一组带原因，其余照常",
   },
   {
-    name: "FC 面板内容区又不可滚（卡片比面板高时，下面的内容被裁掉够不到）",
-    file: "src/client/styles.ts",
-    from: "  overflowX: 'hidden',\n  overflowY: 'auto',\n  overscrollBehavior: 'contain',",
-    to: "  overflow: 'hidden',",
-    test: "test/panel-split-render.mjs",
-    expect: "❗面板内容区是可滚容器（overflow-y:auto + overscroll 收敛）",
+    name: "FC 面板根容器又不可滚（超出 60vh 的内容被裁掉 = 用户报的 bug）",
+    file: 'src/client/styles.ts',
+    from: "  overflowY: 'auto',\n  overflowX: 'hidden',",
+    to: "  overflowY: 'hidden',",
+    test: 'test/client-registration.mjs',
+    expect: '❗整块面板统一滚（根容器 overflowY auto + overscroll contain）',
   },
-
   {
     name: "FD 重启屏不认\"极快重启\"（整个下线窗口没被探到就永远转圈）",
     file: "src/client/restart-screen.ts",
@@ -1395,6 +1393,31 @@ const cases = [
     to: "    '    const killer = spawn(\"taskkill\", [\"/F\", \"/T\", \"/PID\", String(desktop.shellPid)], { windowsHide: true, stdio: [\"ignore\", out, err] })',",
     test: "test/quick-commands.mjs",
     expect: "桌面形态的助手：杀壳只用 /PID（/T 会把助手自己一起带走）",
+  },
+
+  {
+    name: "FP 审批不再透传（返回 undefined 而不还 next() 的结果）—— 动了红线",
+    file: "src/notify-hooks.ts",
+    from: "    return next === undefined ? undefined : next()\n  })\n\n  // ② 等回答：同样透传。",
+    to: "    return undefined\n  })\n\n  // ② 等回答：同样透传。",
+    test: "test/notify-hooks.mjs",
+    expect: "❗审批：原样返回 next() 的结果（不干预决策）",
+  },
+  {
+    name: "FQ 去掉 30 秒防刷屏（同一类事件会连续刷手机）",
+    file: "src/notify-send.ts",
+    from: "  if (notifySuppressed(io.lastSent, event, now)) {",
+    to: "  if (false) {",
+    test: "test/notify-send.mjs",
+    expect: "30 秒内同类 ⇒ 压掉，且说清是防刷屏",
+  },
+  {
+    name: "FR 凭据不打码（token 会原样出现在提示里）—— 动了红线",
+    file: "src/notify.ts",
+    from: "  if (value.length < 8) return '****'\n  return `${value.slice(0, 4)}…${value.slice(-2)}`",
+    to: "  return value",
+    test: "test/wechat-notify.mjs",
+    expect: "打码只留头 4 尾 2",
   },
 
 ]

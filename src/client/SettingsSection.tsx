@@ -971,7 +971,7 @@ function NotifyCard({ settings, setField }: {
       <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
         <strong>只能通知，不能回。</strong>需要你回应 / 完成 / 出错时推一条到你手机；要处理仍回 DSH 界面点。
         <br />
-        <span style={{ opacity: 0.75 }}>如果你同时装了 dsh-notify-plugin（个人微信直连那条），**同一类事件只开一边** —— 两边都开就会收到两条。这一条是给"不想再装一个插件"的人留的退路。</span>
+        <span style={{ opacity: 0.75 }}>如果你同时装了 dsh-notify-plugin（个人微信直连那条），同一类事件只开一边 —— 两边都开就会收到两条。这一条是给"不想再装一个插件"的人留的退路。</span>
       </div>
       <ToggleRow label="用 PushPlus（到你关注的公众号）" desc="pushplus.plus 用微信登录拿 token，填在下面。"
         checked={channel === 'pushplus'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'pushplus') }} first />

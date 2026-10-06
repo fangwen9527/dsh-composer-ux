@@ -113,6 +113,9 @@ export const NOTIFY_WECOM_FIELD = 'notifyWecomWebhook'
 /** 三类事件各自的开关：{ needs-input, done, error }。 */
 export const NOTIFY_KINDS_FIELD = 'notifyKinds'
 
+/** 「测试推送」那条路由（0.17.0）：用户在设置页点一下，验证凭据与渠道对不对。 */
+export const NOTIFY_TEST_API_PATH = '/composer-ux/notify/test'
+
 // ── 「每一栏一个开关」 ───────────────────────────────────────────────────────
 //
 // 六张折叠卡各有一个"这一栏要不要生效"的开关，**默认关**；总开关（`enabled`）默认开，

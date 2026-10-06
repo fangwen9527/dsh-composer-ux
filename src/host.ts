@@ -32,6 +32,7 @@ import {
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   MODELS_API_PATH,
   RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
+  NOTIFY_TEST_API_PATH,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
   normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
@@ -58,6 +59,11 @@ import {
   readPriceFile, samePriceTable, writePriceFile,
 } from './price-sync.ts'
 import { fetchHolidayYears, holidaySyncDue, holidayYearsWanted, mergeHolidayDays } from './holiday-sync.ts'
+import { createNotifyTestHandler } from './notify-route.ts'
+import { registerNotifyHooks } from './notify-hooks.ts'
+import { sendNotification, type NotifyIo } from './notify-send.ts'
+import { sanitizeSettings } from './settings-contract.ts'
+import type { NotifyEvent, NotifySettings } from './notify.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
@@ -2455,6 +2461,59 @@ export function apply(ctx: Context, config?: unknown): void {
         logHint: join(io.tmpdir, `${RESTART_LOG_PREFIX}*.err.log`),
       }
     }
+
+    // ── 微信通知（0.17.0，单向）──────────────────────────────────────────
+    //
+    // 用户 2026-10-01：只要通知、不做双向、不走 OpenClaw。所以这里只有"往外推"，
+    // 没有任何"往回收"的东西 —— 界面上也必须明说这一点。
+    const readNotifySettings = (): NotifySettings => {
+      // ⚠ 没找到 makeReader（可能不是模块级 import）：直读服务并**如实报错** ——
+      // 绝不静默当成"配置为空"，那会让用户以为开关坏了。
+      const service = restartCtx.get('settings') as unknown as { get?: (ns: string) => unknown } | undefined
+      const raw = typeof service?.get === 'function' ? service.get(NAMESPACE) : undefined
+      if (raw === undefined) throw new Error('读不到本插件的设置命名空间（这也说明 reader 没接对）')
+      const all = sanitizeSettings(raw as Record<string, unknown>)
+      return {
+        enabled: all.notifyEnabled,
+        channel: all.notifyChannel,
+        pushplusToken: all.notifyPushplusToken,
+        wecomWebhook: all.notifyWecomWebhook,
+        kinds: all.notifyKinds,
+      }
+    }
+
+    /** 宿主侧发一次 HTTP（凭据只进请求体，绝不进日志）。 */
+    const notifyFetchText: NotifyIo['fetchText'] = async (url, init) => {
+      const response = await fetch(url, { method: init.method, headers: { ...init.headers }, body: init.body })
+      return { status: response.status, body: await response.text() }
+    }
+
+    // 「测试推送」：用户在设置页点一下，验证配置对不对（成败看 ok，原因来自渠道原话）。
+    restartCtx.effect(() => restartCtx.webServer.register({
+      kind: 'exact',
+      path: NOTIFY_TEST_API_PATH,
+      handler: createNotifyTestHandler({ readSettings: readNotifySettings, fetchText: notifyFetchText }),
+    }))
+
+    // 四个官方事件：只观察、不干预（approval/user-questions 是 waterfall，务必透传）。
+    // 通知出错只留一行日志 —— 绝不能让"没人收到提醒"变成"审批界面卡住"。
+    restartCtx.effect(() => {
+      const lastSent: Record<string, number> = {}
+      const dispose = registerNotifyHooks({
+        on: (name, handler) => restartCtx.on(name as never, handler as never) as unknown as (() => void) | void,
+        deliver: (event: NotifyEvent) => {
+          void sendNotification(readNotifySettings(), event, { fetchText: notifyFetchText, lastSent })
+            .then(outcome => {
+              if (!outcome.sent && outcome.reason !== '') console.warn(`[composer-ux] 微信通知未发出：${outcome.reason}`)
+            })
+            .catch(error => { console.warn('[composer-ux] 微信通知异常', error) })
+        },
+        // TODO(0.17.x)：宿主里没有现成的"会话 id → 标题"查表，先给空串（消息省掉「会话：」那行）。
+        titleOf: () => '',
+        warn: (message: string) => { console.warn(`[composer-ux] ${message}`) },
+      })
+      return dispose
+    })
 
     restartCtx.effect(() => restartCtx.webServer.register({
       kind: 'exact',

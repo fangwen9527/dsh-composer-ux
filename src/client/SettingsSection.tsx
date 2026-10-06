@@ -20,7 +20,7 @@ import {
   PANEL_HEIGHT_FIELD,
   PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
-  QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS,
+  QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS, SITE_URL,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
@@ -1128,6 +1128,19 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
               title="在 GitHub 上查看这个插件（新标签打开）"
             >
               GitHub <span aria-hidden="true">↗</span>
+            </a>
+            {/*
+              官网入口：与上面的仓库入口同一个位置、同一套样式（0.16.5，用户要求）。
+              放右边是为了不打乱既有约定「重启按钮在链接左边」。
+            */}
+            <a
+              className="dsh-ux-cardLink"
+              href={SITE_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="打开 DSH 官网（新标签）"
+            >
+              官网 <span aria-hidden="true">↗</span>
             </a>
           </span>
         </div>

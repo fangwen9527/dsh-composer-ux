@@ -28,6 +28,13 @@ export const NAMESPACE = 'composer-ux'
  */
 export const REPO_URL = 'https://github.com/fangwen9527/dsh-composer-ux'
 
+/**
+ * DSH 官网（2026-10-01，用户原话：「把这个 DSH 的官网链接放到我的插件里」）。
+ *
+ * 与 {@link REPO_URL} 同一处理：地址只在这里写一份，客户端引它 —— 界面上不许硬编码第二份。
+ */
+export const SITE_URL = 'https://www.deepseek.com/harness/'
+
 // ── 「重启 DSH」按钮 ─────────────────────────────────────────────────────────
 //
 // 为什么这件事必须落在宿主半：只有宿主进程能把自己重新拉起来（浏览器碰不到进程）。

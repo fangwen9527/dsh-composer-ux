@@ -1169,5 +1169,31 @@ console.log('14. React 副作用：alive ref 必须在 effect 体里重置（Str
   }
 }
 
+console.log('15. 「工作区目录选择」的接线：默认关、开机同步、随设置即时装卸（0.19.0）')
+{
+  // 为什么钉源码级：真正的开关行为在浏览器里（设置页拨一下 → 槽位装卸），本仓测不到那一步。
+  // 能测的是"接线有没有接对"：字段是否在契约里且默认为关、净化是否读它、客户端半是不是
+  // 订阅了设置而不是只在启动时看一次 —— 这三处任一写错，症状都是"开关像坏的"。
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
+  check('契约里有这个字段', contract.includes("export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'"))
+  check('默认值是 false（接管官方槽位这件事必须用户自己点）',
+    /directoryPickEnabled: false,/.test(contract))
+  check('净化会读它（不然用户拨了开关、重启就丢）',
+    /directoryPickEnabled: asBool\(DIRECTORY_PICK_ENABLED_FIELD\)/.test(contract))
+
+  const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  check('客户端半用了控制器（幂等装卸都收在它里面）',
+    client.includes('createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })'))
+  check('启动时先同步一次（不然"已经开着的开关"要等下次改设置才生效）',
+    /syncDirectoryFlow\(\)/.test(client))
+  check('订阅设置变化 —— 开关必须即时生效，不是重启才生效',
+    /live\.subscribe\(syncDirectoryFlow\)/.test(client))
+  check('卸载时先退订、再卸控制器（HMR / 插件卸载不留影子占用者）',
+    /unsubscribe\(\)\s*\n\s*flow\.dispose\(\)/.test(client))
+  check('判断看的是 live 快照里的开关，不是写死的 true',
+    client.includes('flow.sync(live.getSnapshot().directoryPickEnabled === true)'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

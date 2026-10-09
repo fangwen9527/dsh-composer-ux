@@ -1477,6 +1477,55 @@ const cases = [
     expect: "Error → error 且取 message",
   },
 
+  {
+    name: "GZ 开关控制器不再幂等（每次同步都装一遍 ⇒ 同优先级重复注册当场抛错）",
+    file: "src/client/directory-flow.ts",
+    from: "        if (installed === undefined) installed = installDirectoryFlow(options.slots, options.scope, options.component)",
+    to: "        installed = installDirectoryFlow(options.slots, options.scope, options.component)",
+    test: "test/directory-flow.mjs",
+    expect: "重复同步不会装第二遍（幂等）",
+  },
+  {
+    name: "HA 关掉开关时不卸载（影子接管留在槽位上，界面再也回不到官方对话框）",
+    file: "src/client/directory-flow.ts",
+    from: "        return\n      }\n      dispose()\n    },",
+    to: "        return\n      }\n    },",
+    test: "test/directory-flow.mjs",
+    expect: "关掉：把已装的卸载掉",
+  },
+  {
+    name: "HB 「工作区目录选择」默认值改成开（接管官方槽位这件事就不打招呼了）",
+    file: "src/settings-contract.ts",
+    from: "  directoryPickEnabled: false,",
+    to: "  directoryPickEnabled: true,",
+    test: "test/settings-render.mjs",
+    expect: "默认关时概览恰好是「未启用 · 用官方应用内浏览对话框」（只前缀一次）",
+  },
+  {
+    name: "HC 净化不再读这个字段（用户拨了开关、重启就丢）",
+    file: "src/settings-contract.ts",
+    from: "    directoryPickEnabled: asBool(DIRECTORY_PICK_ENABLED_FIELD),\n",
+    to: "",
+    test: "test/client-registration.mjs",
+    expect: "净化会读它",
+  },
+  {
+    name: "HD 客户端写死 true（用户关掉开关也没用）",
+    file: "src/client.tsx",
+    from: "flow.sync(live.getSnapshot().directoryPickEnabled === true)",
+    to: "flow.sync(true)",
+    test: "test/client-registration.mjs",
+    expect: "判断看的是 live 快照里的开关",
+  },
+  {
+    name: "HE 设置页不渲染这张卡（开关无处可拨）",
+    file: "src/client/SettingsSection.tsx",
+    from: "        <DirectoryPickCard settings={settings} setField={setField} />\n",
+    to: "",
+    test: "test/settings-render.mjs",
+    expect: "默认（没开）也渲染出这张卡",
+  },
+
 ]
 
 let allBit = true

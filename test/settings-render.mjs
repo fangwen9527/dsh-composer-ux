@@ -509,5 +509,46 @@ console.log('\n7.4 「金额」卡：自动获取到节假日之后（0.11.0）'
       .some(tag => tag.includes('checked')))
 }
 
+console.log('\n9. 「工作区目录选择」卡（0.19.0，默认关）')
+{
+  /** 只切一张卡：从卡名切到该卡的 `</section>`（`cardOf` 会一路延到文末，断言"卡内"时不能用它）。 */
+  const cardOnly = (source, name) => {
+    const parts = source.split('<span class="dsh-ux-cardName">')
+    const index = parts.findIndex(part => part.startsWith(`${name}</span>`))
+    if (index === -1) return ''
+    const seg = parts[index]
+    const end = seg.indexOf('</section>')
+    return end === -1 ? seg : seg.slice(0, end)
+  }
+  const off = render('official')
+  const on = render('official', '', undefined, { directoryPickEnabled: true })
+  const cardOff = cardOnly(off, '工作区目录选择')
+  const cardOn = cardOnly(on, '工作区目录选择')
+  check('默认（没开）也渲染出这张卡', cardOff !== '')
+  const headOff = textOf(headerOf(cardOff))
+  const headOn = textOf(headerOf(cardOn))
+  check('默认关时概览恰好是「未启用 · 用官方应用内浏览对话框」（只前缀一次）',
+    headOff.includes('未启用 · 用官方应用内浏览对话框') && !headOff.includes('未启用 · 未启用'), headOff)
+  check('打开后概览说"开启中 · 桌面应用里弹系统文件夹框"',
+    headOn.includes('开启中') && headOn.includes('系统文件夹框'), headOn)
+  check('卡级开关就在标题行，且跟着设置值走（off=false / on=true）',
+    /role="switch"[^>]*aria-checked="false"/.test(headerOf(cardOff))
+    && /role="switch"[^>]*aria-checked="true"/.test(headerOf(cardOn)))
+  const body = bodyOf(cardOff)
+  const text = textOf(body)
+  check('正文说清这个开关到底改了什么（系统文件夹框 / 任意盘符）',
+    text.includes('系统文件夹框') && text.includes('任意盘符'), text.slice(0, 160))
+  check('正文说清"不用再手动输入盘符路径"（用户的原始诉求）',
+    text.includes('不用再手动输入盘符路径'))
+  check('正文如实说明只在桌面应用里生效、手机/浏览器不变',
+    text.includes('只在桌面应用里生效') && text.includes('手机') && text.includes('远端体验不变'), text.slice(-200))
+  check('正文说清即时生效、关掉回官方原样',
+    text.includes('即时生效') && text.includes('回到官方原样'))
+  check('正文引了官方那条已知限制（不枚举盘符根），不是我编的理由',
+    text.includes('不枚举盘符根') && text.includes('跨盘依赖浏览器 UI 的路径输入入口'))
+  // 与「统计行」卡同一条纪律：功能只有一个开关时，卡内不该再出现第二个开关。
+  check('卡内没有第二个开关（开关只在标题行）', !body.includes('role="switch"'), text.slice(-120))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

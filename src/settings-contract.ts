@@ -116,6 +116,25 @@ export const NOTIFY_KINDS_FIELD = 'notifyKinds'
 /** 「测试推送」那条路由（0.17.0）：用户在设置页点一下，验证凭据与渠道对不对。 */
 export const NOTIFY_TEST_API_PATH = '/composer-ux/notify/test'
 
+// ── 工作区目录选择自适应（0.19.0）────────────────────────────────────────────
+//
+// 背景：官方的目录选择是两个互斥界面（`-native` 系统选择器 / `-browse` 应用内 Miller 分栏），
+// 由 `-auto` 在宿主启动时二选一，**只看宿主不看客户端**；官方 README 自己承认 `-browse`
+// 「不枚举盘符根 —— 跨盘依赖浏览器 UI 的路径输入入口」，而社区 bundle `dsh-mobile` 为手机端
+// 把 browse 钉死 ⇒ 桌面也只剩应用内框、换盘必须手输。
+//
+// 做法：槽位自身的 shadow 能力（同 cell 不同优先级可共存、**最低的活条目渲染**）。桌面应用的
+// preload 注入了 `__DSH_DIRECTORY_PICKER__` ⇒ 本插件在优先级 -1 上接管那两个目录流程槽位，
+// 弹系统文件夹框；手机/远端浏览器没有该桥 ⇒ 一个槽位都不注册，官方界面照旧。
+
+/**
+ * 目录选择自适应开关。默认**关**。
+ *
+ * 为什么默认关：它是**接管官方槽位**（改掉别人的选择框），属于"不打招呼就不该动"的默认行为 ——
+ * 与通知总开关（默认关）同一个理由。用户在设置页打开后**即时生效**（不用重启）。
+ */
+export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'
+
 // ── 「每一栏一个开关」 ───────────────────────────────────────────────────────
 //
 // 六张折叠卡各有一个"这一栏要不要生效"的开关，**默认关**；总开关（`enabled`）默认开，
@@ -1032,6 +1051,7 @@ export type SettingsField =
   | typeof NOTIFY_PUSHPLUS_FIELD
   | typeof NOTIFY_WECOM_FIELD
   | typeof NOTIFY_KINDS_FIELD
+  | typeof DIRECTORY_PICK_ENABLED_FIELD
   | typeof OPTIMIZE_READ_TOOLS_FIELD
   | typeof OPTIMIZER_FRAMING_FIELD
   | typeof OPTIMIZER_PERMISSION_FIELD
@@ -1194,6 +1214,9 @@ export interface ComposerUxSettings {
   notifyWecomWebhook: string
   /** 三类事件各自的开关。 */
   notifyKinds: { readonly 'needs-input': boolean, readonly done: boolean, readonly error: boolean }
+  // ── 工作区目录选择自适应（0.19.0）────────────────────────────────────────
+  /** 桌面应用里把应用内浏览对话框换成系统文件夹框。默认**关**（接管官方槽位，不打招呼不动）。 */
+  directoryPickEnabled: boolean
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
@@ -1204,6 +1227,8 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
   notifyPushplusToken: '',
   notifyWecomWebhook: '',
   notifyKinds: { 'needs-input': true, done: true, error: true },
+  // 工作区目录选择自适应：默认**关**（0.19.0）。接管官方槽位这件事必须由用户自己点。
+  directoryPickEnabled: false,
   // 总开关默认开：它只是总闸，真正"要不要用这一栏"由下面五个开关决定（默认关）。
   enabled: true,
   // 五栏默认关（老文档由 sectionEnabledOf 迁移成"碰过就开"）。
@@ -1547,6 +1572,8 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
   return {
     // 微信通知（0.17.0，单向）：默认全关/全空。
     notifyEnabled: asBool(NOTIFY_ENABLED_FIELD),
+    // 工作区目录选择自适应（0.19.0）：默认关。
+    directoryPickEnabled: asBool(DIRECTORY_PICK_ENABLED_FIELD),
     notifyChannel: asNotifyChannel(),
     notifyPushplusToken: asString(NOTIFY_PUSHPLUS_FIELD),
     notifyWecomWebhook: asString(NOTIFY_WECOM_FIELD),

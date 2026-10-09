@@ -41,7 +41,7 @@ const mod = await import(`data:text/javascript;base64,${Buffer.from(bundled.outp
 
 const {
   DIRECTORY_FLOW_SLOTS, NATIVE_SHADOW_PRIORITY,
-  nativePickBridge, createPickFlow, applyOutcome, installDirectoryFlow,
+  nativePickBridge, createPickFlow, applyOutcome, installDirectoryFlow, createDirectoryFlowController,
 } = mod
 
 /** 让 microtask 队列跑干净（pick 的 then 是微任务）。 */
@@ -138,22 +138,28 @@ console.log('\n六、注册：有桥才装，装就装两条，优先级低于�
   const makeSlots = () => {
     const injects = []
     const registers = []
+    const disposed = []
     return {
-      injects, registers,
-      inject: (name, callback) => { injects.push({ name, callback }) },
+      injects, registers, disposed,
+      // 与真实签名一致：`slots.inject(...)` 返回卸载句柄（框架负责连子声明一起收）。
+      inject: (name, callback) => {
+        const id = injects.length
+        injects.push({ name, callback })
+        return () => { disposed.push(id) }
+      },
       register: (options, component) => { registers.push({ options, component }); return () => {} },
     }
   }
   const slots = makeSlots()
   const installed = installDirectoryFlow(slots, {}, 'COMPONENT')
-  check('没有桥 → 返回 false', installed === false)
+  check('没有桥 → 返回 undefined（一个槽位都不装）', installed === undefined, String(installed))
   check('没有桥 → 一个槽位都不 inject', slots.injects.length === 0, String(slots.injects.length))
   check('没有桥 → 一条都不注册', slots.registers.length === 0)
   check('优先级常量必须是负数（0 会与官方同优先级而抛错）', NATIVE_SHADOW_PRIORITY < 0, String(NATIVE_SHADOW_PRIORITY))
 
   const slots2 = makeSlots()
   const ok = installDirectoryFlow(slots2, { __DSH_DIRECTORY_PICKER__: bridge }, 'COMPONENT')
-  check('有桥 → 返回 true', ok === true)
+  check('有桥 → 返回卸载句柄', typeof ok === 'function')
   check('第一层只等 hero 槽位声明', slots2.injects.length === 1 && slots2.injects[0].name === DIRECTORY_FLOW_SLOTS[0], JSON.stringify(slots2.injects.map(i => i.name)))
   // 模拟框架：hero 槽位声明后跑回调 → 它接着去等 sidebar。
   slots2.injects[0].callback()
@@ -169,6 +175,59 @@ console.log('\n六、注册：有桥才装，装就装两条，优先级低于�
   const face = slots2.registers[0].options.inject()
   check('注入面给出 pick', typeof face.pick === 'function')
   check('pick 返回值就是桥的返回值', await face.pick() === 'D:\\x')
+  // 卸载句柄要真的把外层等待撤掉（否则关掉开关后仍留着一条 0 优先级的影子注册）。
+  ok()
+  check('卸载句柄撤掉外层 inject', slots2.disposed.length === 1, JSON.stringify(slots2.disposed))
+}
+
+console.log('\n七、开关控制器：开就装、关就卸、反复拨不出事（同优先级重复注册会当场抛错）')
+{
+  const makeSlots = () => {
+    const injects = []
+    const registers = []
+    const disposed = []
+    return {
+      injects, registers, disposed,
+      inject: (name, callback) => {
+        const id = injects.length
+        injects.push({ name, callback })
+        return () => { disposed.push(id) }
+      },
+      register: (options, component) => { registers.push({ options, component }); return () => {} },
+    }
+  }
+  const withBridge = { __DSH_DIRECTORY_PICKER__: bridge }
+
+  const off = makeSlots()
+  const c1 = createDirectoryFlowController({ slots: off, scope: withBridge, component: 'COMPONENT' })
+  c1.sync(false)
+  check('默认关：sync(false) 什么都不装', off.injects.length === 0 && off.disposed.length === 0, JSON.stringify([off.injects.length, off.disposed.length]))
+  c1.sync(true)
+  check('打开：装一层等待', off.injects.length === 1, String(off.injects.length))
+  c1.sync(true)
+  check('重复同步不会装第二遍（幂等）', off.injects.length === 1, String(off.injects.length))
+  c1.sync(false)
+  check('关掉：把已装的卸载掉', off.disposed.length === 1 && off.injects.length === 1, JSON.stringify([off.disposed.length, off.injects.length]))
+  c1.sync(false)
+  check('再关一次不重复卸载', off.disposed.length === 1, JSON.stringify(off.disposed))
+  c1.sync(true)
+  check('重新打开：重新装一层（可反复）', off.injects.length === 2, String(off.injects.length))
+  c1.sync(true)
+  check('重新打开后依旧幂等', off.injects.length === 2, String(off.injects.length))
+  c1.dispose()
+  check('卸载控制器：撤掉当前那层', off.disposed.length === 2, JSON.stringify(off.disposed))
+  c1.dispose()
+  check('重复 dispose 不重复卸载', off.disposed.length === 2, JSON.stringify(off.disposed))
+
+  // 远端：开着开关也没有桥 ⇒ 永远不装，且不会因此报警/抛错。
+  const remote = makeSlots()
+  const c2 = createDirectoryFlowController({ slots: remote, scope: {}, component: 'COMPONENT' })
+  c2.sync(true)
+  c2.sync(true)
+  check('远端（没桥）即便开关是开的也不装', remote.injects.length === 0, String(remote.injects.length))
+  c2.sync(false)
+  check('远端关掉是空操作', remote.disposed.length === 0, JSON.stringify(remote.disposed))
+  c2.dispose()
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

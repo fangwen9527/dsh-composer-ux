@@ -23,6 +23,7 @@ import {
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS, SITE_URL,
   NOTIFY_CHANNEL_FIELD, NOTIFY_ENABLED_FIELD, NOTIFY_KINDS_FIELD, NOTIFY_PUSHPLUS_FIELD,
   NOTIFY_TEST_API_PATH, NOTIFY_WECOM_FIELD,
+  DIRECTORY_PICK_ENABLED_FIELD,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
@@ -997,6 +998,42 @@ function NotifyCard({ settings, setField }: {
   )
 }
 
+/**
+ * 「工作区目录选择」（0.19.0，默认**关**）。
+ *
+ * 为什么要有这张卡：0.18.0 把这个功能做成了"装了就生效"，而它的做法是**接管官方那两个
+ * 目录流程槽位**（比官方更低的优先级，见 src/client/directory-flow.ts）—— 属于改默认行为，
+ * 不打招呼就换掉别人的选择框是越界。所以这里给一个开关，默认关，用户自己点。
+ */
+function DirectoryPickCard({ settings, setField }: {
+  readonly settings: ComposerUxSettings
+  readonly setField: (field: SettingsField, value: unknown) => void
+}) {
+  const on = settings.directoryPickEnabled
+  return (
+    <FoldCard
+      name="工作区目录选择"
+      summary={on ? '开启中 · 桌面应用里弹系统文件夹框（任意盘符点选）' : '用官方应用内浏览对话框'}
+      toggle={{ checked: on, onChange: next => { setField(DIRECTORY_PICK_ENABLED_FIELD, next) } }}
+    >
+      <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
+        打开后：在<strong>桌面应用</strong>里点「选择工作区目录」直接弹 Windows 系统文件夹框 —— 任意盘符点进去选，
+        <strong>不用再手动输入盘符路径</strong>，也能在里面新建文件夹。
+        <br />
+        <span style={{ opacity: 0.75 }}>
+          官方那个应用内对话框在 Windows 上祖先链止于盘符根（它自己的 README 写着「不枚举盘符根 ——
+          跨盘依赖浏览器 UI 的路径输入入口」），所以换盘才要手输；这一项就是把它换成系统框。
+        </span>
+        <br />
+        <span style={{ opacity: 0.75 }}>
+          只在桌面应用里生效（只有那儿有系统对话框的接入口）；手机 / 浏览器里仍是官方那个应用内浏览
+          对话框（带路径输入），远端体验不变。开关<strong>即时生效</strong>，不用重启；关掉即回到官方原样。
+        </span>
+      </div>
+    </FoldCard>
+  )
+}
+
 /** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
 function RestartButton({ restart }: { readonly restart: RestartController }) {
   const busy = restart.stage === 'restarting' || restart.stage === 'asking'
@@ -1211,6 +1248,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           </span>
         </div>
         <NotifyCard settings={settings} setField={setField} />
+        <DirectoryPickCard settings={settings} setField={setField} />
         <RestartBanner restart={restart} />
         {/*
           写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。

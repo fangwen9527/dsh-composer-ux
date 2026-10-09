@@ -161,17 +161,67 @@ export interface SlotsLike {
  * @param slots - `ctx.slots` 或测试替身。
  * @param scope - 取桥的对象（生产 `globalThis`）。
  * @param component - 占用者组件（无界面：弹系统框）。
- * @returns 是否装上了影子接管。
+ * @returns 卸载句柄；**没有桥时返回 undefined**（远端一点都不装）。
  */
-export function installDirectoryFlow(slots: SlotsLike, scope: unknown, component: unknown): boolean {
+export function installDirectoryFlow(slots: SlotsLike, scope: unknown, component: unknown): (() => void) | undefined {
   const bridge = nativePickBridge(scope)
-  if (bridge === undefined) return false
+  if (bridge === undefined) return undefined
   const pick = (): Promise<string | null> => bridge.pick()
   const injected = (): { pick: () => Promise<string | null> } => ({ pick })
   // 两个声明期都要在才装：生成器让两条注册成为一次事务性效果（官方界面同一套嵌套写法）。
-  slots.inject(DIRECTORY_FLOW_SLOTS[0], () => slots.inject(DIRECTORY_FLOW_SLOTS[1], function* () {
+  // 返回的卸载句柄由 `slots.inject` 提供（框架的"卸载时连子声明一起收"由它负责）。
+  const dispose = slots.inject(DIRECTORY_FLOW_SLOTS[0], () => slots.inject(DIRECTORY_FLOW_SLOTS[1], function* () {
     yield slots.register({ name: DIRECTORY_FLOW_SLOTS[0], inject: injected, priority: NATIVE_SHADOW_PRIORITY }, component)
     yield slots.register({ name: DIRECTORY_FLOW_SLOTS[1], inject: injected, priority: NATIVE_SHADOW_PRIORITY }, component)
   }))
-  return true
+  return typeof dispose === 'function' ? (dispose as () => void) : undefined
 }
+
+/** 开关 → 影子接管的控制器（0.19.0 设置项「工作区目录选择」）。 */
+export interface DirectoryFlowController {
+  /**
+   * 报告开关当前值：开就装、关就卸。
+   * @param enabled - 设置页那个开关的值。
+   */
+  sync: (enabled: boolean) => void
+  /** 卸载（插件卸载 / HMR 换掉整个客户端半）。 */
+  dispose: () => void
+}
+
+/** `createDirectoryFlowController` 的依赖。 */
+export interface DirectoryFlowControllerOptions {
+  slots: SlotsLike
+  scope: unknown
+  component: unknown
+}
+
+/**
+ * 让设置页那个开关真的能开能关。
+ *
+ * 为什么要单独一个控制器而不是在 `apply` 里直接调：开关是**运行时**值，用户会在不重启的
+ * 情况下反复拨它。这里把两件容易出错的事收在一处：
+ *  · **幂等**：已经装着时再 `sync(true)` 什么都不做 —— 同一个槽位同优先级重复注册会当场抛
+ *    `single slot "…" already has a registration`（会连累整个客户端半挂不上）；
+ *  · **可反复**：关掉即卸载（官方那条 0 优先级条目立刻成为最低者、界面回到官方对话框），
+ *    再打开能重新装上。
+ * @param options - slots / scope / component。
+ * @returns 控制器。
+ */
+export function createDirectoryFlowController(options: DirectoryFlowControllerOptions): DirectoryFlowController {
+  let installed: (() => void) | undefined
+  const dispose = (): void => {
+    installed?.()
+    installed = undefined
+  }
+  return {
+    sync(enabled) {
+      if (enabled) {
+        if (installed === undefined) installed = installDirectoryFlow(options.slots, options.scope, options.component)
+        return
+      }
+      dispose()
+    },
+    dispose,
+  }
+}
+

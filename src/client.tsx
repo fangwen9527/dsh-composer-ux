@@ -45,7 +45,7 @@ import {
   dockReducer, dockSummary, insertDecision, type OptimizeDockState,
 } from './client/optimize-dock.ts'
 import { clearDockStateOnHost, loadDockState, saveDockState } from './client/optimize-state.ts'
-import { installDirectoryFlow } from './client/directory-flow.ts'
+import { createDirectoryFlowController } from './client/directory-flow.ts'
 import { DirectoryFlowEntry } from './client/DirectoryFlowEntry.tsx'
 
 export const name = 'composer-ux'
@@ -87,17 +87,6 @@ const NULL_SCOPE: SettingsScopeLike = {
 /** 客户端插件入口。 */
 export function apply(ctx: any): void {
   const slots = ctx.slots
-
-  /**
-   * 工作区目录选择的自适应（0.18.0）。
-   *
-   * 桌面应用的 preload 注入了 `window.__DSH_DIRECTORY_PICKER__` ⇒ 我在比官方界面更低的
-   * 优先级上接管这两个槽位，弹**系统文件夹框**（任意盘符点选，不手输）；手机 / 远端
-   * 浏览器没有这个桥 ⇒ 这个函数直接返回，一个槽位都不注册，官方应用内浏览界面照旧渲染。
-   *
-   * 依据是槽位的 shadow 能力（同 cell 不同优先级可共存、最低者渲染），不是改官方文件。
-   */
-  installDirectoryFlow(slots, globalThis, DirectoryFlowEntry)
 
   const live = createSnapshotStore<ComposerUxSettings>({ ...DEFAULT_SETTINGS })
   const menu = createSnapshotStore<MenuState | null>(null)
@@ -792,6 +781,28 @@ export function apply(ctx: any): void {
 
   // 设置页折叠卡片样式（常驻；只管设置页外观，与总开关无关）。
   ctx.effect(() => installSettingsCardStyle(), 'composer-ux: settings card style')
+
+  /**
+   * 工作区目录选择自适应（0.18.0 起，0.19.0 起由设置开关控制，默认**关**）。
+   *
+   * 桌面应用的 preload 注入了 `window.__DSH_DIRECTORY_PICKER__` ⇒ 在比官方界面更低的优先级
+   * （-1）上接管这两个目录流程槽位，弹**系统文件夹框**（任意盘符点选，不用手输路径）；手机 /
+   * 远端浏览器没有这个桥 ⇒ `installDirectoryFlow` 直接返回，一个槽位都不注册，官方应用内浏览
+   * 界面照旧渲染（远端体验零退化）。依据是槽位的 shadow 能力，不是改官方文件。
+   *
+   * 为什么跟 `live` 订阅而不是只看启动值：用户在设置页拨这个开关时不该被要求重启。
+   * 装卸的幂等与"关掉要能再打开"由 `createDirectoryFlowController`（有单测 + 变异守着）负责。
+   */
+  ctx.effect(() => {
+    const flow = createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })
+    const syncDirectoryFlow = (): void => { flow.sync(live.getSnapshot().directoryPickEnabled === true) }
+    syncDirectoryFlow()
+    const unsubscribe = live.subscribe(syncDirectoryFlow)
+    return () => {
+      unsubscribe()
+      flow.dispose()
+    }
+  }, 'composer-ux: directory flow')
 
   // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。
   ctx.effect(() => installQuickButtonStyle(), 'composer-ux: quick button style')

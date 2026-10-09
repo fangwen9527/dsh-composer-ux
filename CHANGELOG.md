@@ -2,6 +2,34 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.19.2] — 2026-10-09（修：设置字段必须进宿主 schema —— 补回 0.17.0 漏掉的 5 个通知字段）
+
+**怎么发现的**：给「工作区目录选择」加开关时顺手核对宿主 schema（`src/host.ts` 的 `ownSchema()`）
+与设置契约，发现那张表到 `priceAutoSync` 就结束了 —— **0.17.0 的 5 个通知字段
+（`notifyEnabled` / `notifyChannel` / `notifyPushplusToken` / `notifyWecomWebhook` / `notifyKinds`）
+从来没进去过**。
+
+**为什么这不是"界面少一块"而是真故障**：写设置走宿主设置服务的 `settings.mutate`，它对每个
+path 先查 `isVolatilePath(schema, path)`，字段没声明就**直接抛**
+`Config field "…" is not volatile`（DSH 源码 `packages/settings/settings/src/index.ts` 的 `write`）。
+所以通知卡那几个开关**一直存不住**：用户一拨就会看到本插件那条「写入失败」提示条，值也不会留下。
+本期的目录选择开关若不补 schema，会是同一个下场。
+
+**改动**：
+
+- `src/host.ts`：`ownSchema()` 补 6 个字段（5 个通知 + `DIRECTORY_PICK_ENABLED_FIELD`），
+  并把这段事故与判据写在注释里。
+- `test/client-registration.mjs` 第 16 节（新增 9 条）：**逐字段核对** —— 设置契约里所有
+  `*_FIELD` 常量（49 个）必须都出现在 `ownSchema()` 里，再点名 6 个关键字段。
+  以后任何新字段漏进 schema 都会当场变红，而不是等用户去拨开关。
+- `test/mutation-guards.mjs`：新增 `HG`（schema 漏目录选择字段）、`HH`（schema 再漏通知总开关）。
+
+**验证**：`npm test` —— **29 个套件 2549 passed / 0 failed**（`client-registration` 256→265）；
+`npm run test:mutations` —— **182 条全部咬住**。
+
+**注意**：0.17.0 那 5 个通知字段此前存不住值 —— 如果你之前拨过通知卡上的开关、看到过「写入失败」
+或"拨了又弹回"，那不是你看错，就是这个原因；现在可以正常拨了。
+
 ## [0.19.1] — 2026-10-09（只改文档：README 的变异条数写旧了）
 
 0.19.0 发版时 README 里那句变异条数还写着上一版的 **174**，而这一版实际跑出来是 **180**

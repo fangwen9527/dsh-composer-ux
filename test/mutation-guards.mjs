@@ -1525,6 +1525,22 @@ const cases = [
     test: "test/settings-render.mjs",
     expect: "默认（没开）也渲染出这张卡",
   },
+  {
+    name: "HG 宿主 schema 漏掉目录选择字段（写设置会被 settings.mutate 抛 not volatile ⇒ 开关拨不动）",
+    file: "src/host.ts",
+    from: "    [DIRECTORY_PICK_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.directoryPickEnabled),\n",
+    to: "",
+    test: "test/client-registration.mjs",
+    expect: "工作区目录选择开关（DIRECTORY_PICK_ENABLED_FIELD）在 schema 里",
+  },
+  {
+    name: "HH 宿主 schema 再漏掉通知总开关（0.17.0 的真实事故复发）",
+    file: "src/host.ts",
+    from: "    [NOTIFY_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.notifyEnabled),\n",
+    to: "",
+    test: "test/client-registration.mjs",
+    expect: "微信通知总开关（NOTIFY_ENABLED_FIELD）在 schema 里",
+  },
 
 ]
 

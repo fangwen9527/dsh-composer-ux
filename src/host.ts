@@ -47,6 +47,8 @@ import {
   SYNC_API_PATH,
   BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
   PRICE_AUTO_SYNC_FIELD, SYNCED_PRICES_FIELD, parseHolidayYears,
+  NOTIFY_ENABLED_FIELD, NOTIFY_CHANNEL_FIELD, NOTIFY_PUSHPLUS_FIELD, NOTIFY_WECOM_FIELD, NOTIFY_KINDS_FIELD,
+  DIRECTORY_PICK_ENABLED_FIELD,
   type QuickPromptBook,
 } from './settings-contract.ts'
 import {
@@ -559,6 +561,23 @@ function ownSchema(): Schema {
     [SYNCED_PRICES_FIELD]: z.any().required(false),
     // 「金额」（0.10.0）自动同步官方价：默认关（会自动出网的开关不默认开）。
     [PRICE_AUTO_SYNC_FIELD]: z.boolean().default(DEFAULT_SETTINGS.priceAutoSync),
+    // 微信通知（0.17.0）。⚠️ 2026-10-09 补：这 5 个字段在 0.17.0 漏了 —— 只加进了设置契约
+    // 与设置页，**没加进这张 schema**。后果不是"界面少了什么"，而是宿主设置服务的写路径会
+    // 直接拒绝：`settings.mutate` 对每个 path 先查 `isVolatilePath(schema, path)`，
+    // 没声明就抛 `Config field "notifyEnabled" is not volatile`（见 DSH 源码
+    // packages/settings/settings/src/index.ts 的 `write`），于是通知卡那几个开关根本存不住。
+    // 教训写进测试：`test/client-registration.mjs` 第 16 节逐字段核对契约与这张表。
+    [NOTIFY_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.notifyEnabled),
+    [NOTIFY_CHANNEL_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyChannel),
+    [NOTIFY_PUSHPLUS_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyPushplusToken),
+    [NOTIFY_WECOM_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyWecomWebhook),
+    [NOTIFY_KINDS_FIELD]: z.object({
+      'needs-input': z.boolean().default(DEFAULT_SETTINGS.notifyKinds['needs-input']),
+      done: z.boolean().default(DEFAULT_SETTINGS.notifyKinds.done),
+      error: z.boolean().default(DEFAULT_SETTINGS.notifyKinds.error),
+    }),
+    // 工作区目录选择（0.19.0）：默认关（接管官方槽位这件事必须由用户自己点）。
+    [DIRECTORY_PICK_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.directoryPickEnabled),
   })
 }
 

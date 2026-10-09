@@ -1195,5 +1195,37 @@ console.log('15. 「工作区目录选择」的接线：默认关、开机同步
     client.includes('flow.sync(live.getSnapshot().directoryPickEnabled === true)'))
 }
 
+console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须都在 ownSchema() 里（0.19.0 补漏）')
+{
+  // 为什么必须有这一节：写设置走的是宿主设置服务的 `settings.mutate`，它对每个 path 先查
+  // `isVolatilePath(schema, path)` —— 字段没在插件导出的 Config（ownSchema）里声明就**直接抛**
+  // `Config field "…" is not volatile`（DSH 源码 packages/settings/settings/src/index.ts 的 write）。
+  // 症状不是"界面少了一块"，而是"开关拨不动 + 弹一条写入失败"。
+  // 0.17.0 的 5 个通知字段就是这么漏的（契约有、设置页有、schema 没有），2026-10-09 才发现；
+  // 这一节把它变成任何新字段都绕不过去的核对。
+  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
+  const host = readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n')
+  const start = host.indexOf('function ownSchema()')
+  check('找得到 ownSchema()（下面所有核对都基于它）', start !== -1)
+  const end = host.indexOf('\n}', start)
+  const body = host.slice(start, end === -1 ? undefined : end)
+  const declared = [...contract.matchAll(/export const ([A-Z0-9_]+_FIELDS?)\s*=/g)].map(match => match[1])
+  check('契约里确实有一批字段常量（正则没跑空）', declared.length >= 40, String(declared.length))
+  const missing = declared.filter(name => !body.includes(name))
+  check(`契约里的 ${declared.length} 个字段常量全部在 ownSchema() 里（缺一个 = 那个开关拨不动）`,
+    missing.length === 0, missing.join(' / '))
+  // 逐个点名 0.17.0 漏过的那 5 个 + 0.19.0 新增的这 1 个：漏了要一眼看出是哪个。
+  for (const [name, label] of [
+    ['NOTIFY_ENABLED_FIELD', '微信通知总开关'],
+    ['NOTIFY_CHANNEL_FIELD', '微信通知渠道'],
+    ['NOTIFY_PUSHPLUS_FIELD', 'PushPlus token'],
+    ['NOTIFY_WECOM_FIELD', '企业微信 webhook'],
+    ['NOTIFY_KINDS_FIELD', '三类事件开关'],
+    ['DIRECTORY_PICK_ENABLED_FIELD', '工作区目录选择开关'],
+  ]) {
+    check(`${label}（${name}）在 schema 里`, body.includes(name))
+  }
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

@@ -1423,10 +1423,10 @@ const cases = [
   {
     name: "FS 远端也注册（没有 preload 桥时照样抢占槽位）—— 手机上会变成「点了没反应」",
     file: "src/client/directory-flow.ts",
-    from: "  const bridge = nativePickBridge(scope)\n  if (bridge === undefined) return false",
-    to: "  const bridge = nativePickBridge(scope)\n  if (false) return false",
+    from: "  const bridge = nativePickBridge(scope)\n  if (bridge === undefined) return undefined",
+    to: "  const bridge = nativePickBridge(scope)\n  if (false) return undefined",
     test: "test/directory-flow.mjs",
-    expect: "没有桥 → 返回 false",
+    expect: "没有桥 → 返回 undefined（一个槽位都不装）",
   },
   {
     name: "FT 影子优先级写成 0（与官方同优先级 ⇒ 安装期抛 already has a registration）",

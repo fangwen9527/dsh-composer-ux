@@ -1420,6 +1420,63 @@ const cases = [
     expect: "打码只留头 4 尾 2",
   },
 
+  {
+    name: "FS 远端也注册（没有 preload 桥时照样抢占槽位）—— 手机上会变成「点了没反应」",
+    file: "src/client/directory-flow.ts",
+    from: "  const bridge = nativePickBridge(scope)\n  if (bridge === undefined) return false",
+    to: "  const bridge = nativePickBridge(scope)\n  if (false) return false",
+    test: "test/directory-flow.mjs",
+    expect: "没有桥 → 返回 false",
+  },
+  {
+    name: "FT 影子优先级写成 0（与官方同优先级 ⇒ 安装期抛 already has a registration）",
+    file: "src/client/directory-flow.ts",
+    from: "priority: NATIVE_SHADOW_PRIORITY }, component)",
+    to: "priority: 0 }, component)",
+    test: "test/directory-flow.mjs",
+    expect: "两条都带 shadow 优先级",
+  },
+  {
+    name: "FU 去掉「已上膛」守卫（保持 open=true 时每次重渲染都再弹一次框）",
+    file: "src/client/directory-flow.ts",
+    from: "      if (armed) return\n      armed = true",
+    to: "      armed = true",
+    test: "test/directory-flow.mjs",
+    expect: "保持 true 不再弹（busy 采纳期间重渲染）",
+  },
+  {
+    name: "FV open 落回时不上膛（第二次点「选择工作区目录」不再弹框）",
+    file: "src/client/directory-flow.ts",
+    from: "      if (!open) {\n        armed = false\n        return\n      }",
+    to: "      if (!open) {\n        return\n      }",
+    test: "test/directory-flow.mjs",
+    expect: "再次请求 → 弹第二次",
+  },
+  {
+    name: "FW 取消被当成选中（用户点了取消却加了个工作区）",
+    file: "src/client/directory-flow.ts",
+    from: "        path => { settle(path === null ? { kind: 'cancel' } : { kind: 'picked', path }) },",
+    to: "        path => { settle({ kind: 'picked', path }) },",
+    test: "test/directory-flow.mjs",
+    expect: "null → cancel",
+  },
+  {
+    name: "FX 卸载后迟到的结果照样回报（HMR 换掉占用者会凭空加一个工作区）",
+    file: "src/client/directory-flow.ts",
+    from: "    if (options.isAlive !== undefined && !options.isAlive()) return\n    options.report(outcome)",
+    to: "    options.report(outcome)",
+    test: "test/directory-flow.mjs",
+    expect: "死实例的结果被丢弃",
+  },
+  {
+    name: "FY 失败只说 String(reason)（丢掉 Error.message，界面提示变成 Error: xxx）",
+    file: "src/client/directory-flow.ts",
+    from: "message: reason instanceof Error ? reason.message : String(reason)",
+    to: "message: String(reason)",
+    test: "test/directory-flow.mjs",
+    expect: "Error → error 且取 message",
+  },
+
 ]
 
 let allBit = true

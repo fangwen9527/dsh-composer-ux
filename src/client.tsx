@@ -45,6 +45,8 @@ import {
   dockReducer, dockSummary, insertDecision, type OptimizeDockState,
 } from './client/optimize-dock.ts'
 import { clearDockStateOnHost, loadDockState, saveDockState } from './client/optimize-state.ts'
+import { installDirectoryFlow } from './client/directory-flow.ts'
+import { DirectoryFlowEntry } from './client/DirectoryFlowEntry.tsx'
 
 export const name = 'composer-ux'
 /**
@@ -85,6 +87,17 @@ const NULL_SCOPE: SettingsScopeLike = {
 /** 客户端插件入口。 */
 export function apply(ctx: any): void {
   const slots = ctx.slots
+
+  /**
+   * 工作区目录选择的自适应（0.18.0）。
+   *
+   * 桌面应用的 preload 注入了 `window.__DSH_DIRECTORY_PICKER__` ⇒ 我在比官方界面更低的
+   * 优先级上接管这两个槽位，弹**系统文件夹框**（任意盘符点选，不手输）；手机 / 远端
+   * 浏览器没有这个桥 ⇒ 这个函数直接返回，一个槽位都不注册，官方应用内浏览界面照旧渲染。
+   *
+   * 依据是槽位的 shadow 能力（同 cell 不同优先级可共存、最低者渲染），不是改官方文件。
+   */
+  installDirectoryFlow(slots, globalThis, DirectoryFlowEntry)
 
   const live = createSnapshotStore<ComposerUxSettings>({ ...DEFAULT_SETTINGS })
   const menu = createSnapshotStore<MenuState | null>(null)

@@ -550,5 +550,21 @@ console.log('\n9. 「工作区目录选择」卡（0.19.0，默认关）')
   check('卡内没有第二个开关（开关只在标题行）', !body.includes('role="switch"'), text.slice(-120))
 }
 
+console.log('\n10. 真机在 0.2.1-alpha.2 干净 profile 上发现的两个渲染瑕疵（2026-10-10）')
+{
+  const fresh = render('official')
+  const panelText = textOf(cardOf(fresh, '设置面板'))
+  check('「设置面板」概览不再出现 undefined×undefined（干净 profile 没存过尺寸）',
+    !panelText.includes('undefined'), panelText)
+  check('尺寸没存过时如实说"尺寸用官方默认"', panelText.includes('尺寸用官方默认'), panelText)
+  const sized = render('official', '', undefined, { panelWidth: 834, panelHeight: 550 })
+  check('存过尺寸时给出真实尺寸', textOf(cardOf(sized, '设置面板')).includes('834×550'),
+    textOf(cardOf(sized, '设置面板')))
+  const notifyHead = textOf(headerOf(cardOf(fresh, '微信通知')))
+  check('「微信通知」概览没有被 FoldCard 前缀两次（写成「未启用 · 未启用 · …」）',
+    !notifyHead.includes('未启用 · 未启用'), notifyHead)
+  check('「微信通知」概览仍说清"只能通知，不能回"', notifyHead.includes('只能通知，不能回'), notifyHead)
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

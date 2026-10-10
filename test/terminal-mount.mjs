@@ -404,9 +404,15 @@ check('依赖是区间（每个窗口都带 pre 比较器与独占上界，不�
   typeof range === 'string' && !range.includes('*') && range !== 'latest'
   && range.split('||').every((part) => /^\s*>=\S+ <\S+\s*$/.test(part)),
   String(range))
-check('依赖窗口覆盖两个已验证过的运行时（0.1.7 与 0.2.0 —— 后者是本机升级后的实际版本）',
+// 2026-10-10 升级 0.2.1-alpha.2 时的教训：`>=0.2.0-rc.1 <0.3.0` 在 semver 下**不包含**
+// `0.2.1-alpha.2` —— 带预发布的版本只有在同号段的比较符也带预发布时才算满足。于是 pnpm 装了
+// 0.2.0-rc.2，而宿主对新运行时做了严格对齐检查（tool-terminal 的 peerDeps 是精确版本），
+// 结果那一行被禁用：`Plugin @deepseek-ai/dsh-tool-terminal@0.2.0-rc.2 is incompatible with
+// dsh 0.2.1-alpha.2`。所以每个预发布线都要单列一段窗口。
+check('依赖窗口覆盖三个已验证过的运行时（0.1.7 / 0.2.0-rc.2 / 0.2.1-alpha.2 的预发布线）',
   typeof range === 'string' && range.includes('>=0.1.7-rc.1 <0.1.8')
-  && range.includes('>=0.2.0-rc.1 <0.3.0'),
+  && range.includes('>=0.2.0-rc.1 <0.2.1-alpha.0')
+  && range.includes('>=0.2.1-alpha.1 <0.3.0'),
   `实际 ${String(range)}`)
 
 check('没有在 lib 里自己实现这 6 个工具（这一档是官方包提供的）',

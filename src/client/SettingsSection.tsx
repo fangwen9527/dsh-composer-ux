@@ -94,10 +94,27 @@ export interface SettingsSectionInjected {
   }
 }
 
-export type SettingsSectionProps =
-  PropsRuntime<'settings.section'>
-  & SettingsSectionOwnerProps
-  & InjectFace<SettingsSectionInjected>
+/**
+ * 设置页组件的 props = 槽位持有方给的那点（`close`）+ 本插件自己注入的面。
+ *
+ * ⚠️ **这里故意逐项写出，不并 `PropsRuntime<'settings.section'>` 也不并 `InjectFace<…>`**：
+ * 那两个类型都带 `{ [key: string]: any }` 的开放索引（本插件按能力探测标准 props 的地方才需要它），
+ * 并进来就等于给任意 props 名开后门。2026-10-10 真机上炸的 `setField is not a function`
+ * 就是这么漏过 tsc 的：设置页把 `setField` 当成槽位给的 props 用，而三版 DSH 的 slots 契约
+ * 都只有 `close`。现在写错一个名字，`npx tsc --noEmit` 当场红。
+ */
+export type SettingsSectionProps = SettingsSectionOwnerProps & {
+  /** 设置快照（注入面的 `hooks.live`，框架以 `useXxx` 形式合进 props）。 */
+  useLive: <S>(selector: (value: ComposerUxSettings) => S, equal?: (a: S, b: S) => boolean) => S
+  /** 快捷指令本的客户端快照。 */
+  useBook: <S>(selector: (value: QuickPromptBook) => S, equal?: (a: S, b: S) => boolean) => S
+  /** `''` = 正常；`saving` = 正在写；其余 = 上一次的错误文案。 */
+  useBookStatus: <S>(selector: (value: string) => S, equal?: (a: S, b: S) => boolean) => S
+  /** 设置写入的说明行。 */
+  useWriteNotice: <S>(selector: (value: string) => S, equal?: (a: S, b: S) => boolean) => S
+  /** 本插件在槽位注册时提供的动作面。 */
+  actions: SettingsSectionInjected['actions']
+}
 
 /** 展开区内的导语。 */
 const bodyLead: CSSProperties = { ...description, margin: '12px 0' }
@@ -966,7 +983,7 @@ function NotifyCard({ settings, setField }: {
   return (
     <FoldCard
       name="微信通知"
-      summary={on ? `已开 · ${channel === 'pushplus' ? 'PushPlus' : '企业微信机器人'} · 只能通知，不能回` : '未启用 · 只能通知，不能回'}
+      summary={on ? `已开 · ${channel === 'pushplus' ? 'PushPlus' : '企业微信机器人'} · 只能通知，不能回` : '只能通知，不能回'}
       toggle={{ checked: on, onChange: next => { setField(NOTIFY_ENABLED_FIELD, next) } }}
     >
       <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
@@ -1106,7 +1123,7 @@ function RestartBanner({ restart }: { readonly restart: RestartController }) {
 }
 
 /** 设置页主体。 */
-export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotice, actions, setField }: SettingsSectionProps) {
+export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotice, actions }: SettingsSectionProps) {
   const settings = useLive(item => item)
   const book = useBook(item => item)
   const bookStatus = useBookStatus(item => item)
@@ -1145,8 +1162,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
     : settings.menuMode === 'browser'
       ? '当前：浏览器菜单（粘贴免授权）'
       : `当前：自定义菜单 · ${menuEnabled} / ${MENU_ITEMS.length} 项开启`
-  const panelSummary = `边缘缩放 ${settings.panelResize ? '开' : '关'}`
-    + ` · ${settings.panelWidth}×${settings.panelHeight}`
+  // 尺寸没存过时（全新 profile 就是这种）不能把 `undefined×undefined` 摆出来 ——
+  // 2026-10-10 在 0.2.1-alpha.2 的干净 profile 上真机看到过。这时如实说"用官方默认"。
+  const panelSize = typeof settings.panelWidth === 'number' && typeof settings.panelHeight === 'number'
+    ? `${settings.panelWidth}×${settings.panelHeight}`
+    : '尺寸用官方默认'
+  const panelSummary = `边缘缩放 ${settings.panelResize ? '开' : '关'} · ${panelSize}`
   // 请求头栏目的概览直接复用宿主半写回来的执行结果（'已写入 opencode-go' 这类）。
   const headerSummary = settings.headerEnabled
     ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
@@ -1247,8 +1268,8 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             </a>
           </span>
         </div>
-        <NotifyCard settings={settings} setField={setField} />
-        <DirectoryPickCard settings={settings} setField={setField} />
+        <NotifyCard settings={settings} setField={actions.setField} />
+        <DirectoryPickCard settings={settings} setField={actions.setField} />
         <RestartBanner restart={restart} />
         {/*
           写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。

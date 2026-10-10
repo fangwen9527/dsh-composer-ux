@@ -54,7 +54,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test:suites": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/terminal-mount.mjs && node test/stats-line.mjs && node test/stats-dom.mjs && node test/pricing.mjs && node test/usage-fold.mjs && node test/price-sync.mjs && node test/official-pricing.mjs && node test/balance.mjs && node test/holiday-sync.mjs && node test/client-registration.mjs && node test/settings-render.mjs && node test/cost-panel-render.mjs && node test/settings-service-adopt.mjs && node test/optimize-ledger.mjs && node test/optimize-state.mjs && node test/optimize-tools.mjs && node test/panel-split-render.mjs && node test/notify-route.mjs && node test/notify-send.mjs && node test/notify-hooks.mjs && node test/wechat-notify.mjs && node test/directory-flow.mjs && node test/restart-helper-desktop.mjs && node test/restart-screen.mjs",
+    "test:suites": "node test/host-header-mirror.mjs && node test/host-settings-generations.mjs && node test/quick-commands.mjs && node test/quick-store.mjs && node test/terminal-policy.mjs && node test/terminal-mount.mjs && node test/stats-line.mjs && node test/stats-dom.mjs && node test/pricing.mjs && node test/usage-fold.mjs && node test/price-sync.mjs && node test/official-pricing.mjs && node test/balance.mjs && node test/holiday-sync.mjs && node test/client-registration.mjs && node test/settings-render.mjs && node test/cost-panel-render.mjs && node test/settings-service-adopt.mjs && node test/optimize-ledger.mjs && node test/optimize-state.mjs && node test/optimize-tools.mjs && node test/panel-split-render.mjs && node test/notify-route.mjs && node test/notify-send.mjs && node test/notify-hooks.mjs && node test/wechat-notify.mjs && node test/directory-flow.mjs && node test/retry-write.mjs && node test/restart-helper-desktop.mjs && node test/restart-screen.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:mutations": "node scripts/run-mutations.mjs",
     "typecheck": "tsc --noEmit",
@@ -65,7 +65,7 @@
     "gates": "npm run check:tag && npm run check:pack && npm run check:docs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0"
+    "@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0"
   },
   "devDependencies": {
     "@deepseek-ai/cosmokit": "^1.8.5",

@@ -1227,5 +1227,37 @@ console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须
   }
 }
 
+console.log('17. 真机事故（0.2.1-alpha.2，2026-10-10）：设置页用了一个不存在的 props')
+{
+  // 事故原样：设置页把 `setField` 当成槽位给的 props 用（`setField={setField}`），而三版 DSH 的
+  // `settings.section` 契约都只有 `close` ⇒ 真机上点开关炸 `TypeError: setField is not a function`。
+  // 正确路径是插件自己注入的 `actions.setField`。这一节同时钉住"为什么 tsc 当时没拦住"：
+  // 带开放索引的那两个类型（PropsRuntime / InjectFace）不许再进这个组件的 props。
+  const section = readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n')
+  const bare = section.match(/setField=\{(?!actions\.setField)[^}]*\}/g) ?? []
+  check('设置页每一处 `setField={…}` 都传 `actions.setField`（顶层 setField 不存在）',
+    bare.length === 0, bare.join(' / '))
+  check('顶层 props 解构里不再出现 `setField`',
+    !/export function SettingsSection\(\{[^}]*\bsetField\b/u.test(section))
+  // 只看类型别名本体：注释里提到那两个开放类型名是正常的（注释正是在解释为什么不用它们）。
+  const alias = /export type SettingsSectionProps = ([\s\S]*?)\n\n/u.exec(section)?.[1] ?? ''
+  check('组件 props 类型逐项写出（别名本体不并带开放索引的 PropsRuntime / InjectFace）',
+    alias.startsWith('SettingsSectionOwnerProps & {')
+    && !/PropsRuntime|InjectFace/u.test(alias), alias.slice(0, 80).replace(/\n/gu, ' '))
+  check('组件 props 里显式声明了 actions 与四个 useXxx',
+    /actions: SettingsSectionInjected\['actions'\]/u.test(section)
+    && /useLive:/u.test(section) && /useBook:/u.test(section)
+    && /useBookStatus:/u.test(section) && /useWriteNotice:/u.test(section))
+
+  const faces = readFileSync('types/dsh-externals.d.ts', 'utf8').replace(/\r\n/g, '\n')
+  check('手写类型面里 `settings.section` 的持有方 props 按真实契约声明（只有 close）',
+    /export type SettingsSectionOwnerProps = \{[\s\S]{0,400}?close: \(\) => void/u.test(faces)
+    && !/SettingsSectionOwnerProps = \{ readonly \[key: string\]: any \}/u.test(faces))
+
+  const host = readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n')
+  check('「快捷指令」迁移那次写走 retryWrite（启动期会和宿主抢 profile 写锁）',
+    /await retryWrite\([\s\S]{0,120}?service\.mutate\(NAMESPACE, \[\{ op: 'set', path: \[QUICK_ENABLED_FIELD\]/u.test(host))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

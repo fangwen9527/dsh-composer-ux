@@ -98,6 +98,34 @@ export const name = 'composer-ux'
 const PANEL_MIN = 560
 const PANEL_MAX = 4000
 
+/** 「快捷指令」迁移那次写的重试次数与退避基数（见 {@link retryWrite} 的调用点）。 */
+export const QUICK_MIGRATION_ATTEMPTS = 4
+export const QUICK_MIGRATION_RETRY_MS = 300
+
+/**
+ * 把一次写重试到成功（失败就退避再试），用于启动期与宿主自己的 profile 写抢锁的场合。
+ *
+ * 为什么需要：插件 apply 时宿主**自己也在写这个 profile**（注册插件行会动 profile 清单），
+ * 两边的原子写锁会撞上。2026-10-10 在 0.2.1-alpha.2 的干净 profile 上真机撞出过一次
+ * `atomic-write: timed out waiting for the writer lock ...package.json.lock`，
+ * 于是「快捷指令」迁移被静默跳过（老用户入口消失）。锁是短暂的，退避重试就够。
+ * @param write - 要做的那次写。
+ * @param attempts - 最多试几次（含第一次）。
+ * @param baseDelayMs - 退避基数；第 n 次失败后等 `baseDelayMs * n`。
+ * @returns 第一次成功就 resolve；全部失败则抛出最后一次的错误。
+ */
+export async function retryWrite(write: () => Promise<void>, attempts: number, baseDelayMs: number): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await write()
+      return
+    } catch (error: unknown) {
+      if (attempt === attempts) throw error
+      await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt))
+    }
+  }
+}
+
 /**
  * DeepSeek 官方 provider 的设置命名空间（`packages/llm/llm-deepseek/src/index.ts` 的 `NS`）。
  *
@@ -2391,9 +2419,11 @@ export function apply(ctx: Context, config?: unknown): void {
       try {
         const outcome = await readQuickBook(quickStorePath())
         if (outcome.kind !== 'ok' || !bookLooksCustom(outcome.book)) return
-        await service.mutate(NAMESPACE, [
-          { op: 'set', path: [QUICK_ENABLED_FIELD], value: true },
-        ])
+        await retryWrite(
+          () => service.mutate(NAMESPACE, [{ op: 'set', path: [QUICK_ENABLED_FIELD], value: true }]),
+          QUICK_MIGRATION_ATTEMPTS,
+          QUICK_MIGRATION_RETRY_MS,
+        )
       } catch (error: unknown) {
         // 迁移失败不是致命错误：用户顶多在设置页手动打开这一栏。
         console.error('[composer-ux] quick section migration skipped', error)

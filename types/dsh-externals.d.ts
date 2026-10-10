@@ -81,6 +81,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   /** 注入面：hooks 会以 `useXxx` 的形式合进 props。 */
   export type InjectFace<T> = { readonly [key: string]: any } & T
 
-  /** 设置页条目从槽位拿到的部分 props（上游各版本字段不同，故开放）。 */
-  export type SettingsSectionOwnerProps = { readonly [key: string]: any }
+  /**
+   * 设置页条目从槽位拿到的那部分 props。
+   *
+   * ⚠️ 2026-10-10 收紧：以前这里是开放的 `{ [key: string]: any }`（理由是"上游各版本字段不同"），
+   * 结果**掩盖了一个真事故** —— 设置页把 `setField` 当成槽位给的 props 用（`setField={setField}`），
+   * 而三版 DSH（0.1.7-rc.1 / 0.2.0-rc.2 / 0.2.1-alpha.2）的这份契约都只有 `close`。
+   * 开放类型让 tsc 全绿，真机上点开关才炸 `setField is not a function`。
+   * 现在按**真实契约**声明（三版一致），拼错的 props 名会在编译期就红。
+   */
+  export type SettingsSectionOwnerProps = {
+    /** 关闭设置面板（开关状态归 shell 所有）。 */
+    close: () => void
+  }
 }

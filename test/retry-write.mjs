@@ -38,19 +38,34 @@ console.log('\n一、第一次就成功：只写一次，不睡')
 
 console.log('\n二、失败后重试到成功')
 {
+  // ⚠️ 这里必须自己 try/catch：如果 retryWrite 不再重试，它会**直接抛**。
+  // 让异常冒到顶层会让整个套件崩掉 —— 而变异判据找的是 `✗` 行，崩溃就等于"没咬住"。
+  // （2026-10-10 的教训：HO 变异第一轮就是这么被判成没咬住的。）
   let calls = 0
-  await retryWrite(async () => {
-    calls += 1
-    if (calls < 3) throw new Error(`第 ${calls} 次被锁挡住`)
-  }, 4, 5)
-  check('第 3 次成功（总共 3 次）', calls === 3, String(calls))
+  let crash
+  try {
+    await retryWrite(async () => {
+      calls += 1
+      if (calls < 3) throw new Error(`第 ${calls} 次被锁挡住`)
+    }, 4, 5)
+  } catch (error) {
+    crash = error
+  }
+  check('第 3 次成功（总共 3 次）', crash === undefined && calls === 3,
+    crash === undefined ? String(calls) : `抛了：${String(crash)}`)
 
   let calls2 = 0
-  await retryWrite(async () => {
-    calls2 += 1
-    if (calls2 < 4) throw new Error('still locked')
-  }, 4, 5)
-  check('用满最后一个名额也能成（4/4）', calls2 === 4, String(calls2))
+  let crash2
+  try {
+    await retryWrite(async () => {
+      calls2 += 1
+      if (calls2 < 4) throw new Error('still locked')
+    }, 4, 5)
+  } catch (error) {
+    crash2 = error
+  }
+  check('用满最后一个名额也能成（4/4）', crash2 === undefined && calls2 === 4,
+    crash2 === undefined ? String(calls2) : `抛了：${String(crash2)}`)
 }
 
 console.log('\n三、全部失败：把最后一个错误抛出去（调用方要拿它打日志）')

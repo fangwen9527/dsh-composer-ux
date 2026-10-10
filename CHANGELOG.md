@@ -2,6 +2,50 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.20.0] — 2026-10-10（适配 DSH 0.2.1-alpha.2：真机测出并修掉三处真问题）
+
+用户 2026-10-10：把 `D:\DeepSeek Harness`（未封装版检出）升到最新（`dsh-v0.2.1-alpha.2`）并用它测插件。
+
+升级步骤（踩过的坑写在括号里）：`git fetch --tags` → 新建分支 `upgrade-0.2.1-alpha.2` 检出该 tag →
+**`pnpm run clean`（必须清：`lib/` 是 gitignore 的，0.1.7 时代的旧产物会让新构建直接 `MISSING_EXPORT`）**
+→ `pnpm install` → `pnpm run build`。
+
+### 真机测出来的三处真问题（都已修）
+
+1. **设置页点开关直接炸**：`TypeError: setField is not a function`（新实例 + 真浏览器实测的控制台原话）。
+   根因：0.17.0（通知卡）与 0.19.0（工作区目录选择卡）都把 `setField` 当成**槽位给的 props** 用
+   （`setField={setField}`），而 `0.1.7-rc.1` / `0.2.0-rc.2` / `0.2.1-alpha.2` 三版
+   `settings.section` 的持有方契约**都只有 `close`**；正确路径是插件自己注入的 `actions.setField`
+   （同一个设置页里其它开关用的都是它）⇒ **这个 bug 在 0.19.x 上同样存在**，点一下就炸。
+   为什么 tsc 没拦住：手写类型面把该 props 写成开放索引，组件的 props 类型又并了 `PropsRuntime` /
+   `InjectFace`（两者都带 `[key: string]: any`）。三处一起收紧，并反向验证过：写错 props 名
+   `npx tsc --noEmit` 当场 `TS2339`。
+2. **依赖窗口不含新运行时**：`>=0.2.0-rc.1 <0.3.0` 在 semver 下**不覆盖** `0.2.1-alpha.2`（带预发布的版本
+   只有在同号段比较符也带预发布时才算满足）⇒ pnpm 装了 `0.2.0-rc.2`，宿主按 tool-terminal 的**精确
+   peerDeps** 对齐检查后把 `composer-ux-tool-terminal` 那一行**禁用**（只禁一行，插件其余部分照常加载）。
+   新窗口：`>=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0`。
+3. **启动期迁移撞锁被静默跳过**：`quick section migration skipped Error: atomic-write: timed out waiting
+   for the writer lock … package.json.lock` —— 迁移跑在插件 apply 时，而宿主启动期自己也在写 profile
+   清单。新增 `retryWrite`（退避重试：4 次 / 基数 300ms），迁移改走它，并单测覆盖。
+
+### 顺带修掉的两处真机渲染瑕疵（干净 profile 上才看得见）
+
+- 「微信通知」概览被 `FoldCard` 前缀两次 ⇒ 显示成「未启用 · 未启用 · 只能通知，不能回」；
+- 「设置面板」概览在没存过尺寸时显示 `undefined×undefined` ⇒ 改成「尺寸用官方默认」。
+
+### 形状核对脚本扩写（升级时的第一道门）
+
+`scripts/dsh-shape-check.mjs` 原来只有 4 节、只认识 0.13 时代的依赖；现在补到 7 节：新增
+客户端槽位 shadow（0.18.0 目录选择的地基：优先级 / fail-loud / 持有方 prop 名）、四个通知事件
+（两个 waterfall 必须原样透传）、`configForms` + 终端依赖范围；并修掉一条**过期断言**
+（0.2.1 起官方拒绝 `0.0.0.0`，改成核对 `normalizeBindAddress` / `isWildcardAddress`）。
+对着 0.2.1-alpha.2 跑：**36 条全过**。
+
+**验证**：`npm test` —— **30 个套件 2569 passed / 0 failed**（新增 `test/retry-write.mjs` 9 条；
+`settings-render` 102→107；`client-registration` 265→271；`terminal-mount` 的依赖窗口断言改为按语义
+核对三条预发布线）。`npm run test:mutations` —— **189 条全部咬住**（新增 HI–HO 7 条：顶层 setField 复发、
+props 类型放宽、类型面改回开放索引、迁移不重试、通知概览双前缀、面板概览不兜底、retryWrite 不重试）。
+
 ## [0.19.2] — 2026-10-09（修：设置字段必须进宿主 schema —— 补回 0.17.0 漏掉的 5 个通知字段）
 
 **怎么发现的**：给「工作区目录选择」加开关时顺手核对宿主 schema（`src/host.ts` 的 `ownSchema()`）

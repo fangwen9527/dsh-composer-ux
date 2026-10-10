@@ -553,7 +553,7 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 | 工具循环的消息形状 / 轮次封顶 / 异常必须降级 | 同上第 6 节（假 llm 驱动整条循环，逐条检查 `role:'tool'` 与 `toolCallId`） |
 | 工具路径：默认关、开了才派、**查完吐散文必须回落**、拿不到工作目录就不派 | `test/quick-commands.mjs` 5g 节（13 条，真路由 + 假 llm） |
 | 工具读到的内容不进台账 | 同 5g 节：断言台账里只有工具名与次数、没有读到的文件内容 |
-| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**182 条全部咬住**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
+| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**189 条全部咬住**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
 | **桌面应用里弹系统文件夹框**（0.18.0 起；0.19.0 起默认关、设置页可开） | ✅ **有真机证据**：2026-10-09 用户在桌面应用点「选择工作区目录」，实测「成功替换为系统文件管理器」（先用 profile 补丁验过一次，之后的插件内 shadow 版走的是同一条 preload 桥）；`node test/directory-flow.mjs` 49 条 + 变异 FS–FY（判定/状态机）与 GZ/HA（开关幂等装卸）罩着 |
 | **设置字段全部进了宿主 schema**（0.19.2 起） | `test/client-registration.mjs` 第 16 节：把设置契约里 49 个 `*_FIELD` 常量逐个核对 `ownSchema()`，再点名 6 个（5 个通知 + 目录选择）+ 变异 HG/HH。**为什么值得单列一行**：写设置走 `settings.mutate`，字段没进 schema 会被直接抛 `Config field "…" is not volatile` —— 0.17.0 的 5 个通知字段就是这么漏的（症状是"开关拨不动 + 写入失败提示"），2026-10-09 才发现并修掉 |
 | 发布门禁三条判据 | `npm run gates` 全过；`check:tag` 实测 `v0.12.0` 的 tag 名与所指提交里的版本一致 |
@@ -690,9 +690,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 29 个套件；当前 2549 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
+npm test                          # 30 个套件；当前 2569 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（182 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（189 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本
@@ -766,5 +766,47 @@ Remove-Item   "$env:USERPROFILE\.dsh\profiles\web\package.json.lock" -Force
 
 ## 与官方版本兼容提示
 
-- 依赖的稳定接口：`settings.section`、`shell.overlay` 槽位、`ctx.settingsScope`、`ctx.settings`（Host）、`[data-composer-input]` DOM 标记。
-- 浏览器包外部依赖仅限平台种子词（react / react/jsx-runtime / react-dom / @deepseek-ai/cordis / dsh-client-store / ui-slots / ui-primitives），其余全部内联。
+**实测过的 DSH 版本**（每次升级都对着源码跑形状核对，再在未封装版上真机点一遍）：
+
+| DSH 版本 | 状态 | 备注 |
+|---|---|---|
+| 0.1.7-rc.1 / rc.2 | 可用 | 依赖窗口的第一段 |
+| 0.2.0-rc.1 / rc.2 | 可用 | 桌面版装的这一版 |
+| **0.2.1-alpha.1 / alpha.2** | **可用（0.20.0 起）** | 2026-10-10 把 `D:\DeepSeek Harness` 未封装版升上去后真机验证（含设置页开关点击与写入落盘） |
+
+**依赖窗口**：`@deepseek-ai/dsh-tool-terminal` 声明为
+`>=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0`。
+
+⚠️ **为什么预发布线必须单列一段**：semver 下「带预发布的版本」只有在**同号段的比较符也带预发布**时才算被
+满足 —— 旧的 `>=0.2.0-rc.1 <0.3.0` 并不包含 `0.2.1-alpha.2`。后果不只是"装错个版本"：pnpm 会装
+`0.2.0-rc.2`，而宿主对每个插件行做**精确版本对齐检查**（tool-terminal 的 peerDeps 是精确版本），
+于是那一行被直接禁用：
+
+```
+dsh: disabling profile plugin row "composer-ux-tool-terminal":
+  Plugin @deepseek-ai/dsh-tool-terminal@0.2.0-rc.2 is incompatible with dsh 0.2.1-alpha.2
+```
+
+**升级 DSH 后怎么自查**（都只读，不改任何东西）：
+
+```sh
+node scripts/dsh-shape-check.mjs "D:/DeepSeek Harness"   # 形状核对：服务名 / 返回字段 / 槽位契约 / 事件 / 依赖范围
+npm test && npm run gates                                # 本仓 30 个套件 + 门禁
+```
+
+形状核对覆盖七块：会话与用量（`sessions` / `sessionQuery`）、设置服务两代读法（`describe` / `mutate` +
+volatile）、路由与信任关卡（`webServer.register` / `connection.requestRejection` + 绑定策略）、
+客户端槽位 shadow（目录选择「影子接管」的地基：优先级、fail-loud、持有方 prop 名）、四个通知事件
+（两个 waterfall 必须原样透传 `next()`）、客户端设置表单 `configForms`、终端依赖范围。
+
+**已知的版本敏感点**（升级后优先看这几处）：
+
+- **`settings.section` 槽位的持有方 props 只有 `close`**：设置页要写设置必须走**自己注入的** `actions`
+  （0.20.0 修：0.17~0.19 期间通知卡与目录选择卡误用了不存在的顶层 `setField` ⇒ 真机上点一下必炸
+  `TypeError: setField is not a function`）。类型面已按真实契约收紧，写错 props 名 `tsc` 当场红。
+- **插件行的启用与否由宿主按 `dsh-tool-terminal` 的 peerDeps 精确对齐判定**：版本对不上时**只禁用那一行**，
+  插件其余部分照常加载（优雅降级，不崩）。
+- **启动期写设置会撞宿主自己的 profile 写锁**（`atomic-write: timed out waiting for the writer lock
+  … package.json.lock`）⇒ 凡启动期的写都要退避重试（见 `retryWrite` 与「快捷指令」迁移）。
+- **`0.0.0.0` 从 0.2.1 起被官方拒绝**（只接受具体 IP 字面量）—— 不影响本插件，但形状核对里那条
+  「连接可绑非回环地址」的断言依据随之改了。

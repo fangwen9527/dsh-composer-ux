@@ -397,7 +397,7 @@ const cases = [
   {
     name: 'AU 依赖改成通配 *（钉不住官方那套的版本窗口）',
     file: 'package.json',
-    from: '"@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0"',
+    from: '"@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0"',
     to: '"@deepseek-ai/dsh-tool-terminal": "*"',
     test: 'test/terminal-mount.mjs',
     expect: '依赖是区间',
@@ -405,7 +405,7 @@ const cases = [
   {
     name: 'AV 依赖改成钉死单版本（runtime 一升级就装不上对应的官方包）',
     file: 'package.json',
-    from: '"@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0"',
+    from: '"@deepseek-ai/dsh-tool-terminal": ">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0"',
     to: '"@deepseek-ai/dsh-tool-terminal": "0.2.0-rc.1"',
     test: 'test/terminal-mount.mjs',
     expect: '依赖是区间',
@@ -483,12 +483,12 @@ const cases = [
     expect: '只有 WSL 的 System32',
   },
   {
-    name: 'BF 依赖窗口丢掉 0.2.0（本机升级后会被兼容性预检判掉 ⇒ 工具行静默消失）',
+    name: 'BF 依赖窗口丢掉 0.2.1 的预发布段（0.2.1-alpha.2 上那行会被宿主判不兼容而禁用）',
     file: 'package.json',
-    from: '">=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.3.0"',
-    to: '">=0.1.7-rc.1 <0.1.8"',
+    from: '>=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0"',
+    to: '>=0.2.0-rc.1 <0.2.1-alpha.0"',
     test: 'test/terminal-mount.mjs',
-    expect: '依赖窗口覆盖两个已验证过的运行时',
+    expect: '依赖窗口覆盖三个已验证过的运行时',
   },
   {
     name: 'BG 非法单价格子被当成"清空"（价格悄悄回到官方价，用户以为改成功了）',

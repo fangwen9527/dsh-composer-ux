@@ -335,7 +335,7 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
     && optCard.includes('readonly open: boolean') && optCard.includes('readonly onToggle: () => void'))
   check('❗2026-10-10：收起时卡片给一行当前值摘要（收着也看得见关键值）',
     optCard.includes('const summary = [') && optCard.includes('{!open && <span style={optFoldSummary}>'))
-  check('0.13.2：**收起**的结果框不触发自动切换（✕ 的意图就是别自动弹）',
+  check('收起（✕）的结果框不算"可见"（面板打开不抢视图；面板开着时点展开才算"从无到有"）',
     panel.includes('const dockVisible = dockPresent && !dockHidden')
     && panel.includes('dock: SnapshotStore<OptimizeDockState | null>') && panel.includes('dockHidden: SnapshotStore<boolean>'))
   check('0.14.0：档位=关闭时主按钮禁用并写明原因（不做一个看起来还能点的按钮）',

@@ -1131,8 +1131,8 @@ const cases = [
     file: "src/client/QuickCommandsPanel.tsx",
     from: "  const dockVisible = dockPresent && !dockHidden",
     to: "  const dockVisible = dockPresent",
-    test: "test/panel-split-render.mjs",
-    expect: "收起时面板打开在「快捷指令」那半（不抢过去）",
+    test: "test/client-registration.mjs",
+    expect: "收起（✕）的结果框不算",
   },
   {
     name: "EH 收起状态不存盘（重启后又自己弹回来）",
@@ -1591,12 +1591,10 @@ const cases = [
     expect: "「设置面板」概览不再出现 undefined×undefined",
   },
   {
-    name: "HP 打开面板不再回到默认那半（用户 2026-10-10 的"默认收着"失效）",
+    name: "HP 打开面板不再回到默认那半（用户 2026-10-10 的「默认收着」失效）",
     file: "src/client/QuickCommandsPanel.tsx",
-    from: "    if (panelOpen) {
-      const next = sectionOnPanelOpen(dockRunning)",
-    to: "    if (false) {
-      const next = sectionOnPanelOpen(dockRunning)",
+    from: "    if (panelOpen) {\n      const next = sectionOnPanelOpen(dockRunning)",
+    to: "    if (false) {\n      const next = sectionOnPanelOpen(dockRunning)",
     test: "test/client-registration.mjs",
     expect: "每次打开面板回到默认",
   },
@@ -1613,8 +1611,8 @@ const cases = [
     file: "src/client/panel-sections.ts",
     from: "export const OPTIONS_FOLD_DEFAULT_OPEN = false",
     to: "export const OPTIONS_FOLD_DEFAULT_OPEN = true",
-    test: "test/client-registration.mjs",
-    expect: "打开时顺手把「优化选项」收回默认的收起态",
+    test: "test/panel-split-render.mjs",
+    expect: "「优化选项」折叠初值是",
   },
   {
     name: "HS 收起时不渲染正文的开关失效（收起来还是把七个控件全渲出来）",
@@ -1627,8 +1625,7 @@ const cases = [
   {
     name: "HT 收起时那一行摘要没了（收着看不见关键值）",
     file: "src/client/OptimizeOptionsCard.tsx",
-    from: "        {!open && <span style={optFoldSummary}>{summary}</span>}
-",
+    from: "        {!open && <span style={optFoldSummary}>{summary}</span>}\n",
     to: "",
     test: "test/panel-split-render.mjs",
     expect: "收起时给一行当前值摘要",
@@ -1636,8 +1633,7 @@ const cases = [
   {
     name: "HU 点 ✨ 不再明确切到优化那半（上一轮结果还在时点了像没反应）",
     file: "src/client/QuickCommandsPanel.tsx",
-    from: "            if (section !== 'optimize') setSection('optimize')
-",
+    from: "            if (section !== 'optimize') setSection('optimize')\n",
     to: "",
     test: "test/client-registration.mjs",
     expect: "点 ✨ 必须明确切到优化那半",

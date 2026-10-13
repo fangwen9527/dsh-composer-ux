@@ -26,7 +26,22 @@ process.stdout.write(out)
 const bitten = (out.match(/^✓ 咬住了/gm) ?? []).length
 const missed = (out.match(/^✗ 没咬住/gm) ?? []).length
 const missing = (out.match(/变异点没找到/g) ?? []).length
-const record = { at: new Date().toISOString(), cases: bitten + missed + missing, bitten, missed, missing }
+const cases = bitten + missed + missing
+
+/**
+ * 一条都没跑起来 = 环境/语法坏了，不是"全过"。
+ *
+ * 2026-10-10 踩过：往 `test/mutation-guards.mjs` 加锚点时引号没转义，守卫脚本当场语法错误、
+ * 什么都没输出，而这里照旧把 `{cases: 0, bitten: 0}` 写进记录并打印"咬住 0" ——
+ * 一次 4 分钟的空转，记录还是假的（靠 check-docs 比数字才发现）。
+ * 所以这种情况**不写记录**、直接非零退出。
+ */
+if (cases === 0) {
+  console.error('\n变异一条都没跑起来（守卫脚本自己出错，或锚点表是空的）—— 不写记录，请看上面的报错')
+  process.exit(2)
+}
+
+const record = { at: new Date().toISOString(), cases, bitten, missed, missing }
 writeFileSync(RECORD, `${JSON.stringify(record, null, 2)}\n`)
 console.log(`\n变异记录：${record.cases} 条 · 咬住 ${bitten} · 没咬住 ${missed} · 变异点没找到 ${missing}`)
 console.log(`记录已写入 ${RECORD}（供 check-docs 判漂移）`)

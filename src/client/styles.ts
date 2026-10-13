@@ -733,6 +733,43 @@ export const optCardTitle: CSSProperties = {
   fontWeight: 600,
 }
 
+/**
+ * 「优化选项」的折叠标题行（用户 2026-10-10：这一组默认收起）。
+ *
+ * 整行可点：左侧箭头 + 标题，收起时右侧补一行当前值摘要（见 `optFoldSummary`）。
+ */
+export const optFoldHead: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  width: '100%',
+  padding: 0,
+  border: 'none',
+  background: 'none',
+  textAlign: 'left',
+  cursor: 'pointer',
+  color: 'inherit',
+  font: 'inherit',
+}
+
+/** 折叠箭头（收起 ▸ / 展开 ▾）。 */
+export const optFoldArrow: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 10,
+  lineHeight: 1,
+  flex: '0 0 auto',
+}
+
+/** 收起时的当前值摘要（一行，长了省略号截断）。 */
+export const optFoldSummary: CSSProperties = {
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontSize: 11,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
 /** 一行：左边标签、右边控件。 */
 export const optRow: CSSProperties = {
   display: 'flex',

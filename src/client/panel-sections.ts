@@ -10,7 +10,16 @@
  *    否则点了 ✨ 之后结果被自己藏在收起的一半里，看起来像"没反应"；
  *  - 自动切换只在"从无到有"那一刻发生：用户手动切回快捷指令时不该被抢回去。
  *
- * 最后一条靠调用方的依赖数组实现（`dockPresent` 变化才触发），这里只表达"该显示哪一半"。
+ * ── 2026-10-10 修订（用户截图报的）──────────────────────────────────────────
+ * 原规则有个副作用：**面板一打开就已经是"优化那半"** —— 因为上次的结果还在（"从无到有"
+ * 在**重开面板**时也成立）。用户要的是「打开面板默认收着」，所以现在：
+ *
+ *  - 每次**打开**面板 ⇒ 回到 {@link PANEL_OPEN_SECTION}（快捷指令那半），
+ *    哪怕上次有结果；**唯一的例外是"正在跑"** —— 那时他有进度/取消要看（见 {@link sectionOnPanelOpen}）；
+ *  - 「从无到有」的自动切换只在**面板已经开着**的时候生效（调用方在打开那一刻把结果框的
+ *    有无当成基线，不再算作"刚出结果"）。
+ *
+ * 最后一条靠调用方的 ref 实现，这里只表达"该显示哪一半"。
  */
 
 /** 面板中部显示哪一半。 */
@@ -18,6 +27,27 @@ export type PanelSection = 'quick' | 'optimize'
 
 /** 默认展开的那一半（用户选的 A）。 */
 export const DEFAULT_PANEL_SECTION: PanelSection = 'quick'
+
+/**
+ * 面板每次打开落在哪一半（用户 2026-10-10 要的"默认收着"）。
+ *
+ * 只给"正在跑"留例外：那时你要看进度和「取消」，把它藏起来才是坏事；
+ * "上次跑完的结果还摆着"不算例外 —— 那正是用户嫌它挡视野的那种情况。
+ */
+export const PANEL_OPEN_SECTION: PanelSection = DEFAULT_PANEL_SECTION
+
+/** 「优化选项」那一组设置的折叠初值：收起（用户 2026-10-10 要的）。 */
+export const OPTIONS_FOLD_DEFAULT_OPEN = false
+
+/**
+ * 面板打开时该显示哪一半。
+ *
+ * @param running - 打开这一刻结果框是不是正在跑（`phase === 'running'`）。
+ * @returns 正在跑 ⇒ `'optimize'`（看得到进度与取消）；否则 ⇒ 默认那一半（快捷指令）。
+ */
+export function sectionOnPanelOpen(running: boolean): PanelSection {
+  return running ? 'optimize' : PANEL_OPEN_SECTION
+}
 
 /** 点切换按钮：换另一半。 */
 export function toggleSection(current: PanelSection): PanelSection {

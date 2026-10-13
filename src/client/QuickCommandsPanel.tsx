@@ -24,7 +24,7 @@ import { AddPromptRow } from './AddPromptRow.tsx'
 import { OptimizeOptionsCard } from './OptimizeOptionsCard.tsx'
 import { InsertModeControl } from './InsertModeControl.tsx'
 import { useOptimizeElapsed } from './optimize-clock.ts'
-import { DEFAULT_PANEL_SECTION, sectionForDock, toggleSection, type PanelSection } from './panel-sections.ts'
+import { DEFAULT_PANEL_SECTION, OPTIONS_FOLD_DEFAULT_OPEN, sectionForDock, sectionOnPanelOpen, toggleSection, type PanelSection } from './panel-sections.ts'
 import { OptimizeDock } from './OptimizeDock.tsx'
 import type { OptimizeDockState } from './optimize-dock.ts'
 import type { QuickPanelAnchor } from './QuickCommandsButton.tsx'
@@ -131,6 +131,13 @@ export function QuickCommandsPanel({
    * 跑起来或已有结果时**自动切到优化那半** —— 否则刚跑出来的东西会被自己藏在收起状态里。
    */
   const [section, setSection] = useState<PanelSection>(DEFAULT_PANEL_SECTION)
+  /**
+   * 「优化选项」那一组设置的折叠状态（用户 2026-10-10 要的默认收起）。
+   *
+   * 放面板这一层而不是卡片内部：折叠要在**每次打开面板**时回到默认（见下面的渲染期调整），
+   * 卡片就成了纯展示（`open` / `onToggle` 由这里给）。
+   */
+  const [optionsOpen, setOptionsOpen] = useState(OPTIONS_FOLD_DEFAULT_OPEN)
   const dockPresent = dock !== null
   /** 档位是「关闭」（0.14.0）：主按钮禁用并写明原因。 */
   const tierOff = settings.optimizerTier === 'off'
@@ -197,23 +204,41 @@ export function QuickCommandsPanel({
   }, [anchor === null, actions, dockRunning])
 
   /**
-   * 结果框"从无到有"的那一刻自动切到「优化提示词」那一半 ——
-   * 否则用户点了 ✨ 之后，结果被自己藏在收起的那一半里，看起来像"没反应"。
+   * 面板打开 / 关着的时候，中部那一半与「优化选项」折叠该怎么走。
+   *
+   * ── 用户 2026-10-10（截图）：「让优化提示词默认收缩起来」──────────────────
+   * 原规则是"结果框从无到有就切到优化那半"，而**重开面板时上一轮的结果还在** ⇒
+   * 每次打开都直接落在优化那半、外加一整组选项，把「优化完成」顶到看不见。
+   * 现在：
+   *
+   *  · 每次**打开**面板 ⇒ 回到默认（{@link sectionOnPanelOpen}）：
+   *    「正在跑」例外（要能看到进度与取消），「上次的结果还摆着」不再算例外；
+   *    顺手把「优化选项」也收回默认的收起态；
+   *  · 打开那一刻**就摆着的结果框**当成基线，不算"刚出结果" ⇒ 不抢视图；
+   *  · 面板**已经开着**时结果框从无到有 ⇒ 照旧自动切过去（点 ✨ 之后必须看得到结果）；
+   *    用户手动切回快捷指令时 `dockVisible` 没变，所以不会被抢回去。
    *
    * 为什么在**渲染期**做而不是 `useEffect`：
-   *  · effect 要等提交之后才跑，中间会先渲染一帧"快捷指令"那半 —— 点 ✨ 会看到面板闪一下；
-   *  · 而且 SSR 里 effect 根本不跑，于是"有结果框就该显示优化半"这条在渲染测试里测不到
-   *    （第一版这么写时，渲染套件里 7 条全红，红的全是这一组）。
-   * 这是 React 文档里"props 变化时同步调整 state"的写法：只在**变化的那一次**设置，不会死循环；
-   * 用户手动切回快捷指令时 `dockPresent` 没变，也不会被抢回去。
+   *  · effect 要等提交之后才跑，中间会先渲染一帧旧状态 —— 会看到面板闪一下；
+   *  · 而且 SSR 里 effect 根本不跑，这一组在渲染测试里就测不到（第一版踩过：7 条全红）。
+   * 这是 React 文档里"props 变化时同步调整 state"的写法：只在**变化的那一次**设置，不会死循环。
    */
-  // ⚠️ 初值必须是 false（默认那一半假设"没有结果框"），不能写成 `useRef(dockPresent)`：
-  //   后者让首帧的"变化"永远不成立，于是"面板重开时结果框本来就在"这种情况不会切过去。
-  // 收起的结果框不该触发自动切换 —— 那正是用户按 ✕ 的意图（用户 2026-09-30 的问题）。
+  const panelOpen = anchor !== null
   const dockVisible = dockPresent && !dockHidden
-  const prevDockPresent = useRef(false)
-  if (prevDockPresent.current !== dockVisible) {
-    prevDockPresent.current = dockVisible
+  const prevOpen = useRef(false)
+  const prevDockVisible = useRef(false)
+  if (prevOpen.current !== panelOpen) {
+    prevOpen.current = panelOpen
+    if (panelOpen) {
+      const next = sectionOnPanelOpen(dockRunning)
+      if (next !== section) setSection(next)
+      if (optionsOpen !== OPTIONS_FOLD_DEFAULT_OPEN) setOptionsOpen(OPTIONS_FOLD_DEFAULT_OPEN)
+      // 打开这一刻就有的结果框 = 基线：它不是"刚跑出来"，不该把视图抢到优化那半。
+      prevDockVisible.current = dockVisible
+    }
+  }
+  if (panelOpen && prevDockVisible.current !== dockVisible) {
+    prevDockVisible.current = dockVisible
     const next = sectionForDock(dockVisible, section)
     if (next !== section) setSection(next)
   }
@@ -259,7 +284,13 @@ export function QuickCommandsPanel({
             : '把输入框里的话交给另一个 AI 整理成一条可以直接发出去的清晰指令，结果直接写回输入框。它只能产出能指回你原话某一句的补全，指不回去的会被丢掉并记账'}
           style={busy || tierOff ? quickPrimaryButtonDisabled : quickPrimaryButton}
           onMouseDown={event => { event.preventDefault() }}
-          onClick={() => { actions.optimize() }}
+          onClick={() => {
+            actions.optimize()
+            // 2026-10-10：面板默认停在快捷指令那半，所以点 ✨ 必须**明确**切过去 ——
+            // 不能只靠"结果框从无到有"：上一轮的结果还在时它不是"从无到有"，
+            // 那样点了会像没反应。
+            if (section !== 'optimize') setSection('optimize')
+          }}
         >
           <span aria-hidden>✨</span>
           <span>{tierOff ? '优化已关闭' : busy ? `优化中…（${String(seconds)}s）` : '优化提示词'}</span>
@@ -300,6 +331,8 @@ export function QuickCommandsPanel({
       {section === 'optimize' && (
         <OptimizeOptionsCard
           settings={settings}
+          open={optionsOpen}
+          onToggle={() => { setOptionsOpen(value => !value) }}
           actions={{
             setFraming: value => { actions.setField(OPTIMIZER_FRAMING_FIELD, value) },
             setPermission: value => { actions.setField(OPTIMIZER_PERMISSION_FIELD, value) },

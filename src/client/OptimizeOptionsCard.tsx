@@ -20,9 +20,9 @@ import {
 } from '../settings-contract.ts'
 import { fetchModelCatalog, type ModelCatalogResult } from './model-catalog.ts'
 import {
-  optCard, optCardTitle, optHint, optInput, optLabel, optNumber, optPickerButton, optPickerGroup,
-  optPickerItem, optPickerItemActive, optPickerModelId, optPickerPanel, optPromptBox, optRow,
-  optSegButton, optSegButtonActive, optSegmented, optSlider,
+  optCard, optCardTitle, optFoldArrow, optFoldHead, optFoldSummary, optHint, optInput, optLabel,
+  optNumber, optPickerButton, optPickerGroup, optPickerItem, optPickerItemActive, optPickerModelId,
+  optPickerPanel, optPromptBox, optRow, optSegButton, optSegButtonActive, optSegmented, optSlider,
 } from './styles.ts'
 
 /** 卡片要的动作（都是设置写入；字段名由调用方决定，这里只给语义）。 */
@@ -41,6 +41,15 @@ export interface OptimizeOptionsActions {
 export interface OptimizeOptionsCardProps {
   readonly settings: ComposerUxSettings
   readonly actions: OptimizeOptionsActions
+  /**
+   * 这一组设置是否展开（用户 2026-10-10：默认**收起**）。
+   *
+   * 由面板持有（它要在每次打开面板时把折叠复位），卡片因此是纯展示的 ——
+   * 顺带让渲染测试可以两种状态各渲一次。
+   */
+  readonly open: boolean
+  /** 点标题行切换展开/收起。 */
+  readonly onToggle: () => void
 }
 
 /** 一行两选一（或几选一）的分段控件。 */
@@ -99,7 +108,7 @@ function currentPrompt(settings: ComposerUxSettings): string {
 }
 
 /** 优化选项卡片。 */
-export function OptimizeOptionsCard({ settings, actions }: OptimizeOptionsCardProps): React.ReactElement {
+export function OptimizeOptionsCard({ settings, actions, open, onToggle }: OptimizeOptionsCardProps): React.ReactElement {
   const [detailOpen, setDetailOpen] = useState(false)
   const [modelText, setModelText] = useState(settings.optimizerModel)
   // 模型下拉（0.14.1）：打开时才去问宿主要清单（省一次请求），清单本身宿主会缓存 60 秒。
@@ -121,10 +130,35 @@ export function OptimizeOptionsCard({ settings, actions }: OptimizeOptionsCardPr
   const prompt = currentPrompt(settings)
   const tierOff = settings.optimizerTier === 'off'
 
+  // 收起时的一行摘要（用户 2026-10-10 要"默认收着"，但收着也得看得见关键值）：
+  // 只列最能改结果的那几项；「模型」只在**不是**"跟随会话"时才占位（非默认才值得露）。
+  const summary = [
+    `权限 ${settings.optimizerPermission === 'auto' ? '自动' : '审查'}`,
+    `上下文 ${settings.optimizerHistory === 'full' ? '全文' : `回合 ${String(settings.optimizerTurns)}`}`,
+    `只读工具 ${settings.optimizeReadTools ? '开' : '关'}`,
+    `Bash ${settings.optimizeBash ? '开' : '关'}`,
+    ...(settings.optimizerModel === '' ? [] : [`模型 ${settings.optimizerModel}`]),
+  ].join(' · ')
+
   return (
     <div style={optCard} role="group" aria-label="优化选项">
-      <span style={optCardTitle} title="这些开关都属于「优化提示词」这一轮；档位在面板标题行">优化选项</span>
+      <button
+        type="button"
+        aria-expanded={open}
+        style={optFoldHead}
+        title={open
+          ? '收起这些设置（它们都属于「优化提示词」这一轮；档位在面板标题行）'
+          : `展开这些设置：${summary}`}
+        onMouseDown={event => { event.preventDefault() }}
+        onClick={onToggle}
+      >
+        <span style={optFoldArrow} aria-hidden>{open ? '▾' : '▸'}</span>
+        <span style={optCardTitle} title="这些开关都属于「优化提示词」这一轮；档位在面板标题行">优化选项</span>
+        {!open && <span style={optFoldSummary}>{summary}</span>}
+      </button>
 
+      {open && (
+        <>
       <Segmented<OptimizerPermission>
         label="权限"
         hint="审查 = 成品进结果框，你看过再点「插入输入框」；自动 = 跑完自动写回输入框（都不会自动发送消息）"
@@ -318,6 +352,8 @@ export function OptimizeOptionsCard({ settings, actions }: OptimizeOptionsCardPr
               恢复内置
             </button>
           </div>
+        </>
+      )}
         </>
       )}
     </div>

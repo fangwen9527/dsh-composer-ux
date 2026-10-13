@@ -304,6 +304,7 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
   const dock = strip(readFileSync('src/client/OptimizeDock.tsx', 'utf8').replace(/\r\n/g, '\n'))
   const styles = strip(readFileSync('src/client/styles.ts', 'utf8').replace(/\r\n/g, '\n'))
   const sections = strip(readFileSync('src/client/panel-sections.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const optCard = strip(readFileSync('src/client/OptimizeOptionsCard.tsx', 'utf8').replace(/\r\n/g, '\n'))
 
   check('默认展开快捷指令（用户 2026-09-30 选的 A）',
     sections.includes("DEFAULT_PANEL_SECTION: PanelSection = 'quick'")
@@ -317,10 +318,23 @@ console.log('2.0g 面板分两半 + 结果框按钮钉底（0.13.1，用户报�
     && sections.includes("return current === 'quick' ? 'optimize' : 'quick'"))
   check('两半互斥：内容区各由 section 决定渲染',
     panel.includes("dock !== null && section === 'optimize'") && panel.includes("section === 'quick' && ("))
-  check('有结果框就显示优化那半（渲染期同步调整 —— effect 会先闪一帧，SSR 也测不到）',
-    panel.includes('sectionForDock(dockVisible, section)') && panel.includes('const prevDockPresent = useRef(false)')
-    && panel.includes('if (prevDockPresent.current !== dockVisible) {')
+  check('❗2026-10-10：每次打开面板回到默认（有结果框也不再自动切过去；只有"正在跑"例外）',
+    panel.includes('sectionOnPanelOpen(dockRunning)') && panel.includes('const prevOpen = useRef(false)')
+    && panel.includes('if (prevOpen.current !== panelOpen) {') && panel.includes('if (panelOpen) {')
+    && panel.includes('prevDockVisible.current = dockVisible')
+    && sections.includes("return running ? 'optimize' : PANEL_OPEN_SECTION")
     && !/useEffect\(\(\) => \{\s*setSection/.test(panel))
+  check('❗2026-10-10：打开时顺手把「优化选项」收回默认的收起态',
+    panel.includes('if (optionsOpen !== OPTIONS_FOLD_DEFAULT_OPEN) setOptionsOpen(OPTIONS_FOLD_DEFAULT_OPEN)')
+    && sections.includes('OPTIONS_FOLD_DEFAULT_OPEN = false')
+    && panel.includes('useState(OPTIONS_FOLD_DEFAULT_OPEN)'))
+  check('❗2026-10-10：点 ✨ 必须明确切到优化那半（上一轮结果还在时它不是"从无到有"）',
+    panel.includes('actions.optimize()') && panel.includes("if (section !== 'optimize') setSection('optimize')"))
+  check('❗2026-10-10：「优化选项」卡片是受控的（open/onToggle 由面板给，卡片纯展示）',
+    panel.includes('open={optionsOpen}') && panel.includes('onToggle={() => { setOptionsOpen(value => !value) }}')
+    && optCard.includes('readonly open: boolean') && optCard.includes('readonly onToggle: () => void'))
+  check('❗2026-10-10：收起时卡片给一行当前值摘要（收着也看得见关键值）',
+    optCard.includes('const summary = [') && optCard.includes('{!open && <span style={optFoldSummary}>'))
   check('0.13.2：**收起**的结果框不触发自动切换（✕ 的意图就是别自动弹）',
     panel.includes('const dockVisible = dockPresent && !dockHidden')
     && panel.includes('dock: SnapshotStore<OptimizeDockState | null>') && panel.includes('dockHidden: SnapshotStore<boolean>'))

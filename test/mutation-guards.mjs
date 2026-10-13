@@ -1087,12 +1087,12 @@ const cases = [
     expect: "默认展开快捷指令（用户 2026-09-30 选的 A）",
   },
   {
-    name: "EB 有结果框也不切到优化那半（点了 ✨ 看不到结果）",
+    name: "EB 面板开着时结果框从无到有也不切过去（点了 ✨ 看不到结果）",
     file: "src/client/panel-sections.ts",
     from: "  return dockPresent ? 'optimize' : current",
     to: "  return current",
     test: "test/panel-split-render.mjs",
-    expect: "结果框渲染出来了",
+    expect: "结果框从无到有",
   },
   {
     name: "EC 结果框内容区又自己滚（双层滚动条回来了）",
@@ -1589,6 +1589,58 @@ const cases = [
     to: "  const panelSize = `${settings.panelWidth}×${settings.panelHeight}`",
     test: "test/settings-render.mjs",
     expect: "「设置面板」概览不再出现 undefined×undefined",
+  },
+  {
+    name: "HP 打开面板不再回到默认那半（用户 2026-10-10 的"默认收着"失效）",
+    file: "src/client/QuickCommandsPanel.tsx",
+    from: "    if (panelOpen) {
+      const next = sectionOnPanelOpen(dockRunning)",
+    to: "    if (false) {
+      const next = sectionOnPanelOpen(dockRunning)",
+    test: "test/client-registration.mjs",
+    expect: "每次打开面板回到默认",
+  },
+  {
+    name: "HQ 打开面板不再把「优化选项」收回收起态（开一次就把面板撑开）",
+    file: "src/client/QuickCommandsPanel.tsx",
+    from: "      if (optionsOpen !== OPTIONS_FOLD_DEFAULT_OPEN) setOptionsOpen(OPTIONS_FOLD_DEFAULT_OPEN)",
+    to: "",
+    test: "test/client-registration.mjs",
+    expect: "打开时顺手把「优化选项」收回默认的收起态",
+  },
+  {
+    name: "HR 「优化选项」折叠初值改成展开（用户要的默认收着没了）",
+    file: "src/client/panel-sections.ts",
+    from: "export const OPTIONS_FOLD_DEFAULT_OPEN = false",
+    to: "export const OPTIONS_FOLD_DEFAULT_OPEN = true",
+    test: "test/client-registration.mjs",
+    expect: "打开时顺手把「优化选项」收回默认的收起态",
+  },
+  {
+    name: "HS 收起时不渲染正文的开关失效（收起来还是把七个控件全渲出来）",
+    file: "src/client/OptimizeOptionsCard.tsx",
+    from: "      {open && (",
+    to: "      {true && (",
+    test: "test/panel-split-render.mjs",
+    expect: "收起时**不**渲染那些控件",
+  },
+  {
+    name: "HT 收起时那一行摘要没了（收着看不见关键值）",
+    file: "src/client/OptimizeOptionsCard.tsx",
+    from: "        {!open && <span style={optFoldSummary}>{summary}</span>}
+",
+    to: "",
+    test: "test/panel-split-render.mjs",
+    expect: "收起时给一行当前值摘要",
+  },
+  {
+    name: "HU 点 ✨ 不再明确切到优化那半（上一轮结果还在时点了像没反应）",
+    file: "src/client/QuickCommandsPanel.tsx",
+    from: "            if (section !== 'optimize') setSection('optimize')
+",
+    to: "",
+    test: "test/client-registration.mjs",
+    expect: "点 ✨ 必须明确切到优化那半",
   },
   {
     name: "HO retryWrite 不再重试（第一次撞锁就放弃）",

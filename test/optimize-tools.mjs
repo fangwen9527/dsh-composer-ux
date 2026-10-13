@@ -8,7 +8,7 @@
  *
  *   node test/optimize-tools.mjs
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { build } from 'esbuild'
@@ -31,7 +31,7 @@ const bundled = await build({
   stdin: {
     contents: "export { fencePath, globToRegExp, parseToolArguments, runGlobTool, runGrepTool, runReadTool, runReadToolByName, READ_TOOL_SCHEMAS, READ_TOOLS_SYSTEM_NOTE, TOOL_MAX_FILE_BYTES, TOOL_MAX_GLOB_HITS, TOOL_MAX_GREP_HITS, TOOL_MAX_RESULT_CHARS, TOOL_MAX_CALLS_PER_ROUND, TOOL_MAX_ROUNDS, TOOL_TOTAL_TIMEOUT_MS } from './src/optimize-tools.ts'\n"
       + "export { runOptimizeToolLoop } from './src/optimize-tool-loop.ts'\n"
-      + "export { BASH_MAX_COMMAND_CHARS, BASH_MAX_OUTPUT_CHARS, BASH_TOOL_NAME, BASH_TOOL_SCHEMA, BASH_TOOL_SYSTEM_NOTE, runBashTool } from './src/optimize-bash.ts'\n",
+      + "export { BASH_COMMAND_FIELD, BASH_MAX_COMMAND_CHARS, BASH_MAX_OUTPUT_CHARS, BASH_SCRIPT_FIELD, BASH_TOOL_NAME, BASH_TOOL_SCHEMA, BASH_TOOL_SYSTEM_NOTE, readBashIntent, resolveBashAuthority, runBashTool } from './src/optimize-bash.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -352,10 +352,105 @@ console.log('7. 内置 Bash（0.14.0）：真跑进程，但四条边界都是�
     (await pure.runBashTool(root, null)).isError === true && (await pure.runBashTool(root, 42)).isError === true)
 
   // 工具声明与说明段：给模型的那份不能少
-  check('工具声明形状对（name/parameters/command 必填）',
-    pure.BASH_TOOL_SCHEMA.name === 'bash' && pure.BASH_TOOL_SCHEMA.parameters.required.includes('command'))
+  check('工具声明形状对（name + command/script_path 二选一 + 禁额外键）',
+    pure.BASH_TOOL_SCHEMA.name === 'bash'
+    && Object.hasOwn(pure.BASH_TOOL_SCHEMA.parameters.properties, 'command')
+    && Object.hasOwn(pure.BASH_TOOL_SCHEMA.parameters.properties, 'script_path')
+    && pure.BASH_TOOL_SCHEMA.parameters.additionalProperties === false
+    && pure.BASH_TOOL_SCHEMA.parameters.required === undefined)
   check('说明段写清了边界（只在工作目录、不写文件、超时会截断）',
     pure.BASH_TOOL_SYSTEM_NOTE.includes('工作目录') && pure.BASH_TOOL_SYSTEM_NOTE.includes('不要写文件'))
+  check('说明段教了长脚本走 script_path（省掉 JSON 多层转义）',
+    pure.BASH_TOOL_SYSTEM_NOTE.includes('script_path'))
+}
+
+console.log('7b. 严格参数（0.22.0，借鉴 dsh-ops）：未知键点名拒绝、二选一、脚本必须在工作目录里')
+{
+  const intent = pure.readBashIntent
+  const unknown = intent({ command: 'echo hi', run_in_background: true })
+  check('未知键 ⇒ 拒绝，且同时点名未知键与可接受的键',
+    unknown.kind === 'reject' && unknown.reason.includes('run_in_background')
+    && unknown.reason.includes('command') && unknown.reason.includes('script_path'),
+    unknown.kind === 'reject' ? unknown.reason : unknown.kind)
+  check('两个都给 ⇒ 拒绝', intent({ command: 'echo hi', script_path: 'a.sh' }).kind === 'reject')
+  check('都不给 ⇒ 拒绝（并说明二选一）',
+    intent({}).kind === 'reject' && intent({}).reason.includes('二选一'))
+  check('超长命令 ⇒ 拒绝并指向 script_path',
+    (() => { const out = intent({ command: 'x'.repeat(pure.BASH_MAX_COMMAND_CHARS + 1) }); return out.kind === 'reject' && out.reason.includes('script_path') })())
+  check('只给 command ⇒ 归一化成命令行', intent({ command: ' echo hi ' }).kind === 'command')
+  check('只给 script_path ⇒ 归一化成脚本', intent({ script_path: ' scripts/a.sh ' }).kind === 'script')
+}
+
+console.log('7c. 沙箱授权（0.22.0）：证明不了安全就不给工具')
+{
+  const gate = pure.resolveBashAuthority
+  check('没开这一栏 ⇒ off', gate({ enabled: false, mode: 'danger-full-access', hasConfine: true }).kind === 'off')
+  check('拿不到会话模式 ⇒ denied（并说明原因）',
+    (() => { const out = gate({ enabled: true, hasConfine: true }); return out.kind === 'denied' && out.reason.includes('权限模式') })())
+  check('完全权限 ⇒ open 且不需要沙箱',
+    (() => { const out = gate({ enabled: true, mode: 'danger-full-access', hasConfine: false }); return out.kind === 'open' && out.confined === false })())
+  check('read-only + 有沙箱 ⇒ open 且必须沙箱',
+    (() => { const out = gate({ enabled: true, mode: 'read-only', hasConfine: true }); return out.kind === 'open' && out.confined === true })())
+  check('workspace-write + 有沙箱 ⇒ open 且必须沙箱',
+    (() => { const out = gate({ enabled: true, mode: 'workspace-write', hasConfine: true }); return out.kind === 'open' && out.confined === true })())
+  check('非完全权限 + 没有沙箱服务 ⇒ denied（宁可不给）',
+    (() => { const out = gate({ enabled: true, mode: 'workspace-write', hasConfine: false }); return out.kind === 'denied' && out.reason.includes('沙箱') })())
+}
+
+console.log('7d. 沙箱约束真的接在执行路径上（约束失败 = 不执行）')
+{
+  const dir = (() => { const d = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-bash-confine-'))); roots.push(d); return d })()
+  const marker = join(dir, 'ran.txt')
+  // 命令的副作用是"写一个文件"：用它当"到底执行了没有"的硬证据。
+  // 命令的副作用是写一个文件：用它当"到底执行了没有"的硬证据。
+  const jsPath = marker.split('\\').join('/')
+  const write = `"${process.execPath}" -e "require('node:fs').writeFileSync('${jsPath}','x')"`
+
+  const okRun = await pure.runBashTool(dir, { command: write }, {
+    confine: async (argv) => ({ argv, enforcement: 'full' }),
+  })
+  check('约束成功（enforcement=full）⇒ 真的执行了', okRun.isError === false && existsSync(marker))
+
+  rmSync(marker, { force: true })
+  const partial = await pure.runBashTool(dir, { command: write }, {
+    confine: async (argv) => ({ argv, enforcement: 'partial' }),
+  })
+  check('约束只报 partial ⇒ 拒绝执行（且**真的没执行**）',
+    partial.meta.rejected !== undefined && partial.text.includes('部分约束') && !existsSync(marker), partial.text.slice(0, 90))
+
+  const boom = await pure.runBashTool(dir, { command: write }, {
+    confine: async () => { throw new Error('no backend') },
+  })
+  check('约束抛错 ⇒ 拒绝执行（且真的没执行）',
+    boom.meta.rejected !== undefined && !existsSync(marker), boom.text.slice(0, 90))
+
+  const missing = await pure.runBashTool(dir, { command: 'echo hi' }, {
+    confine: async () => ({ argv: ['dsh-no-such-binary-xyz', 'x'], enforcement: 'full' }),
+  })
+  check('执行器不存在 ⇒ 可读诊断（ENOENT 说人话，不是裸 spawn 异常）',
+    missing.meta.rejected === undefined && missing.isError === true
+    && missing.text.includes('找不到执行器'), missing.text.slice(0, 120))
+
+  const plain = await pure.runBashTool(dir, { command: '"' + process.execPath + '" -e "console.log(1)"' })
+  check('没给 confine 时照旧执行（向后兼容）', plain.isError === false)
+}
+
+console.log('7e. script_path：长脚本先落文件再执行（不经过 JSON 转义）')
+{
+  const dir = (() => { const d = realpathSync(mkdtempSync(join(tmpdir(), 'composer-ux-bash-script-'))); roots.push(d); return d })()
+  const isWin = process.platform === 'win32'
+  const name = isWin ? 'probe.cmd' : 'probe.sh'
+  writeFileSync(join(dir, name), isWin ? '@echo off\r\necho SCRIPT-OK\r\n' : 'echo SCRIPT-OK\n')
+  const ran = await pure.runBashTool(dir, { script_path: name })
+  check('工作目录里的脚本能跑（脚本内容没进过工具参数）',
+    ran.isError === false && ran.text.includes('SCRIPT-OK'), ran.text.slice(0, 120))
+
+  const outside = await pure.runBashTool(dir, { script_path: join(dir, '..', 'nope.sh') })
+  check('工作目录外的脚本 ⇒ 拒绝', outside.meta.rejected !== undefined && outside.text.includes('工作目录'), outside.text.slice(0, 90))
+
+  const absent = await pure.runBashTool(dir, { script_path: 'no-such-script.sh' })
+  check('脚本不存在 ⇒ 可读拒绝（说"脚本不存在"）',
+    absent.meta.rejected !== undefined && absent.text.includes('不存在'), absent.text.slice(0, 90))
 }
 
 for (const dir of roots) rmSync(dir, { recursive: true, force: true })

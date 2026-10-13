@@ -1273,5 +1273,31 @@ console.log('17. 真机事故（0.2.1-alpha.2，2026-10-10）：设置页用了�
     /await retryWrite\([\s\S]{0,120}?service\.mutate\(NAMESPACE, \[\{ op: 'set', path: \[QUICK_ENABLED_FIELD\]/u.test(host))
 }
 
+
+console.log('18. 0.22.0：启动期写一律走 retryWrite；覆盖状态是共享活值')
+{
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const host = strip(readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const term = strip(readFileSync('src/terminal/host.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const doctor = strip(readFileSync('src/doctor.ts', 'utf8').replace(/\r\n/g, '\n'))
+
+  // 启动期的写会和宿主自己写 profile 抢锁（2026-10-10 撞掉迁移、2026-10-13 撞掉终端状态）。
+  check('❗终端状态写入走 retryWrite（不再裸 mutate）',
+    /retryWrite\(\(\) => settings\.mutate\(namespace, ops\)/.test(term))
+  check('❗请求头的生成/清理/回写三处都走 retryWrite',
+    (host.match(/retryWrite\(\(\) => settings\.mutate\(/g) ?? []).length >= 3,
+    String((host.match(/retryWrite\(\(\) => settings\.mutate\(/g) ?? []).length))
+  check('retryWrite 本体在共享模块里（终端子系统也 import 它）',
+    readFileSync('src/retry-write.ts', 'utf8').includes('export async function retryWrite')
+    && term.includes("from '../retry-write.ts'"))
+  check('❗覆盖状态是共享可变对象（不是"装完抄一份"）',
+    host.includes('const headerOverlayState = { installed: false }')
+    && host.includes('overlayInstalled: headerOverlayState.installed')
+    && !host.includes('headerOverlayInstalled'))
+  check('自检的纯函数在 doctor.ts（宿主半只采集）',
+    doctor.includes('export function buildDoctorReport') && host.includes('buildDoctorReport(await collectDoctor())'))
+}
+
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

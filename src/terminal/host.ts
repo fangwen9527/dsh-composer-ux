@@ -28,6 +28,7 @@ import {
 import { BASH_SECTION_TEXT, PROBE_TIMEOUT_MS, TOOL_BASH_SECTION_ORDER, TOOL_PWSH_SECTION_ORDER, createBashTool, probeBashExecution } from './tool.ts'
 import type { BashToolDeps, ProbeOutcome, ToolDefinitionLike, ToolRunContextLike } from './tool.ts'
 import { TERMINAL_ENABLED_FIELD, sectionEnabledOf } from '../settings-contract.ts'
+import { retryWrite, STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS } from '../retry-write.ts'
 
 /**
  * 这一栏没启用（或总开关关着）时写进状态行的那句话。
@@ -507,7 +508,8 @@ export function installTerminalPolicy(
   const flush = async (ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[]): Promise<void> => {
     if (ops.length === 0 || settings === undefined) return
     try {
-      await settings.mutate(namespace, ops)
+      // 启动期与宿主自己写 profile 抢锁（2026-10-13 真机撞到过）⇒ 退避重试。
+      await retryWrite(() => settings.mutate(namespace, ops), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
     } catch (error: unknown) {
       console.error('[composer-ux] 终端状态写入失败', error)
     }

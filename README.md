@@ -50,6 +50,20 @@ DeepSeek Harness Web 输入体验增强插件：
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
 
+## 0.22.0 新增（安全 / 自检 / CLI）
+
+- **解释层「内置 Bash」按会话权限门控**：完全权限直跑；其它模式**必须**过 `ctx.sandbox.confine`，
+  约束不是 `full` 就拒绝执行；拿不到权限模式或没有沙箱服务 ⇒ **不发这个工具**。
+- **「OpenCode 请求头」不再写你的配置**：改成挂官方 `internal/config` 事件做**运行期可逆覆盖**，
+  0.21.x 及以前写进去的残留由迁移表一次性清掉（只删值与记账一致的，你自己写的同名头不动）。
+- **自检**：设置页多了「自检」卡（也可 `GET /composer-ux/doctor`），一行一句人话摊平
+  设置字段是否都在宿主 schema、八栏开关、终端服务与 bash 探测、请求头覆盖、快捷指令本、
+  通知凭据、解释层档位、运行环境。
+- **CLI**：`npx dsh-composer-ux status|doctor|install|uninstall`（安装卸载一律委托官方 CLI）。
+- **长命令走文件**：解释层的 bash 工具支持 `command` 与 `script_path` 二选一，
+  多行/长脚本落文件再传路径，免得在工具调用 JSON 里做多层转义。
+- **市场清单**：`package.json` 的 `icon`（宿主会读）+ `dsh-plugin.json`（权限及理由披露）。
+
 ## 安装
 
 ```sh
@@ -560,7 +574,7 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 | 工具循环的消息形状 / 轮次封顶 / 异常必须降级 | 同上第 6 节（假 llm 驱动整条循环，逐条检查 `role:'tool'` 与 `toolCallId`） |
 | 工具路径：默认关、开了才派、**查完吐散文必须回落**、拿不到工作目录就不派 | `test/quick-commands.mjs` 5g 节（13 条，真路由 + 假 llm） |
 | 工具读到的内容不进台账 | 同 5g 节：断言台账里只有工具名与次数、没有读到的文件内容 |
-| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**195 条全部咬住**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
+| 变异守卫真的会咬人，且**必须是指定的那条测试变红** | `npm run test:mutations`：**（205 条全部咬住）**（判据是 `red.some(line => line.includes(item.expect))`，不是"有红就行"） |
 | **桌面应用里弹系统文件夹框**（0.18.0 起；0.19.0 起默认关、设置页可开） | ✅ **有真机证据**：2026-10-09 用户在桌面应用点「选择工作区目录」，实测「成功替换为系统文件管理器」（先用 profile 补丁验过一次，之后的插件内 shadow 版走的是同一条 preload 桥）；`node test/directory-flow.mjs` 49 条 + 变异 FS–FY（判定/状态机）与 GZ/HA（开关幂等装卸）罩着 |
 | **设置字段全部进了宿主 schema**（0.19.2 起） | `test/client-registration.mjs` 第 16 节：把设置契约里 49 个 `*_FIELD` 常量逐个核对 `ownSchema()`，再点名 6 个（5 个通知 + 目录选择）+ 变异 HG/HH。**为什么值得单列一行**：写设置走 `settings.mutate`，字段没进 schema 会被直接抛 `Config field "…" is not volatile` —— 0.17.0 的 5 个通知字段就是这么漏的（症状是"开关拨不动 + 写入失败提示"），2026-10-09 才发现并修掉 |
 | 发布门禁三条判据 | `npm run gates` 全过；`check:tag` 实测 `v0.12.0` 的 tag 名与所指提交里的版本一致 |
@@ -697,9 +711,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 30 个套件；当前 2591 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
+npm test                          # 31 个套件；当前 2673 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（195 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（205 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

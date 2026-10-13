@@ -21,11 +21,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import inspector from 'node:inspector'
 import {
+  ALL_SETTINGS_FIELDS, DOCTOR_API_PATH,
   DEFAULT_HEADER_NAME, DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD,
   HEADER_APPLIED_NAME_FIELD,
-  HEADER_APPLIED_VALUE_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
+  HEADER_APPLIED_VALUE_FIELD, HEADER_CLEANUP_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
@@ -86,45 +87,31 @@ import { runOptimizePipeline, scanOptimizeStream } from './optimizer-assemble.ts
 import { appendLedger, buildLedgerRun } from './optimize-ledger.ts'
 import { clearDockState, dockStateBytes, optimizeStatePath, readDockState, writeDockState } from './optimize-state.ts'
 import { runOptimizeToolLoop } from './optimize-tool-loop.ts'
-import { BASH_TOOL_SYSTEM_NOTE } from './optimize-bash.ts'
+import { BASH_TOOL_SYSTEM_NOTE, resolveBashAuthority, type BashAuthority } from './optimize-bash.ts'
 import { READ_TOOLS_SYSTEM_NOTE } from './optimize-tools.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
+import { pendingMigrations } from './migrations.ts'
+import { buildDoctorReport, type DoctorInput } from './doctor.ts'
+import { retryWrite, STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS } from './retry-write.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
 
 export const name = 'composer-ux'
+
+/**
+ * 「请求头运行期覆盖」挂上没有（0.22.0 自检要读它）。
+ *
+ * ⚠️ 必须是**共享的可变对象**，不能是"装完抄一份到另一个变量"：注入回调（loader）与自检
+ * 路由（webServer）哪个先跑是不确定的 —— 2026-10-13 真机就是这么读到一份陈旧值，
+ * 报告里写"覆盖没挂上"，而它其实挂上了。共享同一个对象，读到的永远是当下。
+ */
+const headerOverlayState = { installed: false }
 
 /** 设置面板可调尺寸的上下限（与 client 侧的 clamp 保持一致）。 */
 const PANEL_MIN = 560
 const PANEL_MAX = 4000
 
-/** 「快捷指令」迁移那次写的重试次数与退避基数（见 {@link retryWrite} 的调用点）。 */
-export const QUICK_MIGRATION_ATTEMPTS = 4
-export const QUICK_MIGRATION_RETRY_MS = 300
-
-/**
- * 把一次写重试到成功（失败就退避再试），用于启动期与宿主自己的 profile 写抢锁的场合。
- *
- * 为什么需要：插件 apply 时宿主**自己也在写这个 profile**（注册插件行会动 profile 清单），
- * 两边的原子写锁会撞上。2026-10-10 在 0.2.1-alpha.2 的干净 profile 上真机撞出过一次
- * `atomic-write: timed out waiting for the writer lock ...package.json.lock`，
- * 于是「快捷指令」迁移被静默跳过（老用户入口消失）。锁是短暂的，退避重试就够。
- * @param write - 要做的那次写。
- * @param attempts - 最多试几次（含第一次）。
- * @param baseDelayMs - 退避基数；第 n 次失败后等 `baseDelayMs * n`。
- * @returns 第一次成功就 resolve；全部失败则抛出最后一次的错误。
- */
-export async function retryWrite(write: () => Promise<void>, attempts: number, baseDelayMs: number): Promise<void> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      await write()
-      return
-    } catch (error: unknown) {
-      if (attempt === attempts) throw error
-      await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt))
-    }
-  }
-}
+export { retryWrite, STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS } from './retry-write.ts'
 
 /**
  * DeepSeek 官方 provider 的设置命名空间（`packages/llm/llm-deepseek/src/index.ts` 的 `NS`）。
@@ -368,104 +355,207 @@ function errorText(error: unknown): string {
   return String(error)
 }
 
+/** 本次要注入的请求头（0.22.0 的纯函数产物）。 */
+export type HeaderRequest =
+  | { readonly kind: 'off' }
+  | { readonly kind: 'invalid'; readonly reason: string }
+  | { readonly kind: 'plan'; readonly name: string; readonly value: string; readonly routes: readonly string[] }
+
 /**
- * 把「请求头」栏目对齐到 llm-pi-ai 配置。幂等：算出的目标与现状一致时不写任何东西，
- * 因此本函数既可在插件启动时跑一次，也可在每次 settings 变更后被反复调用。
- * @param settings - settings 服务（用于写入）。
- * @param read - 按命名空间读值的读口（两代服务差异在 {@link makeReader} 里收口）。
+ * 从本插件自己的设置里读出"这次要注入什么"（纯函数，便于逐格钉住）。
+ *
+ * 0.22.0 起这条链**只读不写用户配置**：它产出的是一份"运行期覆盖用的计划"，
+ * 真正生效靠 `internal/config` 事件（见 {@link installHeaderOverlay}）。
+ *
+ * @param own - 本插件命名空间下的原始行。
+ * @returns `off`（没开）/ `invalid`（开了但参数不合法，附原因）/ `plan`（可以注入）。
  */
-async function mirrorHeader(settings: SettingsLike, read: ReadRow): Promise<void> {
+export function readHeaderRequest(own: Record<string, unknown> | undefined): HeaderRequest {
+  if (own === undefined) return { kind: 'off' }
+  if (own[ENABLED_FIELD] !== true || own[HEADER_ENABLED_FIELD] !== true) return { kind: 'off' }
+  const name = textOf(own[HEADER_NAME_FIELD])
+  if (!nameIsValid(name)) return { kind: 'invalid', reason: '头名不合法' }
+  const value = textOf(own[HEADER_VALUE_FIELD])
+  if (!valueIsValid(value)) return { kind: 'invalid', reason: `头值不合法（需 1–${String(HEADER_VALUE_MAX)} 字符且单行）` }
+  const routes = parseRouteList(textOf(own[HEADER_ROUTES_FIELD]))
+  return { kind: 'plan', name, value, routes }
+}
+
+/** 在 pi-ai 那行的配置上挂上 `providers.<route>.headers.<name>`（不修改入参）。 */
+function withHeaderOverlay(raw: unknown, request: Extract<HeaderRequest, { kind: 'plan' }>): unknown {
+  const row = objectOf(raw)
+  const providers = row === undefined ? undefined : objectOf(row.providers)
+  if (row === undefined || providers === undefined) return raw
+  const targets = pickRoutes(providers, request.routes)
+  if (targets.length === 0) return raw
+  const nextProviders: Record<string, unknown> = { ...providers }
+  for (const route of targets) {
+    const profile = objectOf(providers[route])
+    if (profile === undefined) continue
+    const headers = objectOf(profile.headers) ?? {}
+    nextProviders[route] = { ...profile, headers: { ...headers, [request.name]: request.value } }
+  }
+  return { ...row, providers: nextProviders }
+}
+
+/**
+ * 把「请求头」栏目改成**运行期可逆覆盖**（0.22.0，用户 2026-10-13 选定）。
+ *
+ * 为什么不再写配置：以前这条链把 `providers.<route>.headers.<name>` **写进用户的模型路由配置**，
+ * 再靠记账 + 撤销去回滚 —— 那是本插件唯一会动用户配置的功能，风险面（写坏了、撤销漏了、
+ * 用户自己又改了同一处）都由它承担。dsh-ops 的做法更克制：用官方 loader 的 `internal/config`
+ * 事件在**配置被解析时**补上字段，从不落盘（`lib/session-pwsh.js`，注释写着
+ * "never edits profile files or services"）。官方 `llm-pi-ai` 自己也是这么挂这个事件的。
+ *
+ * @param ctx - 插件上下文（只用来拿 loader 与挂事件）。
+ * @param read - 本插件设置的读口。
+ * @param onInstalled - 覆盖真的挂上之后回调一次（让状态行立刻从"没生效"变成真话）。
+ * @returns 一个可读的安装状态：installed 字段供 {@link syncHeaderOverlay} 如实回报。
+ */
+function installHeaderOverlay(ctx: Context, read: ReadRow, onInstalled: () => void, state: { installed: boolean } = headerOverlayState): { installed: boolean } {
+  // 能力探测：拿不到注入面就**什么都不做**（旧版服务、精简上下文、测试用的假 ctx）。
+  // 失败方向安全 —— 状态行会说"没生效"，而不是把整个插件拖崩。
+  const inject = (ctx as { inject?: unknown }).inject
+  if (typeof inject !== 'function') return state
+  try {
+    ;(inject as (names: readonly string[], fn: (inner: unknown) => unknown) => unknown).call(ctx, ['loader'], (loaderCtx: unknown) => {
+      const on = (loaderCtx as { on?: unknown } | undefined)?.on
+      if (typeof on !== 'function') return
+      ;(on as (event: string, fn: unknown) => unknown).call(
+        loaderCtx,
+        'internal/config',
+        function (this: unknown, _raw: unknown, next: () => unknown): unknown {
+          const raw = next()
+          const request = readHeaderRequest(read(NAMESPACE))
+          if (request.kind !== 'plan') return raw
+          // 只认"看着像 llm-pi-ai 那一行"的配置（有 providers）。这里不比较 fiber：
+          // 事件是瀑布式派发，`this` 的形态跨版本会变，而"哪份配置里有 providers"足够精确 ——
+          // 而且我们只往**已存在的路由**上补一个头，认错的代价是零。
+          return withHeaderOverlay(raw, request)
+        },
+      )
+      state.installed = true
+      try {
+        onInstalled()
+      } catch (error: unknown) {
+        console.error('[composer-ux] 请求头覆盖挂上后同步状态失败', error)
+      }
+      return () => { state.installed = false }
+    })
+  } catch (error: unknown) {
+    console.error('[composer-ux] 运行期请求头覆盖挂不上（继续按未生效运行）', error)
+  }
+  return state
+}
+
+/**
+ * 把「请求头」栏目的状态对齐到现实（0.22.0）。
+ *
+ * 干两件事，都**不碰用户配置**：
+ *  1. 把状态写回**本插件自己的命名空间**（`headerStatus`），供设置页显示；
+ *  2. **一次性**清理 0.21.x 及以前真的写进用户配置里的那些头（迁移表的第一条）。
+ *
+ * @param settings - settings 服务（用于写本插件自己的字段）。
+ * @param read - 按命名空间读值的读口。
+ * @param hasLoader - 运行期覆盖挂上没有（没有就没法生效，状态如实说）。
+ */
+async function syncHeaderOverlay(settings: SettingsLike, read: ReadRow, hasLoader: boolean): Promise<void> {
   const own = read(NAMESPACE)
   if (own === undefined) return
-
-  const enabled = own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true
-  const name = textOf(own[HEADER_NAME_FIELD])
-  const nameOk = nameIsValid(name)
-  const routesText = parseRouteList(textOf(own[HEADER_ROUTES_FIELD]))
-
-  // 首次启用且值为空：生成一个稳定 ID 并落盘，此后每次都用同一个。
-  let value = textOf(own[HEADER_VALUE_FIELD])
-  if (enabled && nameOk && value === '') {
-    value = newSessionId()
-    await settings.mutate(NAMESPACE, [{ op: 'set', path: [HEADER_VALUE_FIELD], value }])
+  // 首次启用且值是空的：生成一个稳定 ID，并写进**本插件自己的**命名空间（此前一直用它）。
+  // 注意落点：这是 composer-ux 的字段，不是用户的模型路由配置 —— 后者 0.22.0 起一个字都不写。
+  if (own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true) {
+    const name = textOf(own[HEADER_NAME_FIELD])
+    if (nameIsValid(name) && textOf(own[HEADER_VALUE_FIELD]) === '') {
+      const generated = newSessionId()
+      await retryWrite(() => settings.mutate(NAMESPACE, [{ op: 'set', path: [HEADER_VALUE_FIELD], value: generated }]), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
+      own[HEADER_VALUE_FIELD] = generated
+    }
   }
+  const request = readHeaderRequest(own)
 
   const llm = read(LLM_NAMESPACE)
   const providers = llm === undefined ? undefined : objectOf(llm.providers)
+  const applied = request.kind === 'plan' && providers !== undefined
+    ? pickRoutes(providers, request.routes)
+    : []
 
-  const writes: PathOp[] = []
-  const applied: string[] = []
-  let status = ''
+  const status = request.kind === 'off'
+    ? ''
+    : request.kind === 'invalid'
+      ? `${request.reason}，未注入`
+      : !hasLoader
+        ? '没找到 loader 服务，运行期覆盖挂不上，未注入'
+        : providers === undefined
+          ? '未挂载 llm-pi-ai（模型路由）设置，暂未注入'
+          : applied.length === 0
+            ? `已启用，但没有匹配的路由（目标：${request.routes.length === 0 ? `自动（名字以 ${OPENCODE_ROUTE_PREFIX} 开头，或 baseURL 指向 opencode.ai）` : request.routes.join('、')}）`
+            : `运行期注入 ${applied.join('、')}（只在本插件运行时生效，不改你的配置）`
 
-  if (!enabled) {
-    status = ''
-  } else if (providers === undefined) {
-    status = '未挂载 llm-pi-ai（模型路由）设置，暂未写入'
-  } else if (!nameOk) {
-    status = '头名不合法，未写入'
-  } else if (!valueIsValid(value)) {
-    status = `头值不合法（需 1–${HEADER_VALUE_MAX} 字符且单行），未写入`
-  } else {
-    for (const route of pickRoutes(providers, routesText)) {
-      const headers = objectOf(objectOf(providers[route])?.headers)
-      if (headers?.[name] !== value) {
-        writes.push({ op: 'set', path: ['providers', route, 'headers', name], value })
-      }
-      applied.push(route)
-    }
-    status = applied.length === 0
-      ? `已启用，但没有可写入的路由（目标：${routesText.length === 0 ? `自动（名字以 ${OPENCODE_ROUTE_PREFIX} 开头，或 baseURL 指向 opencode.ai）` : routesText.join('、')}）`
-      : `已写入 ${applied.join('、')}`
-  }
-
-  // 撤销：上次写入过、这次不再是目标的位置（停用、改名、值被换、路由被移除）。
-  // 只删「确实是我们写的」：值必须等于当前配置值或记账值，否则视为用户自己写的，不碰。
-  const stale: PathOp[] = []
-  if (providers !== undefined) {
-    const previousName = textOf(own[HEADER_APPLIED_NAME_FIELD])
-    const previousValue = textOf(own[HEADER_APPLIED_VALUE_FIELD])
-    const ours = new Set([textOf(own[HEADER_VALUE_FIELD]), previousValue])
-    ours.delete('')
-    // 本轮的目标键（哪怕值已经对、不需要写）——它们绝不能被当成过期项撤销。
-    const targets = new Set(applied.map(route => `${route}\u0000${name}`))
-    const candidates = new Set([previousName, nameOk ? name : ''])
-    candidates.delete('')
-    for (const candidate of candidates) {
-      for (const [route, profile] of Object.entries(providers)) {
-        if (targets.has(`${route}\u0000${candidate}`)) continue
-        const headers = objectOf(objectOf(profile)?.headers)
-        const current = headers?.[candidate]
-        if (typeof current !== 'string' || !ours.has(current)) continue
-        stale.push({ op: 'unset', path: ['providers', route, 'headers', candidate] })
-      }
-    }
-  }
-
-  const providerOps = [...writes, ...stale]
-  let failed = false
-  if (providerOps.length > 0) {
-    try {
-      await settings.mutate(LLM_NAMESPACE, providerOps)
-    } catch (error: unknown) {
-      failed = true
-      status = `写入失败：${errorText(error)}`
-    }
-  }
-
-  // 记账 + 状态回写：只有真正写成功才记账，且值不变时不写（保证幂等、不产生回环）。
-  const nextAppliedName = !failed && applied.length > 0 ? name : ''
-  const nextAppliedValue = !failed && applied.length > 0 ? value : ''
   const ownOps: PathOp[] = []
+  if (textOf(own[HEADER_STATUS_FIELD]) !== status) {
+    ownOps.push({ op: 'set', path: [HEADER_STATUS_FIELD], value: status })
+  }
+  // 记账继续保留（改名/改值后清理要用），但含义从"写入成功"变成"运行期生效"。
+  const nextAppliedName = request.kind === 'plan' && applied.length > 0 ? request.name : ''
+  const nextAppliedValue = request.kind === 'plan' && applied.length > 0 ? request.value : ''
   if (textOf(own[HEADER_APPLIED_NAME_FIELD]) !== nextAppliedName) {
     ownOps.push({ op: 'set', path: [HEADER_APPLIED_NAME_FIELD], value: nextAppliedName })
   }
   if (textOf(own[HEADER_APPLIED_VALUE_FIELD]) !== nextAppliedValue) {
     ownOps.push({ op: 'set', path: [HEADER_APPLIED_VALUE_FIELD], value: nextAppliedValue })
   }
-  if (textOf(own[HEADER_STATUS_FIELD]) !== status) {
-    ownOps.push({ op: 'set', path: [HEADER_STATUS_FIELD], value: status })
+
+  // 迁移（0.22.0 第 1 条）：把老版本**真的写进**用户配置的那些头删掉 —— 一次性，做完打标记。
+  // 该不该跑由迁移表说了算（见 src/migrations.ts）：跑成功才写标记，失败下次启动重来。
+  const headerCleanup = pendingMigrations(own).find(row => row.field === HEADER_CLEANUP_FIELD)
+  if (headerCleanup !== undefined) {
+    const stale = collectOursToClean(own, providers, request)
+    try {
+      if (stale.length > 0) await retryWrite(() => settings.mutate(LLM_NAMESPACE, stale), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
+      ownOps.push({ op: 'set', path: [headerCleanup.field], value: headerCleanup.version })
+    } catch (error: unknown) {
+      // 清理失败不阻断：下次启动再来（标记没写进去就是"没完成"）。
+      console.error('[composer-ux] 旧请求头清理失败', error)
+    }
   }
-  if (ownOps.length > 0) await settings.mutate(NAMESPACE, ownOps)
+
+  if (ownOps.length > 0) await retryWrite(() => settings.mutate(NAMESPACE, ownOps), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
+}
+
+/**
+ * 找出"确实是我们写进去的"头，用来清理（0.22.0 一次性迁移）。
+ *
+ * 判据与老版本的撤销完全一致，**绝不误删用户自己写的**：值必须等于当前设置值或记账值。
+ * @param own - 本插件当前设置行。
+ * @param providers - 用户配置里的 providers 映射（可能缺席）。
+ * @param request - 这次解析出来的注入计划（它的目标键不能被当成过期项）。
+ * @returns 要 unset 的路径操作。
+ */
+function collectOursToClean(
+  own: Record<string, unknown>,
+  providers: Record<string, unknown> | undefined,
+  request: HeaderRequest,
+): PathOp[] {
+  if (providers === undefined) return []
+  const previousName = textOf(own[HEADER_APPLIED_NAME_FIELD])
+  const previousValue = textOf(own[HEADER_APPLIED_VALUE_FIELD])
+  const ours = new Set([textOf(own[HEADER_VALUE_FIELD]), previousValue])
+  ours.delete('')
+  // 与老版"撤销"的唯一区别：**没有豁免项** —— 老版要跳过"本轮的目标键"（那正是它要写的），
+  // 而现在一个字节都不写，凡是值等于我们记账值、名字是我们用过的，都是该清的残留。
+  const candidates = new Set([previousName, request.kind === 'plan' ? request.name : ''])
+  candidates.delete('')
+  const stale: PathOp[] = []
+  for (const candidate of candidates) {
+    for (const [route, profile] of Object.entries(providers)) {
+      const headers = objectOf(objectOf(profile)?.headers)
+      const current = headers?.[candidate]
+      if (typeof current !== 'string' || !ours.has(current)) continue
+      stale.push({ op: 'unset', path: ['providers', route, 'headers', candidate] })
+    }
+  }
+  return stale
 }
 
 /**
@@ -513,6 +603,8 @@ function ownSchema(): Schema {
     [HEADER_APPLIED_NAME_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedName),
     [HEADER_APPLIED_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedValue),
     [HEADER_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.headerStatus),
+    // 迁移标记（0.22.0，本插件自己的字段）：0/未设置 = 0.21.x 写进用户配置的头还没清理。
+    [HEADER_CLEANUP_FIELD]: z.number().required(false),
     // 快捷指令列表：结构固定为 {id,label,prompt,always}，逐条自带默认值，
     // 让旧设置文档（没有这个键）在读取时直接得到内置 9 条。
     [QUICK_PROMPTS_FIELD]: z.array(z.object({
@@ -800,6 +892,12 @@ export function apply(ctx: Context, config?: unknown): void {
     // 0.1.6 及以前：命名空间必须显式注册。0.1.7 起 register 不存在，什么都不做。
     if (typeof settings.register === 'function') settings.register(NAMESPACE, Config)
     const read = makeReader(settings, config)
+    /**
+     * 运行期覆盖（0.22.0）：装一次，之后每次 llm-pi-ai 那行配置被解析时按需补头。
+     * `installed` 只用来让状态行说实话（没 loader = 挂不上 = 没生效）。
+     */
+    let resync: () => void = () => {}
+    installHeaderOverlay(ctx, read, () => { resync() })
     // 串行化：本插件自己的写入也会再触发 settings/updated，用 busy/again 保证
     // 一次只跑一轮镜像，且不漏掉期间到达的变更。
     let busy = false
@@ -810,9 +908,9 @@ export function apply(ctx: Context, config?: unknown): void {
         return
       }
       busy = true
-      void mirrorHeader(settings, read)
+      void syncHeaderOverlay(settings, read, headerOverlayState.installed)
         .catch((error: unknown) => {
-          console.error('[composer-ux] 请求头镜像失败', error)
+          console.error('[composer-ux] 请求头状态同步失败', error)
         })
         .finally(() => {
           busy = false
@@ -836,7 +934,8 @@ export function apply(ctx: Context, config?: unknown): void {
     for (const event of ['settings/updated', 'settings/document-updated']) {
       ctx.on(event as never, onSettingsUpdated as never)
     }
-    // 启动即对齐一次：启用状态下的头即使在别处被抹掉，也会在此补回。
+    resync = sync
+    // 启动即对齐一次：状态与一次性清理都在这儿收口（运行期覆盖不改用户配置）。
     sync()
   })
 
@@ -1204,7 +1303,55 @@ export function apply(ctx: Context, config?: unknown): void {
        */
       let toolInfo: Record<string, unknown> | null = null
       let tooledResult: { out: string; failure: string } | null = null
-      const toolsOn = readToolsOn || bashOn
+
+      /**
+       * 这次优化的 bash 授权（0.22.0，借鉴 dsh-ops 的"命令类能力只在完全权限下发布"）。
+       *
+       * 为什么要算它：解释层的 `bash` 是 `node:child_process.spawn` **直接执行**的，不经过宿主的
+       * 受限终端后端 —— 拿不到沙箱服务时它天生绕过 `read-only` / `workspace-write` 会话的策略。
+       * 现在的规矩：**能证明"被沙箱约束"（宿主有 confine 且自报 full）或"会话本身是完全权限"才给工具**，
+       * 证明不了就不给（失败方向安全），并把结论如实回报给界面。
+       */
+      const bashGate: { readonly gate: BashAuthority; readonly confine?: (argv: readonly string[]) => Promise<{ readonly argv: readonly string[]; readonly enforcement?: string }> } = (() => {
+        if (!bashOn) return { gate: { kind: 'off' } }
+        let mode: string | undefined
+        let policy: unknown
+        let sandbox: { confine?: (argv: readonly string[], policy: unknown, signal?: AbortSignal) => Promise<{ argv: readonly string[]; enforcement?: string }> } | undefined
+        try {
+          const session = sessionId === ''
+            ? undefined
+            : (optCtx.get('sessions') as { get?: (id: string) => unknown } | undefined)?.get?.(sessionId as never)
+          const resolved = (optCtx.get('sandboxPolicy') as { resolve?: (request?: unknown) => unknown } | undefined)?.resolve?.({ session })
+          policy = resolved
+          mode = typeof (resolved as { mode?: unknown } | undefined)?.mode === 'string' ? (resolved as { mode: string }).mode : undefined
+        } catch {
+          mode = undefined
+        }
+        try {
+          const candidate = optCtx.get('sandbox') as typeof sandbox
+          if (candidate !== undefined && typeof candidate.confine === 'function') sandbox = candidate
+        } catch {
+          sandbox = undefined
+        }
+        const gate = resolveBashAuthority({ enabled: true, ...(mode === undefined ? {} : { mode }), hasConfine: sandbox !== undefined })
+        if (gate.kind !== 'open' || !gate.confined || sandbox?.confine === undefined) return { gate }
+        const confine = sandbox.confine.bind(sandbox)
+        return {
+          gate,
+          confine: async (argv: readonly string[]) => {
+            const out = await confine(argv, policy, controller.signal)
+            return { argv: out.argv, ...(out.enforcement === undefined ? {} : { enforcement: out.enforcement }) }
+          },
+        }
+      })()
+      const bashOpen = bashGate.gate.kind === 'open'
+      /** 回报给界面的授权结论（off / denied / sandboxed / full-access）。 */
+      const bashGateInfo: Record<string, unknown> = bashGate.gate.kind === 'off'
+        ? { bashGate: 'off' }
+        : bashGate.gate.kind === 'denied'
+          ? { bashGate: 'denied', bashGateReason: bashGate.gate.reason }
+          : { bashGate: bashGate.gate.confined ? 'sandboxed' : 'full-access' }
+      const toolsOn = readToolsOn || bashOpen
       const cwd = toolsOn ? sessionCwdOf(await readSessionSnapshot(sessionId)) : ''
       if (toolsOn && cwd !== '') {
         try {
@@ -1212,10 +1359,11 @@ export function apply(ctx: Context, config?: unknown): void {
             llm: optCtx.llm as never,
             provider: route.provider,
             model: route.model,
-            system: `${system}${readToolsOn ? READ_TOOLS_SYSTEM_NOTE : ''}${bashOn ? BASH_TOOL_SYSTEM_NOTE : ''}`,
+            system: `${system}${readToolsOn ? READ_TOOLS_SYSTEM_NOTE : ''}${bashOpen ? BASH_TOOL_SYSTEM_NOTE : ''}`,
             userText: buildOptimizeUser(body, { context: contextText }),
             root: cwd,
-            bash: bashOn,
+            bash: bashOpen,
+            ...(bashGate.confine === undefined ? {} : { bashConfine: bashGate.confine }),
             signal: controller.signal,
             onDelta: onStreamDelta,
             maxChars: OPTIMIZE_OUTPUT_MAX * 4,
@@ -1279,6 +1427,8 @@ export function apply(ctx: Context, config?: unknown): void {
             error: result.failure === '' ? '模型没有产出任何内容' : `优化失败：${result.failure}`,
             retried,
             ...(toolInfo === null ? {} : toolInfo),
+          ...bashGateInfo,
+            ...bashGateInfo,
           }
         }
         // 解析 → 逐条核对逐字依据 → 装配成成品（见 optimizer-assemble.ts）。
@@ -1321,6 +1471,7 @@ export function apply(ctx: Context, config?: unknown): void {
           chars: assembled.chars,
           // 只读查证这一路的记账（没派过工具时就一个键都没有）。
           ...(toolInfo === null ? {} : toolInfo),
+          ...bashGateInfo,
         }
       })()
 
@@ -1342,6 +1493,7 @@ export function apply(ctx: Context, config?: unknown): void {
           fallback: summary.fallback,
           // 工具记账：回落也带上（"确实花了这些次调用又回落了"比抹平成 0 诚实）。
           ...(toolInfo === null ? {} : toolInfo),
+          ...bashGateInfo,
           retried,
           promptSource: optimizePromptSource(customPrompt),
           ms: Date.now() - startedAt,
@@ -2421,14 +2573,131 @@ export function apply(ctx: Context, config?: unknown): void {
         if (outcome.kind !== 'ok' || !bookLooksCustom(outcome.book)) return
         await retryWrite(
           () => service.mutate(NAMESPACE, [{ op: 'set', path: [QUICK_ENABLED_FIELD], value: true }]),
-          QUICK_MIGRATION_ATTEMPTS,
-          QUICK_MIGRATION_RETRY_MS,
+          STARTUP_WRITE_ATTEMPTS,
+          STARTUP_WRITE_RETRY_MS,
         )
       } catch (error: unknown) {
         // 迁移失败不是致命错误：用户顶多在设置页手动打开这一栏。
         console.error('[composer-ux] quick section migration skipped', error)
       }
     })()
+  })
+
+  // ── 自检（0.22.0）────────────────────────────────────────────────────────
+  //
+  // 一行一句人话，把散在各处的状态摊平：设置字段是否都在 schema 里、八栏开关、终端替换、
+  // 请求头运行期覆盖、快捷指令本、通知凭据、解释层档位、运行环境。
+  // 采集在这里（要服务），判断在 ./doctor.ts（纯函数，可逐格测）。
+  ctx.inject(['webServer'], (doctorCtx) => {
+    const doctorRead = makeReader(doctorCtx.get('settings') as SettingsLike | undefined, config)
+    const sendDoctorJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+    /** 本插件版本：从包自己的 package.json 读（读不到就空着，不编）。 */
+    const pluginVersion = ((): string => {
+      try {
+        const require_ = process.getBuiltinModule('node:module').createRequire(import.meta.url)
+        return String((require_('../package.json') as { version?: unknown }).version ?? '')
+      } catch {
+        return ''
+      }
+    })()
+    const collectDoctor = async (): Promise<DoctorInput> => {
+      const own = doctorRead(NAMESPACE) ?? {}
+      /** 某个服务在不在（决定"能不能做某件事"，而不是假装它能）。 */
+      const has = (name: string): boolean => {
+        try {
+          return doctorCtx.get(name) !== undefined
+        } catch {
+          return false
+        }
+      }
+      const bool = (field: string): boolean => own[field] === true
+      const text = (field: string): string => textOf(own[field])
+      const quickOutcome = await readQuickBook(quickStorePath()).catch(() => ({ kind: 'error' as const }))
+      return {
+        version: pluginVersion,
+        enabled: bool(ENABLED_FIELD),
+        sections: {
+          键位: bool(KEYS_ENABLED_FIELD),
+          右键菜单: bool(MENU_ENABLED_FIELD),
+          快捷指令: bool(QUICK_ENABLED_FIELD),
+          设置面板: bool(PANEL_ENABLED_FIELD),
+          默认终端: bool(TERMINAL_ENABLED_FIELD),
+          微信通知: bool(NOTIFY_ENABLED_FIELD),
+          'OpenCode 请求头': bool(HEADER_ENABLED_FIELD),
+          只读查证: bool(OPTIMIZE_READ_TOOLS_FIELD),
+        },
+        fieldConstants: ALL_SETTINGS_FIELDS,
+        schemaKeys: Object.keys((ownSchema() as unknown as { dict?: Record<string, unknown> }).dict ?? {}),
+        terminal: {
+          platform: process.platform,
+          rowInstalled: has('terminals'),
+          bashPath: text(TERMINAL_BASH_PATH_FIELD),
+          status: text(TERMINAL_STATUS_FIELD),
+          mode: ((): string => {
+            try {
+              const policy = doctorCtx.get('sandboxPolicy') as { resolve?: () => { mode?: unknown } } | undefined
+              const mode = policy?.resolve?.().mode
+              return typeof mode === 'string' ? mode : '拿不到'
+            } catch {
+              return '拿不到'
+            }
+          })(),
+          hasSandbox: has('sandbox'),
+        },
+        header: {
+          overlayInstalled: headerOverlayState.installed,
+          hasLoader: has('loader'),
+          migrated: pendingMigrations(own).length === 0,
+          status: text(HEADER_STATUS_FIELD),
+          // 0.22.0 起这条链不再写用户配置；真写了就是回归，自检要红。
+          writesUserConfig: false,
+        },
+        quick: {
+          file: quickStorePath(),
+          readable: quickOutcome.kind === 'ok',
+          custom: quickOutcome.kind === 'ok' ? bookLooksCustom(quickOutcome.book) : false,
+          error: quickOutcome.kind === 'ok' ? '' : String(quickOutcome.kind),
+        },
+        notify: {
+          enabled: bool(NOTIFY_ENABLED_FIELD),
+          channel: text(NOTIFY_CHANNEL_FIELD),
+          credentialSet: text(NOTIFY_PUSHPLUS_FIELD) !== '' || text(NOTIFY_WECOM_FIELD) !== '',
+        },
+        optimize: {
+          tier: text(OPTIMIZER_TIER_FIELD),
+          readTools: bool(OPTIMIZE_READ_TOOLS_FIELD),
+          bashOn: bool(OPTIMIZE_BASH_FIELD),
+          bashGate: '按会话权限判定（完全权限直跑；否则必须过沙箱，证明不了就不给）',
+        },
+        runtime: { node: process.version, dshVersion: '' },
+      }
+    }
+    const handleDoctor = async (
+      req: { method?: string },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+    ): Promise<void> => {
+      if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+        sendDoctorJson(res, 405, { ok: false, error: '只接受 GET' })
+        return
+      }
+      try {
+        sendDoctorJson(res, 200, { ok: true, rows: buildDoctorReport(await collectDoctor()) })
+      } catch (error: unknown) {
+        sendDoctorJson(res, 500, { ok: false, error: errorText(error) })
+      }
+    }
+    doctorCtx.effect(() => doctorCtx.webServer.register({
+      kind: 'exact',
+      path: DOCTOR_API_PATH,
+      handler: handleDoctor as never,
+    }), 'composer-ux: doctor route')
   })
 
   // ── 重启 DSH ──────────────────────────────────────────────────────────────

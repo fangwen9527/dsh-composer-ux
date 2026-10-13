@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { DoctorCard } from './DoctorCard.tsx'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
@@ -1270,6 +1271,10 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         </div>
         <NotifyCard settings={settings} setField={actions.setField} />
         <DirectoryPickCard settings={settings} setField={actions.setField} />
+        {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
+        <FoldCard name="自检" summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）">
+          <DoctorCard />
+        </FoldCard>
         <RestartBanner restart={restart} />
         {/*
           写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。

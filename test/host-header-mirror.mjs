@@ -1,8 +1,13 @@
 /**
- * 宿主半「OpenCode 请求头镜像」的行为测试。
+ * 宿主半「OpenCode 请求头」的行为测试（0.22.0 起：**运行期可逆覆盖**，不再写用户配置）。
  *
  * 它直接 import 构建产物 lib/index.js，用一个假的 settings/Cordis 上下文驱动，
- * 因此不需要重启 DSH 就能验证：写入、撤销、改名、幂等、以及「绝不误删用户自己写的头」。
+ * 因此不需要重启 DSH 就能验证：
+ *   · 启用后**一个字节都不写**用户的模型路由配置（这是本文件最重要的断言）；
+ *   · 头是通过 `internal/config` 事件在**配置被解析时**补进去的（官方 `llm-pi-ai`
+ *     自己也挂这个事件，dsh-ops 用它做过同样的事）；
+ *   · 停用 / 改名 / 改值后覆盖跟着变，用户自己写的头一个都不碰；
+ *   · 0.21.x 及以前写进用户配置的那些头会被**一次性**清掉，且不会误删用户的同名头。
  *
  *   node test/host-header-mirror.mjs
  */
@@ -57,7 +62,9 @@ async function boot(seed) {
   const state = structuredClone(seed)
   const calls = []
   const listeners = []
-  /** 注册进来的 schema：右键菜单那三个「可选键」的语义就是靠它保证的，见第 6 节。 */
+  /** `internal/config` 的处理器（运行期覆盖就挂在这儿）。 */
+  const configHandlers = []
+  /** 注册进来的 schema：右键菜单那三个「可选键」的语义就是靠它保证的，见第 18 节。 */
   let schema = null
   const settings = {
     get: ns => state[ns],
@@ -70,19 +77,31 @@ async function boot(seed) {
       }
     },
   }
+  /**
+   * 假的 loader 服务：0.22.0 的运行期覆盖要挂在它上面。
+   * `entries()` 返回空数组（真实环境里用来找 llm-pi-ai 那一行；我们的匹配是看形状，不靠它）。
+   */
+  const loader = {
+    entries: () => [],
+    on: (name, listener) => {
+      if (name === 'internal/config') configHandlers.push(listener)
+    },
+  }
   const services = {
     settings,
+    loader,
     /** Cordis 的 ctx.effect：执行一次并登记清理函数。 */
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
     },
     get: (name) => services[name],
+    // 真实 Cordis 里 inject 给的是**该服务的 ctx**，它当然带 `on`（运行期覆盖就挂在这上面）。
+    on: (name, listener) => { loader.on(name, listener) },
   }
   const ctx = {
     // 只在该服务确实挂载时才进入回调 —— 与 Cordis 的 inject 语义一致。
-    // 本用例不提供 webServer/llm，因此「提示词优化接口」那一段会被跳过，
-    // 请求头镜像的行为不受影响（路由本身在 test/quick-commands.mjs 里单独验）。
+    // 本用例不提供 webServer/llm/sandbox，因此那几段会被跳过（各自有单独的套件）。
     inject: (deps, callback) => {
       if (!deps.every(dep => services[dep] !== undefined)) return
       callback(services)
@@ -97,6 +116,15 @@ async function boot(seed) {
     calls,
     /** 本插件注册的设置 schema（可当函数调用，得到解析后的值）。 */
     get schema() { return schema },
+    /**
+     * 把一份 llm-pi-ai 配置"过一遍 internal/config 瀑布"，拿到插件会实际送出去的配置。
+     * 真实宿主是倒着跑处理器的；这里只有本插件一个处理器，顺序不影响结果。
+     */
+    overlay(raw) {
+      let out = raw
+      for (const listener of configHandlers) out = listener.call(undefined, raw, () => out)
+      return out
+    },
     /** 模拟设置变更事件，触发宿主半重新对齐。 */
     async touch(ns) {
       calls.length = 0
@@ -106,7 +134,7 @@ async function boot(seed) {
   }
 }
 
-const settle = () => new Promise(resolve => { setTimeout(resolve, 15) })
+const settle = () => new Promise(resolve => { setTimeout(resolve, 40) })
 
 const baseLlm = () => ({
   providers: {
@@ -127,74 +155,92 @@ const baseOwn = overrides => ({
   ...overrides,
 })
 
-/** 目标路由的请求头字典。 */
+/** 目标路由的请求头字典（**真实用户配置**里的那份）。 */
 const headersOf = (state, route) => state[LLM].providers[route]?.headers
+/** 覆盖之后实际会被送出去的请求头。 */
+const sentHeaders = (app, route) => app.overlay(app.state[LLM]).providers[route]?.headers
 
 // ── 1. 未启用：一个字都不写 ─────────────────────────────────────────────────
 {
-  console.log('1. 未启用时不产生任何写入')
+  console.log('1. 未启用时不产生任何写入，也不生成值')
   const app = await boot({ [NAMESPACE]: baseOwn(), [LLM]: baseLlm() })
   check('llm-pi-ai 未被改动', headersOf(app.state, 'opencode-go') === undefined)
-  check('没有 mutate 调用', app.calls.length === 0, JSON.stringify(app.calls))
+  // 迁移标记会写（清理 0.21.x 的旧写入**与功能开不开无关**，该清就清），但用户配置一个字不碰。
+  check('只写了自己的迁移标记，没有别的写入',
+    app.calls.every(call => call.ns === NAMESPACE), JSON.stringify(app.calls))
+  check('llm-pi-ai 那条链上零写入',
+    app.calls.every(call => call.ns !== LLM), JSON.stringify(app.calls.map(call => call.ns)))
+  check('也没注入任何头', sentHeaders(app, 'opencode-go') === undefined)
 }
 
-// ── 2. 启用且值为空：自动生成并写入 opencode 系路由 ──────────────────────────
+// ── 2. 启用（值留空）：自动生成稳定 ID，且**只写本插件自己的命名空间** ──────
 {
-  console.log('2. 启用（值留空）→ 自动生成稳定 ID 并只写 opencode 系路由')
+  console.log('2. 启用（值留空）→ 自动生成稳定 ID；用户配置一个字节都不写')
   const app = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
   const value = app.state[NAMESPACE].headerValue
   check('生成了 36 字符 UUID', typeof value === 'string' && value.length === 36, value)
-  check('写进 opencode-go', headersOf(app.state, 'opencode-go')?.['x-opencode-session'] === value)
-  check('没碰非 opencode 路由（ds）', headersOf(app.state, 'ds') === undefined)
+  check('❗用户配置里**没有**任何请求头被写进去', headersOf(app.state, 'opencode-go') === undefined)
+  check('❗所有 mutate 都落在本插件自己的命名空间',
+    app.calls.every(call => call.ns === NAMESPACE), JSON.stringify(app.calls.map(call => call.ns)))
+  check('运行期覆盖把头发给了 opencode-go', sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === value)
+  check('非 opencode 路由不注入（ds）', sentHeaders(app, 'ds')?.['x-opencode-session'] === undefined)
   check('记账头名', app.state[NAMESPACE].headerAppliedName === 'x-opencode-session')
-  check('状态可读', app.state[NAMESPACE].headerStatus === '已写入 opencode-go', app.state[NAMESPACE].headerStatus)
+  check('状态说清了是运行期注入',
+    app.state[NAMESPACE].headerStatus === '运行期注入 opencode-go（只在本插件运行时生效，不改你的配置）',
+    app.state[NAMESPACE].headerStatus)
   check('用户模型清单没被动过', app.state[LLM].providers['opencode-go'].models.length === 1)
+  check('原配置对象没被就地改动（overlay 返回的是新对象）',
+    !Object.hasOwn(app.state[LLM].providers['opencode-go'], 'headers'))
 
   console.log('3. 幂等：再次同步不产生任何写入')
   await app.touch(LLM)
   check('第二轮零 mutate', app.calls.length === 0, JSON.stringify(app.calls))
 }
 
-// ── 3. 停用：撤销自己写的，且不动别人 ───────────────────────────────────────
+// ── 3. 停用：不再注入；用户自己写的同名头永远不动 ───────────────────────────
 {
-  console.log('4. 停用 → 撤销写入')
+  console.log('4. 停用 → 不再注入')
   const app = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
-  const written = app.state[NAMESPACE].headerValue
-  check('先确认已写入', headersOf(app.state, 'opencode-go')['x-opencode-session'] === written)
+  check('先确认在注入', typeof sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === 'string')
   app.state[NAMESPACE].headerEnabled = false
   await app.touch(NAMESPACE)
-  check('头已撤销', headersOf(app.state, 'opencode-go')['x-opencode-session'] === undefined)
+  check('停用后不再注入', sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === undefined)
+  check('用户配置仍然一个字没写', headersOf(app.state, 'opencode-go') === undefined)
   check('记账已清空', app.state[NAMESPACE].headerAppliedName === '')
 }
 
 {
-  console.log('5. 停用时不动「用户自己写的」同名头')
-  const seed = { [NAMESPACE]: baseOwn({ headerEnabled: false }), [LLM]: baseLlm() }
+  console.log('5. ❗用户自己写的同名头不会被覆盖、也不会被删')
+  const seed = { [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() }
   seed[LLM].providers['opencode-go'].headers = { 'x-opencode-session': 'user-owned-value' }
   const app = await boot(seed)
-  check('用户值被保留', headersOf(app.state, 'opencode-go')['x-opencode-session'] === 'user-owned-value')
+  check('用户值在磁盘上被保留', headersOf(app.state, 'opencode-go')['x-opencode-session'] === 'user-owned-value')
+  check('运行期注入用的是插件自己的值（不改用户那份）',
+    sentHeaders(app, 'opencode-go')['x-opencode-session'] === app.state[NAMESPACE].headerValue)
 }
 
 {
-  console.log('6. 启用时不动同一个 profile 里的其它头')
+  console.log('6. 覆盖不动同一个 profile 里的其它头')
   const seed = { [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() }
   seed[LLM].providers['opencode-go'].headers = { 'x-custom': 'keep-me' }
   const app = await boot(seed)
-  check('其它头保留', headersOf(app.state, 'opencode-go')['x-custom'] === 'keep-me')
-  check('目标头已写入', typeof headersOf(app.state, 'opencode-go')['x-opencode-session'] === 'string')
+  const sent = sentHeaders(app, 'opencode-go')
+  check('其它头原样保留', sent['x-custom'] === 'keep-me')
+  check('目标头也在（两者共存）', typeof sent['x-opencode-session'] === 'string')
 }
 
-// ── 4. 改名：旧键撤销、新键写入 ─────────────────────────────────────────────
+// ── 4. 改名 / 改值 ──────────────────────────────────────────────────────────
 {
-  console.log('7. 改头名 → 旧键撤销、新键写入')
+  console.log('7. 改头名 → 送来的是新头名，用户配置依旧干净')
   const app = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
   const value = app.state[NAMESPACE].headerValue
   app.state[NAMESPACE].headerName = 'x-session-affinity'
   await app.touch(NAMESPACE)
-  const headers = headersOf(app.state, 'opencode-go')
-  check('旧头名已撤销', headers['x-opencode-session'] === undefined)
-  check('新头名已写入同值', headers['x-session-affinity'] === value)
+  const sent = sentHeaders(app, 'opencode-go')
+  check('新头名在（同值）', sent['x-session-affinity'] === value)
+  check('旧头名不在', sent['x-opencode-session'] === undefined)
   check('记账跟着改名', app.state[NAMESPACE].headerAppliedName === 'x-session-affinity')
+  check('用户配置仍然干净', headersOf(app.state, 'opencode-go') === undefined)
 }
 
 // ── 5. 路由选择与异常输入 ───────────────────────────────────────────────────
@@ -204,19 +250,21 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
     [NAMESPACE]: baseOwn({ headerEnabled: true, headerRoutes: 'opencode, opencode-go' }),
     [LLM]: baseLlm(),
   })
-  check('opencode-go 写入了', typeof headersOf(app.state, 'opencode-go')?.['x-opencode-session'] === 'string')
-  check('没有凭空造出 opencode 路由', app.state[LLM].providers.opencode === undefined)
-  check('状态说明了目标路由', app.state[NAMESPACE].headerStatus === '已写入 opencode-go', app.state[NAMESPACE].headerStatus)
+  check('opencode-go 注入了', typeof sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === 'string')
+  check('覆盖后也没有凭空造出 opencode 路由', app.overlay(app.state[LLM]).providers.opencode === undefined)
+  check('状态说明了目标路由',
+    app.state[NAMESPACE].headerStatus === '运行期注入 opencode-go（只在本插件运行时生效，不改你的配置）',
+    app.state[NAMESPACE].headerStatus)
 }
 
 {
-  console.log('9. 头名非法 → 拒绝写入并给出原因')
+  console.log('9. 头名非法 → 拒绝注入并给出原因')
   const app = await boot({
     [NAMESPACE]: baseOwn({ headerEnabled: true, headerName: 'x open code' }),
     [LLM]: baseLlm(),
   })
-  check('没有写入', headersOf(app.state, 'opencode-go') === undefined)
-  check('状态提示头名不合法', app.state[NAMESPACE].headerStatus === '头名不合法，未写入', app.state[NAMESPACE].headerStatus)
+  check('没有注入', sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === undefined)
+  check('状态提示头名不合法', app.state[NAMESPACE].headerStatus === '头名不合法，未注入', app.state[NAMESPACE].headerStatus)
 }
 
 {
@@ -226,12 +274,13 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
 }
 
 {
-  console.log('11. 总开关关闭时一并撤销（全局停用 = 全部功能停用）')
+  console.log('11. 总开关关闭 → 覆盖也不生效（全局停用 = 全部功能停用）')
   const app = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
-  check('先确认已写入', typeof headersOf(app.state, 'opencode-go')?.['x-opencode-session'] === 'string')
+  check('先确认在注入', typeof sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === 'string')
   app.state[NAMESPACE].enabled = false
   await app.touch(NAMESPACE)
-  check('头已撤销', headersOf(app.state, 'opencode-go')['x-opencode-session'] === undefined)
+  check('关掉后不再注入', sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === undefined)
+  check('用户配置仍然干净', headersOf(app.state, 'opencode-go') === undefined)
 }
 
 {
@@ -240,32 +289,29 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
     [NAMESPACE]: baseOwn({ headerEnabled: true }),
     [LLM]: {
       providers: {
-        // 内置路由：配置里没有 baseURL，只能靠名字（opencode 前缀）
         'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'm1' }] },
-        // 用户自建别名：名字任意，端点仍是 OpenCode —— 这正是「按 URL 认」要覆盖的情形
         go: { apiKeyEnv: 'GO_API_KEY', baseURL: 'https://opencode.ai/zen/go/v1', models: [{ id: 'm2' }] },
-        // 子域
         'opencode-zen': { apiKeyEnv: 'K', baseURL: 'https://zen.opencode.ai/v1', models: [{ id: 'm3' }] },
-        // 非 OpenCode：不得写入
         ds: { apiKeyEnv: 'DS_API_KEY', baseURL: 'https://api.deepseek.com', models: [{ id: 'm4' }] },
-        // 名字里含 opencode 但主机不是它：不得写入
         mimic: { apiKeyEnv: 'K2', baseURL: 'https://opencode.ai.evil.example/v1', models: [{ id: 'm5' }] },
       },
     },
   }
   const app = await boot(seed)
   const value = app.state[NAMESPACE].headerValue
-  const hit = route => headersOf(app.state, route)?.['x-opencode-session'] === value
-  check('内置 opencode-go（按名字）写入', hit('opencode-go'))
-  check('自建别名 go（按 URL）写入', hit('go'))
-  check('子域 zen.opencode.ai 写入', hit('opencode-zen'))
-  check('deepseek 路由未动', headersOf(app.state, 'ds') === undefined)
-  check('仿冒主机 opencode.ai.evil.example 未写入', headersOf(app.state, 'mimic') === undefined)
-  check('状态列出全部命中路由', app.state[NAMESPACE].headerStatus === '已写入 opencode-go、go、opencode-zen', app.state[NAMESPACE].headerStatus)
+  const hit = route => sentHeaders(app, route)?.['x-opencode-session'] === value
+  check('内置 opencode-go（按名字）注入', hit('opencode-go'))
+  check('自建别名 go（按 URL）注入', hit('go'))
+  check('子域 zen.opencode.ai 注入', hit('opencode-zen'))
+  check('deepseek 路由不注入', sentHeaders(app, 'ds')?.['x-opencode-session'] === undefined)
+  check('仿冒主机 opencode.ai.evil.example 不注入', sentHeaders(app, 'mimic')?.['x-opencode-session'] === undefined)
+  check('状态列出全部命中路由',
+    app.state[NAMESPACE].headerStatus === '运行期注入 opencode-go、go、opencode-zen（只在本插件运行时生效，不改你的配置）',
+    app.state[NAMESPACE].headerStatus)
 }
 
 {
-  console.log('13. 显式名单优先：只写名单里且确实存在的路由')
+  console.log('13. 显式名单优先：只注入名单里且确实存在的路由')
   const seed = {
     [NAMESPACE]: baseOwn({ headerEnabled: true, headerRoutes: 'go, not-there' }),
     [LLM]: {
@@ -276,26 +322,66 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
     },
   }
   const app = await boot(seed)
-  check('名单里的 go 写入', typeof headersOf(app.state, 'go')?.['x-opencode-session'] === 'string')
-  check('未列入的 opencode-go 不写', headersOf(app.state, 'opencode-go') === undefined)
+  check('名单里的 go 注入', typeof sentHeaders(app, 'go')?.['x-opencode-session'] === 'string')
+  check('未列入的 opencode-go 不注入', sentHeaders(app, 'opencode-go')?.['x-opencode-session'] === undefined)
 }
 
 {
   console.log('14. baseURL 不是合法 URL 时退回子串判断')
   const seed = {
     [NAMESPACE]: baseOwn({ headerEnabled: true }),
-    [LLM]: {
-      providers: {
-        weird: { apiKeyEnv: 'K', baseURL: 'opencode.ai/zen/go/v1', models: [{ id: 'm1' }] },
-      },
-    },
+    [LLM]: { providers: { weird: { apiKeyEnv: 'K', baseURL: 'opencode.ai/zen/go/v1', models: [{ id: 'm1' }] } } },
   }
   const app = await boot(seed)
-  check('含 opencode.ai 的裸串仍写入', typeof headersOf(app.state, 'weird')?.['x-opencode-session'] === 'string')
+  check('含 opencode.ai 的裸串仍注入', typeof sentHeaders(app, 'weird')?.['x-opencode-session'] === 'string')
 }
 
+// ── 6. 一次性清理（0.22.0 的迁移） ─────────────────────────────────────────
 {
-  console.log('15. 右键菜单那几个「可选键」的解析语义（迁移全靠它）')
+  console.log('15. ❗迁移：0.21.x 写进用户配置的头被清掉一次，且不误删用户自己的头')
+  const seed = {
+    [NAMESPACE]: baseOwn({
+      headerEnabled: true,
+      headerValue: 'v-old',
+      headerAppliedName: 'x-opencode-session',
+      headerAppliedValue: 'v-old',
+    }),
+    [LLM]: baseLlm(),
+  }
+  seed[LLM].providers['opencode-go'].headers = {
+    'x-opencode-session': 'v-old', // 我们以前写的（值等于记账值）⇒ 该清
+    'x-user-own': 'mine', // 用户自己写的 ⇒ 不许动
+  }
+  seed[LLM].providers.ds.headers = { 'x-opencode-session': 'v-old' }
+  const app = await boot(seed)
+  check('我们写过的那条被清掉', headersOf(app.state, 'opencode-go')['x-opencode-session'] === undefined)
+  check('另一条路由上同名的也清掉', headersOf(app.state, 'ds')['x-opencode-session'] === undefined)
+  check('用户自己写的头原样保留', headersOf(app.state, 'opencode-go')['x-user-own'] === 'mine')
+  check('打了迁移标记', app.state[NAMESPACE].headerCleanupVersion === 1, String(app.state[NAMESPACE].headerCleanupVersion))
+
+  console.log('16. 迁移只跑一次（第二轮不再动用户配置）')
+  await app.touch(LLM)
+  check('第二轮没有针对 llm-pi-ai 的写入',
+    app.calls.every(call => call.ns === NAMESPACE), JSON.stringify(app.calls.map(call => call.ns)))
+
+  console.log('17. 值与被清理的值不同 ⇒ 不清（可能是用户自己改的）')
+  const other = {
+    [NAMESPACE]: baseOwn({
+      headerEnabled: false,
+      headerValue: 'v-old',
+      headerAppliedName: 'x-opencode-session',
+      headerAppliedValue: 'v-old',
+    }),
+    [LLM]: baseLlm(),
+  }
+  other[LLM].providers['opencode-go'].headers = { 'x-opencode-session': 'user-changed-it' }
+  const app2 = await boot(other)
+  check('值对不上就不动它', headersOf(app2.state, 'opencode-go')['x-opencode-session'] === 'user-changed-it')
+}
+
+// ── 7. 右键菜单那几个「可选键」的解析语义（迁移全靠它） ─────────────────────
+{
+  console.log('18. 右键菜单那几个「可选键」的解析语义（迁移全靠它）')
   // 0.5.0 把右键菜单从布尔 menuNative 换成三档 menuMode，迁移要能分清三件事：
   //   ① 文档里根本没有这些键（从没设过 → 新默认档）
   //   ② 明确写成 false（用户关过旧开关 → 保持自定义菜单）
@@ -338,6 +424,9 @@ const headersOf = (state, route) => state[LLM].providers[route]?.headers
 
   const other = plain(schema({}))
   check('其它字段的默认值照旧生效（可选键没把整张表带坏）', other.enabled === true)
+
+  const cleanup = plain(schema({}))
+  check('迁移标记默认不写（未设置 ⇒ 迁移会跑一次）', cleanup.headerCleanupVersion === undefined)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

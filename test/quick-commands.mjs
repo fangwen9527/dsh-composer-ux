@@ -1203,6 +1203,9 @@ async function bootHost(options = {}) {
     ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
     // 0.12.0：会话上下文走 sessionQuery.readSession（读不到就当没上下文）。
     ...(options.sessionQuery === undefined ? {} : { sessionQuery: options.sessionQuery }),
+    // 0.22.0：解释层 bash 的权限门控要读这两样（拿不到就**不发**工具，见 resolveBashAuthority）。
+    ...(options.sandboxPolicy === undefined ? {} : { sandboxPolicy: options.sandboxPolicy }),
+    ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
@@ -1275,10 +1278,10 @@ const json = res => JSON.parse(res.captured.body)
   const expectedPaths = [
     pure.OPTIMIZER_API_PATH, pure.OPTIMIZE_STATE_API_PATH, pure.QUICK_PROMPTS_API_PATH, syncPath,
     pure.BALANCE_API_PATH, pure.TERMINAL_API_PATH, pure.RESTART_API_PATH,
-    pure.MODELS_API_PATH,
+    pure.MODELS_API_PATH, pure.DOCTOR_API_PATH,
   ]
-  check('注册了九条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单）',
-    host.routes.length === 9
+  check('注册了十条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单 + 自检）',
+    host.routes.length === 10
     && host.routes.every(route => route.kind === 'exact')
     && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
@@ -2916,9 +2919,54 @@ console.log('5k. 内置 Bash 的开关（0.14.0 S5）：关着时模型**看不�
   })
   await handler0(on, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-on' })), makeRes())
   const onTools = (on.llmCalls[0].tools ?? []).map(tool => tool.name)
-  check('开着时 bash 才挂给模型', onTools.includes('bash'), JSON.stringify(onTools))
-  check('开着时系统提示词里有边界说明（只在工作目录/不写文件）',
-    on.llmCalls[0].system.includes('关于 bash 工具') && on.llmCalls[0].system.includes('不要写文件'))
+  // 0.22.0：这个 harness 没有沙箱/权限服务 ⇒ **证明不了安全 ⇒ 不发** bash 工具。
+  check('❗开着但拿不到会话权限模式 ⇒ 仍然不给 bash（宁可少给）',
+    onTools.includes('read') && onTools.includes('bash') === false, JSON.stringify(onTools))
+  check('也没追加 bash 的边界说明（没给工具就别写它的说明）',
+    on.llmCalls[0].system.includes('关于 bash 工具') === false)
+
+  // 完全权限：不需要沙箱，直接给。
+  const full = await bootHost({
+    settings: { optimizeReadTools: true, optimizeBash: true },
+    sessionQuery: bashQuery,
+    sandboxPolicy: { resolve: () => ({ mode: 'danger-full-access', workspaceRoot: bashDir }) },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+    chunksSeq: [[{ type: 'text-delta', index: 0, text: bashFinal }, { type: 'finish', reason: { kind: 'stop' } }]],
+  })
+  await handler0(full, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-full' })), makeRes())
+  const fullTools = (full.llmCalls[0].tools ?? []).map(tool => tool.name)
+  check('完全权限 ⇒ bash 挂上，且系统提示词里有边界说明',
+    fullTools.includes('bash')
+    && full.llmCalls[0].system.includes('关于 bash 工具')
+    && full.llmCalls[0].system.includes('不要写文件'), JSON.stringify(fullTools))
+
+  // workspace-write + 有沙箱：给（"约束真的接在执行路径上"在 test/optimize-tools.mjs §7d 验，
+  // 这一节只验**发不发工具**；mock 的流里没有工具调用，工具不会真的执行）。
+  const sandbox = { confine: async (argv) => ({ argv, enforcement: 'full' }) }
+  const scoped = await bootHost({
+    settings: { optimizeReadTools: true, optimizeBash: true },
+    sessionQuery: bashQuery,
+    sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: bashDir }) },
+    sandbox,
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+    chunksSeq: [[{ type: 'text-delta', index: 0, text: bashFinal }, { type: 'finish', reason: { kind: 'stop' } }]],
+  })
+  await handler0(scoped, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-scoped' })), makeRes())
+  const scopedTools = (scoped.llmCalls[0].tools ?? []).map(tool => tool.name)
+  check('workspace-write + 有沙箱 ⇒ bash 挂上', scopedTools.includes('bash'), JSON.stringify(scopedTools))
+
+  // workspace-write 但没有沙箱服务：不给。
+  const noSandbox = await bootHost({
+    settings: { optimizeReadTools: true, optimizeBash: true },
+    sessionQuery: bashQuery,
+    sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: bashDir }) },
+    model: { currentSelection: () => ({ provider: 'go', model: 'deepseek-flash' }) },
+    chunksSeq: [[{ type: 'text-delta', index: 0, text: bashFinal }, { type: 'finish', reason: { kind: 'stop' } }]],
+  })
+  await handler0(noSandbox, makeReq('POST', JSON.stringify({ text: '把那个页面弄好看点', tier: 'standard', sessionId: 'sess-bash-nosandbox' })), makeRes())
+  const noSandboxTools = (noSandbox.llmCalls[0].tools ?? []).map(tool => tool.name)
+  check('❗workspace-write 但没有沙箱服务 ⇒ 不给 bash',
+    noSandboxTools.includes('bash') === false, JSON.stringify(noSandboxTools))
 }
 
 console.log('5l. 上下文「回合 0–10 / 全文」（0.14.0 S6）：设置真的改变发出去的内容')
@@ -3019,3 +3067,32 @@ console.log('5m. 模型清单路由（0.14.1）：按 provider 分组、单点�
 
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
+
+console.log('5m. 自检路由（0.22.0）：GET 给出报告，非 GET 拒绝')
+{
+  const host = await bootHost({ settings: { optimizeReadTools: true }, sessionQuery: { readSession: async () => ({ header: { cwd: process.cwd() } }) } })
+  const route = host.routes.find(entry => entry.path === '/composer-ux/doctor')
+  check('自检路由注册上了', route !== undefined, JSON.stringify(host.routes.map(entry => entry.path)))
+
+  const capture = () => {
+    const out = { code: 0, body: '' }
+    return {
+      res: { writeHead: (code) => { out.code = code }, end: (body) => { out.body = String(body ?? '') } },
+      out,
+    }
+  }
+  const ok = capture()
+  await route.handler({ method: 'GET' }, ok.res)
+  let parsed = null
+  try { parsed = JSON.parse(ok.out.body) } catch { parsed = null }
+  check('GET ⇒ 200 且 rows 是数组', ok.out.code === 200 && Array.isArray(parsed?.rows), ok.out.body.slice(0, 120))
+  check('报告里有设置字段那一行（自检的核心判据）',
+    parsed?.rows?.some(row => row.id === 'settings.schema'), JSON.stringify(parsed?.rows?.map(row => row.id)))
+  check('❗设置字段一行必须是 ok（本仓的字段确实都在 schema 里）',
+    parsed?.rows?.find(row => row.id === 'settings.schema')?.level === 'ok',
+    JSON.stringify(parsed?.rows?.find(row => row.id === 'settings.schema')))
+
+  const bad = capture()
+  await route.handler({ method: 'POST' }, bad.res)
+  check('POST ⇒ 405', bad.out.code === 405, String(bad.out.code))
+}

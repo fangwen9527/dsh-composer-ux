@@ -980,6 +980,13 @@ export const HEADER_APPLIED_VALUE_FIELD = 'headerAppliedValue'
 export const HEADER_STATUS_FIELD = 'headerStatus'
 
 /**
+ * 迁移标记（0.22.0）：`internal/config` 运行期覆盖到位后，把 0.21.x 及以前**真的写进**
+ * 用户模型路由配置里的请求头清理掉，并在本插件自己的命名空间里记下"已清理到第几版"。
+ * 0 = 没清理过；1 = 已清理。
+ */
+export const HEADER_CLEANUP_FIELD = 'headerCleanupVersion'
+
+/**
  * 只在宿主半维护的字段：设置页「恢复默认」不得清空它们，
  * 否则已写入的头会失去记账、永远撤销不掉。
  *
@@ -991,6 +998,7 @@ export const HOST_OWNED_FIELDS = [
   HEADER_APPLIED_NAME_FIELD,
   HEADER_APPLIED_VALUE_FIELD,
   HEADER_STATUS_FIELD,
+  HEADER_CLEANUP_FIELD,
   TERMINAL_CANDIDATES_FIELD,
   TERMINAL_STATUS_FIELD,
   TERMINAL_EFFECTIVE_FIELD,
@@ -1041,6 +1049,7 @@ export type SettingsField =
   | typeof HEADER_NAME_FIELD
   | typeof HEADER_VALUE_FIELD
   | typeof HEADER_ROUTES_FIELD
+  | typeof HEADER_CLEANUP_FIELD
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
   | typeof OPTIMIZER_CONTEXT_FIELD
@@ -1132,6 +1141,8 @@ export interface ComposerUxSettings {
   headerAppliedValue: string
   /** 宿主半写入结果（设置页只读）。 */
   headerStatus: string
+  /** 旧写入的清理进度（宿主半维护；0/未设置 = 还没清理）。 */
+  headerCleanupVersion?: number
   /** 快捷指令列表（顺序即面板与设置页里的显示顺序）。 */
   quickPrompts: readonly QuickPrompt[]
   /** 提示词优化强度档位。 */
@@ -1649,3 +1660,61 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     priceAutoSync: asBool(PRICE_AUTO_SYNC_FIELD),
   }
 }
+
+/**
+ * 全部设置字段名（0.22.0 自检用）。
+ *
+ * 为什么由本文件生成而不是手抄一份：自检要判的正是「字段常量 ↔ 宿主 schema」是否一致，
+ * 手抄的清单自己就会漂。这条清单来自本文件里真正 `export const *_FIELD` 的那些行。
+ */
+export const ALL_SETTINGS_FIELDS: readonly string[] = [
+  BALANCE_ENABLED_FIELD,
+  DIRECTORY_PICK_ENABLED_FIELD,
+  ENABLED_FIELD,
+  HEADER_APPLIED_NAME_FIELD,
+  HEADER_APPLIED_VALUE_FIELD,
+  HEADER_CLEANUP_FIELD,
+  HEADER_ENABLED_FIELD,
+  HEADER_NAME_FIELD,
+  HEADER_ROUTES_FIELD,
+  HEADER_STATUS_FIELD,
+  HEADER_VALUE_FIELD,
+  KEYS_ENABLED_FIELD,
+  MENU_ENABLED_FIELD,
+  MENU_MODE_FIELD,
+  MENU_NATIVE_FIELD,
+  NEWLINE_KEY_FIELD,
+  NOTIFY_CHANNEL_FIELD,
+  NOTIFY_ENABLED_FIELD,
+  NOTIFY_KINDS_FIELD,
+  NOTIFY_PUSHPLUS_FIELD,
+  NOTIFY_WECOM_FIELD,
+  OPTIMIZER_CONTEXT_FIELD,
+  OPTIMIZER_FRAMING_FIELD,
+  OPTIMIZER_HISTORY_FIELD,
+  OPTIMIZER_LEDGER_FIELD,
+  OPTIMIZER_MODEL_FIELD,
+  OPTIMIZER_PERMISSION_FIELD,
+  OPTIMIZER_TIER_FIELD,
+  OPTIMIZER_TURNS_FIELD,
+  OPTIMIZE_BASH_FIELD,
+  OPTIMIZE_KEEP_DOCK_FIELD,
+  OPTIMIZE_READ_TOOLS_FIELD,
+  PANEL_ENABLED_FIELD,
+  PANEL_HEIGHT_FIELD,
+  PANEL_RESIZE_FIELD,
+  PANEL_WIDTH_FIELD,
+  PEAK_ALERT_FIELD,
+  PEAK_HOLIDAYS_FIELD,
+  PRICE_AUTO_SYNC_FIELD,
+  PRICE_OVERRIDES_FIELD,
+  QUICK_ENABLED_FIELD,
+  QUICK_PROMPTS_FIELD,
+  SEND_KEY_FIELD,
+  STATS_ENABLED_FIELD,
+  SYNCED_PRICES_FIELD,
+  TERMINAL_ENABLED_FIELD,
+]
+
+/** 自检报告的路由（客户端设置页那张卡取它）。 */
+export const DOCTOR_API_PATH = '/composer-ux/doctor'

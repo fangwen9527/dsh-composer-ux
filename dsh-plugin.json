@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/T-Auto/dsh-std/8a15541117cb3c13ddb8f2468308691b6051d162/packages/manifest/schema/dsh-plugin-0.15.schema.json",
+  "manifestVersion": "0.15",
+  "id": "dsh-composer-ux.input-experience",
+  "name": "dsh-composer-ux",
+  "version": "0.22.0",
+  "license": "MIT",
+  "facets": {
+    "host": {
+      "entry": "lib/index.js",
+      "apiVersion": "v1alpha1"
+    },
+    "client": {
+      "entry": "lib/client.js",
+      "platform": "web"
+    }
+  },
+  "requires": {
+    "contracts": []
+  },
+  "permissions": [
+    {
+      "name": "dsh-composer-ux.fs.read",
+      "scope": "dsh-home",
+      "reason": "Read the plugin's own files under <DSH_HOME>: quick-prompts.json, optimizer state, and the profile's settings document to resolve this plugin's config."
+    },
+    {
+      "name": "dsh-composer-ux.fs.write",
+      "scope": "dsh-home",
+      "reason": "Write only the plugin's own files under <DSH_HOME>: quick-prompts.json, optimizer dock state, and this plugin's own settings namespace. It never writes another plugin's config (the 0.21 request-header write path was replaced by a runtime overlay in 0.22.0)."
+    },
+    {
+      "name": "dsh-composer-ux.process.spawn",
+      "scope": "subprocess",
+      "reason": "Start the DSH restart helper when the user asks to restart, probe the local Git Bash path for the terminal swap, and (only when the user enables it) run the optimizer's fact-checking shell tool confined by ctx.sandbox.confine or limited to danger-full-access sessions."
+    }
+  ],
+  "contributes": {
+    "x-display": [
+      {
+        "icon": "./icon.png",
+        "title": "dsh-composer-ux",
+        "description": "输入体验增强：键位、右键菜单、快捷指令、提示词优化、通知、统计与成本、目录选择、终端策略（八栏，逐栏开关）"
+      }
+    ],
+    "x-prompt-sections": [
+      {
+        "name": "dsh-composer-ux:optimizer",
+        "order": 4200,
+        "summary": "提示词优化器只在用户点「✨ 优化提示词」时组装的一段调用说明；不写 AGENTS.md，设置里关掉即不注入。"
+      }
+    ]
+  },
+  "subscriptions": []
+}

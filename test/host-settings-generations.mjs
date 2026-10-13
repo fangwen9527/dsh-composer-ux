@@ -102,13 +102,20 @@ async function boot(shape, seed, config, readOwnFrom = 'describe') {
       .filter(([ns]) => !(readOwnFrom === 'config' && ns === NAMESPACE))
       .map(([ns, value]) => ({ ns, value }))
   }
+  /**
+   * 假的 loader（0.22.0 的运行期覆盖挂在它上面）：只要它在，状态才会是"运行期注入…"。
+   * 本节关心的是**设置服务两代读法**，覆盖本身的行为在 test/host-header-mirror.mjs 里验。
+   */
+  const loader = { entries: () => [], on: () => {} }
   const services = {
     settings,
+    loader,
     effect: (fn) => {
       const dispose = fn()
       return () => { if (typeof dispose === 'function') dispose() }
     },
     get: name => services[name],
+    on: (name, listener) => { loader.on(name, listener) },
   }
   const ctx = {
     inject: (deps, callback) => {
@@ -180,8 +187,12 @@ console.log('2. 0.1.6 形状（有 get / register）')
     app.error === null || app.error === undefined ? '' : String(app.error))
   check('调用了 register(composer-ux, Config)', app.registered.length === 1 && app.registered[0].ns === NAMESPACE,
     JSON.stringify(app.registered.map(entry => entry.ns)))
-  const header = app.state[LLM].providers['opencode-go'].headers?.['x-opencode-session']
-  check('请求头镜像照旧写入', header === 'fixed-value', String(header))
+  // 0.22.0 起这里**不再写用户配置**：能读出自己那一行、把状态写回自己那一行就够了。
+  check('0.1.6 形状：读到自己那一行，且不写用户配置',
+    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
+    && app.state[LLM].providers['opencode-go'].headers === undefined
+    && app.calls.every(call => call.ns === NAMESPACE),
+    JSON.stringify({ status: app.state[NAMESPACE].headerStatus, ns: app.calls.map(call => call.ns) }))
 }
 
 // ── 3. 0.1.7 形状：没有 get、没有 register ──────────────────────────────────
@@ -191,8 +202,10 @@ console.log('3. 0.1.7 形状（只有 describe / mutate）')
   check('0.1.7 形状下 apply 不抛（register 已被官方删除）', app.error === undefined || app.error === null,
     app.error === null || app.error === undefined ? '' : String(app.error))
   check('没有 register 也不抛（register 已被官方删除）', app.registered.length === 0)
-  const header = app.state[LLM].providers['opencode-go'].headers?.['x-opencode-session']
-  check('自己那一行从 describe 读得到 → 镜像仍写入', header === 'fixed-value', String(header))
+  check('0.1.7 形状：自己那一行从 describe 读得到（不写用户配置）',
+    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
+    && app.state[LLM].providers['opencode-go'].headers === undefined,
+    JSON.stringify({ status: app.state[NAMESPACE].headerStatus }))
   check('渲染了记账字段（写回的是我们自己的命名空间）',
     app.calls.some(call => call.ns === NAMESPACE), JSON.stringify(app.calls.map(call => call.ns)))
 }
@@ -201,8 +214,10 @@ console.log('3. 0.1.7 形状（只有 describe / mutate）')
 console.log('4. 0.1.7 形状，自己的行只从 Config 读')
 {
   const app = await boot('modern', { [LLM]: baseLlm() }, baseOwn(), 'config')
-  const header = app.state[LLM].providers['opencode-go'].headers?.['x-opencode-session']
-  check('Config 分支也能读出自己那一行', header === 'fixed-value', String(header))
+  check('Config 分支也能读出自己那一行（状态按它算出来 ⇒ 说明读到了）',
+    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
+    && app.state[LLM].providers['opencode-go'].headers === undefined,
+    JSON.stringify({ status: app.state[NAMESPACE].headerStatus }))
 }
 
 // ── 5. 设置服务整个缺席：不抛 ───────────────────────────────────────────────

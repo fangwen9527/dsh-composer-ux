@@ -34,6 +34,11 @@ export interface ToolLoopDeps {
    * "关掉 = 不把 bash 工具注册给模型"同一做法，也让"关着就不花钱/不冒险"可核对。
    */
   readonly bash?: boolean
+  /**
+   * 宿主沙箱的 `confine`（0.22.0）。给了就必须成功包住 argv 才执行 ——
+   * 见 `resolveBashAuthority`：非完全权限会话靠它把命令关进工作区。
+   */
+  readonly bashConfine?: (argv: readonly string[]) => Promise<{ readonly argv: readonly string[]; readonly enforcement?: string }>
   readonly signal?: AbortSignal
   readonly onDelta?: (out: string, delta: string) => void
   /** 单轮文本上限（防模型啰嗦到把预算烧光）。 */
@@ -194,7 +199,7 @@ export async function runOptimizeToolLoop(deps: ToolLoopDeps): Promise<ToolLoopO
           meta: { tool: call.name, files: 0, hits: 0, bytes: 0, rejected: '参数不是合法 JSON' as string | undefined },
         }
         : call.name === BASH_TOOL_NAME
-          ? await runBashTool(deps.root, parsed.args, { signal: deps.signal })
+          ? await runBashTool(deps.root, parsed.args, { signal: deps.signal, ...(deps.bashConfine === undefined ? {} : { confine: deps.bashConfine }) })
           : runReadToolByName(deps.root, call.name, parsed.args)
       if (result.meta.rejected !== undefined) rejected += 1
       messages.push({

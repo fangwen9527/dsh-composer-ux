@@ -12,7 +12,7 @@
  *
  *   node test/retry-write.mjs
  */
-import { QUICK_MIGRATION_ATTEMPTS, QUICK_MIGRATION_RETRY_MS, retryWrite } from '../lib/index.js'
+import { STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS, retryWrite } from '../lib/index.js'
 
 let passes = 0
 let failures = 0
@@ -87,10 +87,10 @@ console.log('\n三、全部失败：把最后一个错误抛出去（调用方�
 
 console.log('\n四、默认参数合理（迁移那次用的就是它们）')
 {
-  check('至少重试一次（attempts ≥ 2）', QUICK_MIGRATION_ATTEMPTS >= 2, String(QUICK_MIGRATION_ATTEMPTS))
-  check('退避非零（不然等于忙等锁）', QUICK_MIGRATION_RETRY_MS > 0, String(QUICK_MIGRATION_RETRY_MS))
+  check('至少重试一次（attempts ≥ 2）', STARTUP_WRITE_ATTEMPTS >= 2, String(STARTUP_WRITE_ATTEMPTS))
+  check('退避非零（不然等于忙等锁）', STARTUP_WRITE_RETRY_MS > 0, String(STARTUP_WRITE_RETRY_MS))
   // 最坏情况的总等待：基数 × (1+2+…+(n-1))，别把宿主启动拖太久。
-  const worst = QUICK_MIGRATION_RETRY_MS * ((QUICK_MIGRATION_ATTEMPTS - 1) * QUICK_MIGRATION_ATTEMPTS) / 2
+  const worst = STARTUP_WRITE_RETRY_MS * ((STARTUP_WRITE_ATTEMPTS - 1) * STARTUP_WRITE_ATTEMPTS) / 2
   check('最坏等待不超过 5 秒（不拖慢启动）', worst <= 5000, `${worst}ms`)
 }
 

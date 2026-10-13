@@ -566,5 +566,22 @@ console.log('\n10. 真机在 0.2.1-alpha.2 干净 profile 上发现的两个渲�
   check('「微信通知」概览仍说清"只能通知，不能回"', notifyHead.includes('只能通知，不能回'), notifyHead)
 }
 
+
+console.log('\n11. 自检卡（0.22.0）：纯只读检查，卡上没有开关')
+{
+  const page = render('official')
+  // cardOf 返回的是"从这个卡名到下一个卡名"的切片；自检是最后一张卡，所以还要在 </section> 处截断，
+  // 否则会把后面别的区块的开关算进来（下面那条"卡上没有开关"就会假红）。
+  const cardFull = cardOf(page, '自检')
+  const card = cardFull.slice(0, cardFull.indexOf('</section>') === -1 ? undefined : cardFull.indexOf('</section>'))
+  check('「自检」卡渲染出来了', card !== '', card.slice(0, 80))
+  check('标题行有一句概览（说清它摊平了哪些东西）',
+    textOf(card).includes('把插件各处状态摊成一张表'), textOf(card).slice(0, 90))
+  check('正文里有「运行自检」按钮', card.includes('运行自检'))
+  check('卡上没有开关（纯只读检查，不该看起来能被关掉）', !card.includes('role="switch"'))
+  check('正文说清它只读、不改东西', textOf(card).includes('只读'), textOf(card).slice(0, 160))
+}
+
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

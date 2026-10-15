@@ -41,6 +41,22 @@ export interface DoctorInput {
     readonly mode: string
     readonly hasSandbox: boolean
   }
+  /**
+   * 持久终端三件套（模型那 6 个 terminal_* 工具靠它）。
+   *
+   * 0.22.0 适配 alpha.4 时新增：这一档的失败方式**极其安静** —— 若 profile 里的
+   * `@deepseek-ai/dsh-tool-terminal` 版本与运行时对不上，宿主判定不兼容后只是把那一行
+   * 禁用（启动日志里一句 warning），模型工具表里就少 6 个工具，界面上什么都看不出来。
+   * 2026-10-15 就是这么踩到的（插件自带的依赖范围解析到 alpha.3，而运行时是 alpha.4）。
+   * 所以把"装的是哪版、它的 peer 要求什么、profile 里实际是什么"摊开。
+   */
+  readonly persistentTerminals: {
+    readonly servicePresent: boolean
+    readonly toolVersion: string
+    readonly peerRequired: string
+    readonly peerInstalled: string
+    readonly mismatch: boolean
+  }
   /** 请求头那一栏。 */
   readonly header: {
     readonly overlayInstalled: boolean
@@ -119,6 +135,24 @@ export function buildDoctorReport(input: DoctorInput): readonly DoctorRow[] {
     label: '各栏目开关',
     level: 'info',
     detail: on.length === 0 ? '八栏全关（本插件目前完全不介入）' : `开着：${on.join('、')}`,
+  })
+
+  // 持久终端三件套：不兼容的版本会被宿主**静默禁用那一行**（只在启动日志里一句 warning），
+  // 模型工具表里少 6 个工具而界面上看不出来 —— 所以这一项要摆在终端那一行后面。
+  const persistent = input.persistentTerminals
+  rows.push({
+    id: 'terminals.persistent',
+    label: '持久终端工具',
+    level: persistent.mismatch ? 'warn' : persistent.servicePresent ? 'ok' : 'info',
+    detail: persistent.mismatch
+      ? `❗装在 profile 里的 tool-terminal ${persistent.toolVersion} 要求 ${persistent.peerRequired}，`
+        + `而 profile 里实际是 ${persistent.peerInstalled === '' ? '（读不到）' : persistent.peerInstalled}`
+        + ' ⇒ 宿主会禁用这一行，模型拿不到那 6 个 terminal_* 工具。'
+        + `修法：dsh plugin --profile <名字> add @deepseek-ai/dsh-tool-terminal@<运行时版本>`
+      : persistent.servicePresent
+        ? `已挂上；tool-terminal ${persistent.toolVersion === '' ? '（读不到版本）' : persistent.toolVersion}`
+          + `${persistent.peerRequired === '' ? '' : `（要求 ${persistent.peerRequired}，profile 里 ${persistent.peerInstalled === '' ? '读不到' : persistent.peerInstalled}）`}`
+        : '宿主没有 ctx.terminals：这一档没挂（模型没有持久终端工具；需要官方可选 bundle 或 profile 层装这三件套）',
   })
 
   rows.push({

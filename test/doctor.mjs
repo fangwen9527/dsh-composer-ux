@@ -44,6 +44,8 @@ const healthy = () => ({
   fieldConstants: ['enabled', 'notifyEnabled'],
   schemaKeys: ['enabled', 'notifyEnabled'],
   terminal: { platform: 'win32', rowInstalled: true, bashPath: 'C:/Program Files/Git/bin/bash.exe', status: '', mode: 'workspace-write', hasSandbox: true },
+  // 0.22.0 适配 alpha.4：持久终端三件套的版本核对（不匹配 ⇒ 宿主会静默禁用那一行）。
+  persistentTerminals: { servicePresent: true, toolVersion: '0.2.1-alpha.4', peerRequired: '0.2.1-alpha.4', peerInstalled: '0.2.1-alpha.4', mismatch: false },
   header: { overlayInstalled: true, hasLoader: true, migrated: true, status: '运行期注入 opencode-go（只在本插件运行时生效，不改你的配置）', writesUserConfig: false },
   quick: { file: 'C:/x/quick-prompts.json', readable: true, custom: true, error: '' },
   notify: { enabled: true, channel: 'pushplus', credentialSet: true },
@@ -67,7 +69,7 @@ console.log('2. 报告行：级别与必填字段')
     rows.every(row => typeof row.id === 'string' && row.id !== '' && typeof row.label === 'string' && row.label !== '' && typeof row.detail === 'string'))
   check('健康输入里没有 fail/warn', rows.every(row => row.level === 'ok' || row.level === 'info'),
     JSON.stringify(rows.filter(row => row.level === 'fail' || row.level === 'warn').map(row => row.id)))
-  check('表里覆盖了关键几项', ['settings.schema', 'terminal', 'header', 'quick', 'notify', 'optimize', 'runtime'].every(id => rows.some(row => row.id === id)),
+  check('表里覆盖了关键几项', ['settings.schema', 'terminal', 'terminals.persistent', 'header', 'quick', 'notify', 'optimize', 'runtime'].every(id => rows.some(row => row.id === id)),
     JSON.stringify(rows.map(row => row.id)))
 }
 
@@ -91,6 +93,28 @@ console.log('3. 报告行：坏消息必须红/黄')
 
   const noTerminal = pure.buildDoctorReport({ ...healthy(), terminal: { ...healthy().terminal, rowInstalled: false } })
   check('终端行没装 ⇒ warn', noTerminal.find(row => row.id === 'terminal').level === 'warn')
+
+  // 0.22.0 适配 alpha.4 的真机教训：tool-terminal 版本与运行时对不上时，宿主只是**静默禁用那一行**
+  // （启动日志一句 warning），模型少 6 个 terminal_* 工具而界面无感 ⇒ 自检必须主动报出来。
+  const termMismatch = pure.buildDoctorReport({
+    ...healthy(),
+    persistentTerminals: { servicePresent: true, toolVersion: '0.2.1-alpha.3', peerRequired: '0.2.1-alpha.3', peerInstalled: '0.2.1-alpha.4', mismatch: true },
+  })
+  const termRow = termMismatch.find(row => row.id === 'terminals.persistent')
+  check('❗持久终端版本对不上 ⇒ warn 且给出修法',
+    termRow.level === 'warn' && termRow.detail.includes('dsh-tool-terminal@'), JSON.stringify(termRow))
+
+  const termMissing = pure.buildDoctorReport({
+    ...healthy(),
+    persistentTerminals: { servicePresent: false, toolVersion: '', peerRequired: '', peerInstalled: '', mismatch: false },
+  })
+  check('三件套没挂 ⇒ info（不是错误：这是可选能力）',
+    termMissing.find(row => row.id === 'terminals.persistent').level === 'info')
+
+  const termOk = pure.buildDoctorReport(healthy())
+  check('对得上 ⇒ ok 并说清版本',
+    termOk.find(row => row.id === 'terminals.persistent').level === 'ok'
+    && termOk.find(row => row.id === 'terminals.persistent').detail.includes('0.2.1-alpha.4'))
 
   const noBash = pure.buildDoctorReport({ ...healthy(), terminal: { ...healthy().terminal, bashPath: '' } })
   check('没探测到 bash 路径 ⇒ warn', noBash.find(row => row.id === 'terminal').level === 'warn')

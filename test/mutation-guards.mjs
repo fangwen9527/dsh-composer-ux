@@ -1639,6 +1639,14 @@ const cases = [
     expect: "点 ✨ 必须明确切到优化那半",
   },
   {
+    name: "IF 持久终端版本核对失效（tool-terminal 越界又变成静默失效）",
+    file: "src/doctor.ts",
+    from: "    level: persistent.mismatch ? 'warn' : persistent.servicePresent ? 'ok' : 'info',",
+    to: "    level: persistent.servicePresent ? 'ok' : 'info',",
+    test: "test/doctor.mjs",
+    expect: "❗持久终端版本对不上 ⇒ warn 且给出修法",
+  },
+  {
     name: "HV 非完全权限 + 没沙箱也照发 bash 工具（沙箱绕过回归）",
     file: "src/optimize-bash.ts",
     from: "  if (!input.hasConfine) {\n    return { kind: 'denied', reason: `会话是 ${input.mode}（不是完全权限），而宿主没有可用的沙箱服务` }\n  }",

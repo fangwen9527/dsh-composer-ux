@@ -2,7 +2,36 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.22.0] — 2026-10-13（借鉴 dsh-ops：安全门控 / 运行期覆盖 / 自检 / 市场清单 / CLI）
+## [0.22.0] — 2026-10-15（借鉴 dsh-ops：安全门控 / 运行期覆盖 / 自检 / 市场清单 / CLI + 适配 dsh 0.2.1-alpha.4）
+
+### 适配 dsh 0.2.1-alpha.4（用户 2026-10-15：「更新网页版，把插件适配，测试没问题就发布」）
+
+宿主从 0.2.1-alpha.2 升到 **0.2.1-alpha.4**（独立分支 `upgrade-0.2.1-alpha.4`，检出 + `pnpm install`
++ 全量 `npm run build`，构建 9 项全过）。形状核对 36 项对着 alpha.4 源码**全部通过**：
+settings 三入口与 `document-updated` 事件、`volatile` 处理、`webServer.register`、沙箱
+`confine(argv, policy, signal)`、目录流程槽位、tool-terminal 都在。alpha.4 对插件作者的两处新增：
+`engines.dsh`（声明后**单独决定**兼容性、忽略 peerDependencies）与官方可选 bundle
+`@deepseek-ai/dsh-experimental-terminal-bundle`。
+
+**真机抓到并修掉的问题（这次适配的实质内容）**：`@deepseek-ai/dsh-tool-terminal` 声明的是
+**精确版本 peer**。我插件自带的依赖范围被 pnpm 解析成 `0.2.1-alpha.3`（本地元数据缓存旧），
+而运行时是 `alpha.4` ⇒ 宿主判定不兼容后**只是把那一行禁用**（启动日志一句 warning），
+模型工具表里少 6 个 `terminal_*` 工具，界面上完全看不出来。修法两条：
+
+1. **profile 层按运行时版本钉**（与桌面 profile 一直以来的做法一致）：
+   `bin/dsh-composer-ux.mjs` 的 `install` 在装完插件后自动 `add @deepseek-ai/dsh-tool-terminal@<运行时版本>`；
+2. **把这个静默失败变成可见**：设置页「自检」新增一行「持久终端工具」，
+   拿 tool-terminal 的 peer 要求与**运行时版本**（从进程入口往上找最近的 package.json —— 本仓锁步版本）
+   比对，不一致就红并给出修法。CLI 的 `status` 也打印同一份结论。
+
+真机验证（alpha.4 web profile `a4web`）：启动日志干净、自检 9 行全对（含「持久终端工具 — 已挂上；
+tool-terminal 0.2.1-alpha.4（要求 0.2.1-alpha.4）」）、运行期请求头覆盖已挂上、旧写入清理已完成。
+
+**刻意没做的**：不声明 `engines.dsh`。alpha.4 起它一旦声明就单独决定兼容性，而本插件**刻意**支持
+0.1.6/0.1.7 的老设置形状（见下面「两代设置服务」），声明下限会把那些用户一刀切掉；
+上限又会把"其实还能跑"的新运行时挡在门外。所以继续用"能力探测 + 失败方向安全"的老办法。
+
+
 
 用户 2026-10-13：「第一梯队和第二梯队 除了英文化 其他都做，做完之后先测试，不要发布」。
 来源是 [dsh-ops@0.2.9](https://github.com/T-Auto/dsh-ops) 的对比分析（见 `../dsh-ops-对比分析.md`）。

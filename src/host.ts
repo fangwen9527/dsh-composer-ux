@@ -2619,6 +2619,71 @@ export function apply(ctx: Context, config?: unknown): void {
       }
       const bool = (field: string): boolean => own[field] === true
       const text = (field: string): string => textOf(own[field])
+      /**
+       * 持久终端三件套的版本核对（0.22.0 适配 alpha.4 新增）。
+       *
+       * 为什么值得单列：tool-terminal 声明的是**精确版本 peer**（例如要求 `@deepseek-ai/dsh-tools`
+       * 等于某个 alpha）。版本一旦与运行时对不上，宿主只是把那一行禁用 + 启动日志一句 warning，
+       * 模型工具表里就少 6 个 terminal_* 工具，界面上完全看不出来。
+       * 这里把"装的是哪版、它要求什么、profile 里实际是什么"摊到自检报告里，让静默失败一眼可见。
+       */
+      const persistentTerminals = ((): DoctorInput['persistentTerminals'] => {
+        const profileDir = ((): string => {
+          try {
+            const value = doctorCtx.get('profileContext') as { dir?: unknown } | undefined
+            return typeof value?.dir === 'string' ? value.dir : ''
+          } catch {
+            return ''
+          }
+        })()
+        const manifestOf = (name: string): Record<string, unknown> | undefined => {
+          if (profileDir === '') return undefined
+          try {
+            const file = join(profileDir, 'node_modules', ...name.split('/'), 'package.json')
+            return objectOf(JSON.parse(readFileSync(file, 'utf8')))
+          } catch {
+            return undefined
+          }
+        }
+        const tool = manifestOf('@deepseek-ai/dsh-tool-terminal')
+        const peers = objectOf(tool?.peerDependencies)
+        const peerName = Object.keys(peers ?? {}).find(key => key.startsWith('@deepseek-ai/dsh-')) ?? ''
+        const peerRequired = peerName === '' ? '' : textOf(peers?.[peerName])
+        /**
+         * 运行时版本：从**本进程入口**往上找最近的 package.json。
+         *
+         * 为什么这样拿：`ProfileContext` 没有版本字段；而本仓是锁步版本（所有包同版），
+         * 从 `process.argv[1]`（`<安装根>/apps/cli/lib/bin.js`）往上第一份 package.json
+         * 的版本就等于运行时版本 —— 兼容闸门本身也是拿这个版本去比 peer 的。
+         * 打包应用里入口指向 asar，读不到就返回空串（自检**不许编**，空 = 这一项不下结论）。
+         */
+        const runtimeVersion = ((): string => {
+          try {
+            let dir = process.argv[1] === undefined ? '' : dirname(process.argv[1])
+            for (let depth = 0; depth < 6 && dir !== ''; depth += 1) {
+              const file = join(dir, 'package.json')
+              if (existsSync(file)) return textOf((JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown }).version)
+              const parent = dirname(dir)
+              if (parent === dir) break
+              dir = parent
+            }
+            return ''
+          } catch {
+            return ''
+          }
+        })()
+        const peerInstalled = peerName === '' ? '' : textOf(manifestOf(peerName)?.version)
+        // 判据优先级：能拿到运行时版本就用它比（精确）；否则退到 profile 里实际装的 peer。
+        const marker = runtimeVersion !== '' ? runtimeVersion : peerInstalled
+        return {
+          servicePresent: has('terminals'),
+          toolVersion: textOf(tool?.version),
+          peerRequired,
+          peerInstalled: marker,
+          // 两边都读到了才敢判"不匹配"；读不到就当不知道（自检不许编）。
+          mismatch: peerRequired !== '' && marker !== '' && peerRequired !== marker,
+        }
+      })()
       const quickOutcome = await readQuickBook(quickStorePath()).catch(() => ({ kind: 'error' as const }))
       return {
         version: pluginVersion,
@@ -2651,6 +2716,7 @@ export function apply(ctx: Context, config?: unknown): void {
           })(),
           hasSandbox: has('sandbox'),
         },
+        persistentTerminals,
         header: {
           overlayInstalled: headerOverlayState.installed,
           hasLoader: has('loader'),

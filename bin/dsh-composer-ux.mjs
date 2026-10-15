@@ -104,7 +104,14 @@ function runOfficial(cli, args, options) {
   const command = isNodeScript ? process.execPath : cli
   const argv = isNodeScript ? [cli, ...args] : args
   console.log(`> ${command} ${argv.join(' ')}`)
-  const result = spawnSync(command, argv, { stdio: 'inherit', windowsHide: true, ...options })
+  // Windows 上的 .cmd/.bat 包装器必须经 shell 才能起（否则 spawnSync 直接 ENOENT）。
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)
+  const result = spawnSync(command, argv, {
+    stdio: 'inherit',
+    windowsHide: true,
+    ...(needsShell ? { shell: true } : {}),
+    ...options,
+  })
   return result.status ?? 1
 }
 
@@ -114,15 +121,87 @@ function cmdStatus(args) {
   const profiles = listProfiles()
   const only = typeof args.profile === 'string' ? args.profile : undefined
   const rows = only === undefined ? profiles : profiles.filter(row => row.name === only)
+  const cliForStatus = findDshCli(args['dsh-cli'])
+  const runtimeForStatus = cliForStatus === undefined ? '' : dshRuntimeVersion(cliForStatus.cli)
   if (rows.length === 0) {
     console.log(only === undefined ? '没有找到任何装过本插件的 profile。' : `profile ${only} 里没装本插件。`)
   }
   for (const row of rows) {
     console.log(`· profile ${row.name}：${row.declared ? '已在 package.json 里声明' : '只在 node_modules 里'}；装上的是 ${row.installed === '' ? '（读不到版本）' : row.installed}`)
+    const term = toolTerminalState(row.dir, runtimeForStatus)
+    if (term.toolVersion === '') {
+      console.log('    · 持久终端：profile 里没有 @deepseek-ai/dsh-tool-terminal（模型那 6 个 terminal_* 工具会缺）')
+    } else if (term.mismatch) {
+      console.log(`    · ❗持久终端：tool-terminal ${term.toolVersion} 要求 ${term.peerRequired}，profile 里实际 ${term.peerInstalled} ⇒ 宿主会禁用那一行`)
+      console.log(`      修法：dsh plugin --profile ${row.name} add @deepseek-ai/dsh-tool-terminal@<运行时版本>`)
+    } else if (runtimeForStatus !== '' && term.toolVersion !== runtimeForStatus) {
+      // 只是提示：这个 profile 可能属于**另一个安装**（例如桌面应用的 profile），那就正常。
+      console.log(`    · 持久终端：tool-terminal ${term.toolVersion}；与本次所用 CLI 的运行时 ${runtimeForStatus} 不同`)
+      console.log('      （若该 profile 属于另一个安装，这是正常的；要确认就换成那个安装的 CLI 再跑一次 —— 宿主自检那张卡会直接说）')
+    } else {
+      console.log(`    · 持久终端：tool-terminal ${term.toolVersion}（要求 ${term.peerRequired || '无'}，profile 里 ${term.peerInstalled || '读不到'}）`)
+    }
   }
-  const cli = findDshCli(args['dsh-cli'])
-  console.log(`官方 CLI：${cli === undefined ? '没找到（安装/卸载时用 --dsh-cli 指定）' : cli.how}`)
+  console.log(`官方 CLI：${cliForStatus === undefined ? '没找到（安装/卸载时用 --dsh-cli 指定）' : cliForStatus.how}`)
+  console.log(`运行时版本：${runtimeForStatus || '（读不到）'}`)
   return 0
+}
+
+/**
+ * 读一个 profile 里「持久终端三件套」的实际状态。
+ *
+ * 为什么 CLI 也要管这件事（2026-10-15 真机踩到）：`@deepseek-ai/dsh-tool-terminal` 声明的是
+ * **精确版本 peer**。若 profile 里装的版本与运行时对不上，宿主只会把那一行禁用 + 启动日志一句
+ * warning，模型工具表里少 6 个 terminal_* 工具，界面上完全看不出来。所以安装时按运行时版本钉住它，
+ * 并在 status/doctor 里核对（判据与宿主半自检那张卡一致：拿 peer 要求比 profile 里实际装的版本）。
+ */
+function toolTerminalState(profileDir, runtimeVersion) {
+  const read = name => {
+    try {
+      return JSON.parse(readFileSync(join(profileDir, 'node_modules', ...name.split('/'), 'package.json'), 'utf8'))
+    } catch {
+      return undefined
+    }
+  }
+  const tool = read('@deepseek-ai/dsh-tool-terminal')
+  const peers = tool?.peerDependencies ?? {}
+  const peerName = Object.keys(peers).find(key => key.startsWith('@deepseek-ai/dsh-')) ?? ''
+  const required = peerName === '' ? '' : String(peers[peerName])
+  /**
+   * ⚠️ 只用 **profile 自己**能证明的东西判"不匹配"。
+   *
+   * 为什么不直接和运行时版本比：一个 profile 属于哪个安装（桌面应用 / 源码检出 / 另一个版本）
+   * 从 profile 目录本身看不出来 —— 2026-10-15 试过，拿检出的 alpha.4 去比桌面 profile 立刻是假阳性
+   * （桌面 profile 的 tool-terminal 是 0.2.0-rc.2，跟它自己的运行时才是对的）。
+   * 所以：profile 里能读到 peer 实际版本时才算"证实的越界"；否则只输出提示（见调用方）。
+   */
+  const installed = required === '' ? '' : String(read(peerName)?.version ?? '')
+  void runtimeVersion
+  return {
+    toolVersion: String(tool?.version ?? ''),
+    peerRequired: required,
+    peerInstalled: installed,
+    mismatch: required !== '' && installed !== '' && required !== installed,
+  }
+}
+
+/** 问官方 CLI 要运行时版本（用于把 tool-terminal 钉到同一版）。 */
+function dshRuntimeVersion(cli) {
+  const isNodeScript = cli.endsWith('.js')
+  const command = isNodeScript ? process.execPath : cli
+  const argv = isNodeScript ? [cli, '--version'] : ['--version']
+  try {
+    const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)
+    const out = spawnSync(command, argv, {
+      encoding: 'utf8',
+      windowsHide: true,
+      ...(needsShell ? { shell: true } : {}),
+    })
+    const match = /\d+\.\d+\.\d+[-\w.]*/.exec(String(out.stdout ?? '').trim())
+    return match === null ? '' : match[0]
+  } catch {
+    return ''
+  }
 }
 
 function cmdDoctor(args) {
@@ -173,7 +252,28 @@ function cmdInstall(args) {
     console.log('提示：`desktop` 是保留 profile，普通 CLI 管不了它；这里用的是探测到的官方 CLI（桌面自带那个）。')
   }
   const spec = typeof args.version === 'string' ? `${PACKAGE}@${args.version}` : `${PACKAGE}@${own.version}`
-  return runOfficial(cli.cli, ['plugin', '--profile', profile, 'add', spec])
+  const first = runOfficial(cli.cli, ['plugin', '--profile', profile, 'add', spec])
+  if (first !== 0) return first
+
+  /**
+   * 顺手把持久终端那件「必须与运行时同版」的包按运行时版本钉进 profile。
+   *
+   * 为什么不用插件自己的依赖范围拉（2026-10-15 真机踩到）：范围会被 pnpm 解析成"当前发布的最新
+   * alpha"，一旦比运行时新（或本地元数据缓存旧而选了旧版），宿主就判定不兼容并把那一行禁掉 ——
+   * 模型少 6 个工具，界面无感。profile 层显式钉版本才是确定的（桌面 profile 一直是这么做的）。
+   */
+  const runtime = typeof args['dsh-version'] === 'string' ? args['dsh-version'] : dshRuntimeVersion(cli.cli)
+  if (runtime === '') {
+    console.log('提示：读不到运行时版本，跳过持久终端的版本对齐（可用 --dsh-version <版本> 指定）。')
+    return 0
+  }
+  const pinned = runOfficial(cli.cli, [
+    'plugin', '--profile', profile, 'add', `@deepseek-ai/dsh-tool-terminal@${runtime}`,
+  ])
+  if (pinned !== 0) {
+    console.log(`提示：@deepseek-ai/dsh-tool-terminal@${runtime} 没装上；模型那 6 个 terminal_* 工具会缺（设置页「自检」会显示）。`)
+  }
+  return 0
 }
 
 function cmdUninstall(args) {

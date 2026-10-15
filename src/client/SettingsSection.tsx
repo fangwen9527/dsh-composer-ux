@@ -11,6 +11,8 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { DoctorCard } from './DoctorCard.tsx'
+import { AutostartCard } from './AutostartCard.tsx'
+import { useAutostart } from './autostart.ts'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
@@ -143,7 +145,7 @@ function FoldCard(props: {
   name: string
   summary: string
   /** 这一栏的开关（六栏都有）。关掉时概览前会加「未启用 · 」，卡片描边变虚线。 */
-  toggle?: { readonly checked: boolean; readonly onChange: (next: boolean) => void }
+  toggle?: { readonly checked: boolean; readonly onChange: (next: boolean) => void; readonly disabled?: boolean }
   /** 标题行右侧、开关左边的从属控件（三档 / 小开关）。 */
   controls?: React.ReactNode
   children: React.ReactNode
@@ -184,6 +186,7 @@ function FoldCard(props: {
               small
               label={`${props.name}：启用这一栏`}
               checked={props.toggle.checked}
+              disabled={props.toggle.disabled === true}
               onChange={props.toggle.onChange}
             />
           )}
@@ -303,8 +306,10 @@ function Switch(props: {
   /** 无障碍名字（标题行里的开关没有可见文字，必须给）。 */
   label: string
   small?: boolean
+  /** 置灰不可点（平台不支持时用；比如「自启动」在非 Windows 上）。 */
+  disabled?: boolean
 }) {
-  const { checked, onChange, label, small = false } = props
+  const { checked, onChange, label, small = false, disabled = false } = props
   const width = small ? 30 : 36
   const height = small ? 16 : 20
   const knob = small ? 12 : 14
@@ -1140,6 +1145,10 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
    * 漏掉总闸是这套两层级开关最容易犯的错，判据只能有一处。
    */
   const sections = activeSections(settings)
+  // 第九栏「自启动」：开关的真相在注册表里（宿主读），这里只持有"读到的那一份"。
+  // 提到这一层是因为卡头的开关在 FoldCard 里，而正文要读同一份状态。
+  const [autostartEnabled, setAutostartEnabled] = useState(false)
+  const autostart = useAutostart(setAutostartEnabled)
 
   const setKey = (side: 'send' | 'newline', chord: string): void => {
     const other = side === 'send' ? settings.newlineKey : settings.sendKey
@@ -1274,6 +1283,20 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
         <FoldCard name="自检" summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）">
           <DoctorCard />
+        </FoldCard>
+        {/* 0.23.0 自启动：开关的 checked 用**宿主读回来的注册表事实**，不是本地意图。 */}
+        <FoldCard
+          name="自启动"
+          summary={autostart.state?.supported === false
+            ? '仅 Windows 支持（登录时自动拉起当前这个运行时）'
+            : autostartEnabled ? '开启中 · 登录 Windows 时自动拉起当前这个运行时' : '登录时自动拉起当前这个运行时'}
+          toggle={{
+            checked: autostartEnabled,
+            disabled: autostart.state?.supported === false,
+            onChange: next => { autostart.set(next) },
+          }}
+        >
+          <AutostartCard view={autostart} />
         </FoldCard>
         <RestartBanner restart={restart} />
         {/*

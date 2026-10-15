@@ -583,5 +583,18 @@ console.log('\n11. 自检卡（0.22.0）：纯只读检查，卡上没有开关'
 }
 
 
+console.log('\n12. 自启动卡（0.23.0）：开关跟着"你在哪个运行时里开"走')
+{
+  const page = render('official')
+  const cardFull = cardOf(page, '自启动')
+  const card = cardFull.slice(0, cardFull.indexOf('</section>') === -1 ? undefined : cardFull.indexOf('</section>'))
+  check('「自启动」卡渲染出来了', card !== '', card.slice(0, 80))
+  check('概览说清是"登录时自动拉起"', textOf(card).includes('登录'), textOf(card).slice(0, 80))
+  check('卡头有开关（role=switch）—— 这就是那个按钮开关', card.includes('role="switch"'))
+  check('正文有「立即试一次」', textOf(card).includes('立即试一次'))
+  check('正文说清不需要管理员、且以注册表为准',
+    textOf(card).includes('不需要管理员') && textOf(card).includes('注册表'), textOf(card).slice(0, 200))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

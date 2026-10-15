@@ -50,6 +50,15 @@ DeepSeek Harness Web 输入体验增强插件：
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
 
+## 0.23.0 新增：第九栏「自启动」
+
+- **开关跟着"你在哪个运行时里开"走**：网页版里打开就注册网页版（当前 profile、当前启动命令），
+  桌面应用里打开就注册桌面应用；两个运行时各用自己那一条启动项（`dsh-composer-ux:autostart:<profile>`）。
+- **登录后启动**：只写 `HKCU\...\Run`，**不需要管理员**；关掉开关就是删掉自己那一条。
+- **网页版最小化到任务栏**：用生成的 .vbs + `wscript` 拉起，中间不闪控制台。
+- **状态以注册表为准**（不写 settings 字段）：你手删了条目，界面就显示关；条目在但值对不上会明确提示。
+- 卡里另有「立即试一次」，验证它在你这台机器上确实有效。非 Windows 平台如实说不支持。
+
 ## 0.22.0 新增（安全 / 自检 / CLI）
 
 - **解释层「内置 Bash」按会话权限门控**：完全权限直跑；其它模式**必须**过 `ctx.sandbox.confine`，
@@ -57,7 +66,7 @@ DeepSeek Harness Web 输入体验增强插件：
 - **「OpenCode 请求头」不再写你的配置**：改成挂官方 `internal/config` 事件做**运行期可逆覆盖**，
   0.21.x 及以前写进去的残留由迁移表一次性清掉（只删值与记账一致的，你自己写的同名头不动）。
 - **自检**：设置页多了「自检」卡（也可 `GET /composer-ux/doctor`），一行一句人话摊平
-  设置字段是否都在宿主 schema、八栏开关、终端服务与 bash 探测、请求头覆盖、快捷指令本、
+  设置字段是否都在宿主 schema、九栏开关、终端服务与 bash 探测、请求头覆盖、快捷指令本、
   通知凭据、解释层档位、运行环境。
 - **CLI**：`npx dsh-composer-ux status|doctor|install|uninstall`（安装卸载一律委托官方 CLI）。
 - **长命令走文件**：解释层的 bash 工具支持 `command` 与 `script_path` 二选一，
@@ -711,9 +720,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 31 个套件；当前 2676 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
+npm test                          # 32 个套件；当前 2731 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（206 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（210 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

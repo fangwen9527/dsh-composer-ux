@@ -15,13 +15,13 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z, { type Schema } from '@deepseek-ai/schemastery'
-import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import inspector from 'node:inspector'
 import {
-  ALL_SETTINGS_FIELDS, DOCTOR_API_PATH,
+  ALL_SETTINGS_FIELDS, AUTOSTART_API_PATH, DOCTOR_API_PATH,
   DEFAULT_HEADER_NAME, DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD,
@@ -78,8 +78,8 @@ import {
 import { installTerminalPolicy } from './terminal/host.ts'
 import type { BashToolDeps } from './terminal/tool.ts'
 import {
-  RESTART_LOG_PREFIX, bootId, detectedDebugger, detectedSupervisor, gracefulStop, planRestart,
-  explainRestartTrust, restartTrustText, scheduleRestart, servingPort,
+  RESTART_LOG_PREFIX, bootId, detectedDebugger, detectedSupervisor, gracefulStop, launchCommand, nodeExecutableOf,
+  planRestart, explainRestartTrust, restartTrustText, scheduleRestart, servingPort,
 } from './restart.ts'
 import type { RestartIo } from './restart.ts'
 import { buildOptimizeSystem, buildOptimizeTemperature, buildOptimizeUser, optimizePromptSource } from './optimizer-prompt.ts'
@@ -92,6 +92,10 @@ import { READ_TOOLS_SYSTEM_NOTE } from './optimize-tools.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
 import { pendingMigrations } from './migrations.ts'
+import {
+  addArgs, deleteArgs, describeAutostart, listArgs, parseQueryValue, planAutostart, queryArgs, runtimeOf, unsupportedReason,
+  type AutostartFacts, type AutostartPlan, type AutostartRuntime, type AutostartState,
+} from './autostart.ts'
 import { buildDoctorReport, type DoctorInput } from './doctor.ts'
 import { retryWrite, STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS } from './retry-write.ts'
 import { profileDirOfPatchPath, recoverStaleSettingsLock } from './settings-lock.ts'
@@ -2764,6 +2768,280 @@ export function apply(ctx: Context, config?: unknown): void {
       path: DOCTOR_API_PATH,
       handler: handleDoctor as never,
     }), 'composer-ux: doctor route')
+  })
+
+  // ── 自启动（0.23.0）──────────────────────────────────────────────────────
+  //
+  // 用户 2026-10-15：「给我的插件添加一个 DSH 自启动功能，要有按钮开关」，并逐个选定：
+  //   · 开关**跟着"你在哪个运行时里开"走** —— 网页版里开就注册网页版，桌面应用里开就注册桌面 exe；
+  //   · **登录后**启动（`HKCU\...\Run`，无需管理员；关掉开关 = 删掉自己那一条）；
+  //   · 网页版的控制台**最小化到任务栏**（wscript 跑 .vbs + Run(...,7,False)：中间不闪控制台，
+  //     node 自己的窗口按"最小化"出现）；
+  //   · 桌面端直接注册 exe（它是 Electron 应用，有托盘与单实例锁，重复启动只会聚焦已有窗口）。
+  //
+  // **真相来源是注册表**：设置里不存这个开关的意图 —— 你在系统里手动删了启动项，界面就该显示"关"。
+  // 每个运行时只用**自己那一条**值名（`dsh-composer-ux:autostart:<profile>`），开关绝不动别人的条目。
+  ctx.inject(['webServer'], (autoCtx) => {
+    const sendAutoJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+
+    /** 读请求体（开关只有一个布尔，给个很小的上限就够）。 */
+    const readAutoBody = async (req: AsyncIterable<unknown>): Promise<string> => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+        total += buf.length
+        if (total > 64_000) throw new Error('请求体过大')
+        chunks.push(buf)
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    }
+
+    /**
+     * 这个宿主进程是"桌面应用里那个"还是"命令行起的（网页版）"？
+     *
+     * 判据来自官方实现（2026-10-15 读 `apps/desktop/src/host-process.ts` + `node-environment.ts`）：
+     * 桌面应用是**再 spawn 一个 node 子进程**跑宿主，并给它设 `ELECTRON_RUN_AS_NODE=1`，
+     * 入口是 `@deepseek-ai/dsh-desktop-host/lib/index.js`。两条任一命中即为桌面端；
+     * 注意 `process.versions.electron` 在这里**不可用**（宿主不是 Electron 进程本身）。
+     */
+    const runtime = (): AutostartRuntime => runtimeOf(process.argv[1])
+
+    const profileNameOf = (): string => {
+      try {
+        const value = autoCtx.get('profileContext') as { name?: unknown } | undefined
+        return typeof value?.name === 'string' ? value.name : ''
+      } catch {
+        return ''
+      }
+    }
+
+    /**
+     * 桌面应用那个 exe 的路径。
+     *
+     * 宿主是桌面的**子进程**，自己不知道 exe 在哪 —— 但父进程就是它（`process.ppid`），
+     * 于是问一句系统要父进程的镜像路径。拿不到就返回空串：自检/卡片会如实说"拿不到"，
+     * 而不是编一个像路径的东西出来。
+     */
+    const desktopExeOf = (): string => {
+      if (process.platform !== 'win32') return ''
+      try {
+        const out = execFileSync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `(Get-Process -Id ${String(process.ppid)} -ErrorAction SilentlyContinue).Path`,
+        ], { encoding: 'utf8', windowsHide: true, timeout: 8000 })
+        const line = String(out).split(/\r?\n/u).map(item => item.trim()).find(item => item !== '')
+        return line !== undefined && /\.exe$/iu.test(line) ? line : ''
+      } catch {
+        return ''
+      }
+    }
+
+    /** 本插件自己的状态目录（`$DSH_HOME/composer-ux`）。 */
+    const stateDirOf = (): string => join(dirname(quickStorePath()), 'composer-ux')
+
+    /** 当前进程算出来的自启动计划（纯函数在 ./autostart.ts）。 */
+    const planOf = (): AutostartPlan => {
+      const kind = runtime()
+      const profile = profileNameOf()
+      const launch = launchCommand({
+        node: nodeExecutableOf({ argv0: process.argv0, execPath: process.execPath, exists: existsSync }),
+        argv1: process.argv[1],
+        execArgv: process.execArgv,
+        rest: process.argv.slice(2),
+        cwd: process.cwd(),
+        platform: process.platform,
+        resolve,
+        dirname,
+      })
+      const facts: AutostartFacts = {
+        platform: process.platform,
+        runtime: kind,
+        profile,
+        stateDir: stateDirOf(),
+        desktopExe: kind === 'desktop' ? desktopExeOf() : '',
+        launch,
+      }
+      return planAutostart(facts)
+    }
+
+    /** 读注册表里自己那一条。`error` 非空 = 读失败（没权限之类），空 = 成功（有没有值看 value）。 */
+    const readEntry = (entryName: string): { value: string | undefined, error: string } => {
+      if (process.platform !== 'win32') return { value: undefined, error: '' }
+      try {
+        // 读**整个键**再找自己那条（见 autostart.ts 的 listArgs 注释）：靠报错文本判断"值不存在"
+        // 在本地化 + GBK 控制台下会变成乱码，真机上表现为"明明只是没这条值，却报读失败"。
+        const out = execFileSync('reg.exe', [...listArgs()], { encoding: 'utf8', windowsHide: true, timeout: 8000 })
+        return { value: parseQueryValue(entryName, out), error: '' }
+      } catch (error: unknown) {
+        // 退出码 1 = 键不在（Run 键正常都在；真不在就等于"没有这条值"，是诚实结论）。
+        const status = (error as { status?: unknown }).status
+        if (status === 1) return { value: undefined, error: '' }
+        return {
+          value: undefined,
+          error: status === undefined
+            ? '读注册表失败（reg.exe 没起来）'
+            : '读注册表失败（reg.exe 退出码 ' + String(status) + '）',
+        }
+      }
+    }
+
+    /** 网页版的启动器脚本要真的落到磁盘上（注册表那条只是指向它）。 */
+    const writeLauncher = (plan: AutostartPlan): void => {
+      if (plan.launcher === undefined) return
+      mkdirSync(dirname(plan.launcher.path), { recursive: true })
+      writeFileSync(plan.launcher.path, plan.launcher.content, 'utf8')
+    }
+
+    const removeLauncher = (plan: AutostartPlan): void => {
+      if (plan.launcher === undefined) return
+      try {
+        rmSync(plan.launcher.path, { force: true })
+      } catch {
+        /* 删不掉不影响功能：注册表那条已经删了，这个文件再没人执行 */
+      }
+    }
+
+    const stateOf = (): AutostartState => {
+      const plan = planOf()
+      const read = readEntry(plan.entryName)
+      return describeAutostart({
+        platform: process.platform,
+        plan,
+        registered: read.value,
+        readError: read.error,
+      })
+    }
+
+    /** 注册/撤销。返回给客户端的是**重新读出来的真相**，不是"我以为写成功了"。 */
+    const applyEnabled = (enabled: boolean): { ok: boolean, error: string } => {
+      const unsupported = unsupportedReason(process.platform)
+      if (unsupported !== '') return { ok: false, error: unsupported }
+      const plan = planOf()
+      if (enabled && runtime() === 'desktop' && plan.value.trim() === '""') {
+        return { ok: false, error: '拿不到桌面应用的 exe 路径（父进程路径读不到），没法注册自启动' }
+      }
+      try {
+        if (enabled) {
+          writeLauncher(plan)
+          execFileSync('reg.exe', [...addArgs(plan.entryName, plan.value)], { encoding: 'utf8', windowsHide: true, timeout: 8000 })
+        } else {
+          try {
+            execFileSync('reg.exe', [...deleteArgs(plan.entryName)], { encoding: 'utf8', windowsHide: true, timeout: 8000 })
+          } catch (error: unknown) {
+            // 本来就没有这条值也算"关成功"。
+            const text = errorText(error)
+            if (!/找不到|cannot find|unable to find/iu.test(text)) throw error
+          }
+          removeLauncher(plan)
+        }
+        return { ok: true, error: '' }
+      } catch (error: unknown) {
+        const text = errorText(error)
+        return {
+          ok: false,
+          error: /拒绝访问|Access is denied/iu.test(text)
+            ? '没有权限写当前用户的启动项（被安全软件或组策略拦了？）'
+            : `${enabled ? '注册' : '撤销'}失败：${text === '' ? '没有原因' : text}`,
+        }
+      }
+    }
+
+    /**
+     * 「立即试一次」：用**注册的那条命令**真的拉一次，验证它在你这台机器上有效。
+     *
+     * 不重复启动：网页版若这个 profile 已经在服务（`webServer.port` 有值），只报告"已经在跑"；
+     * 桌面端有单实例锁，重复启动只会聚焦已有窗口，所以直接拉。
+     */
+    const tryOnce = (): { ok: boolean, message: string } => {
+      const unsupported = unsupportedReason(process.platform)
+      if (unsupported !== '') return { ok: false, message: unsupported }
+      const plan = planOf()
+      if (runtime() === 'web') {
+        const port = (() => {
+          try {
+            return (autoCtx.get('webServer') as { port?: unknown } | undefined)?.port
+          } catch {
+            return undefined
+          }
+        })()
+        if (typeof port === 'number' && port > 0) {
+          return { ok: true, message: `这个 profile 已经在服务（端口 ${String(port)}），没有重复启动；想看自启动的窗口效果就手动跑：${plan.describe}` }
+        }
+      }
+      try {
+        if (plan.launcher !== undefined) {
+          writeLauncher(plan)
+          const child = spawn('wscript.exe', [plan.launcher.path], { detached: true, stdio: 'ignore', windowsHide: true })
+          child.unref()
+          return { ok: true, message: `已按自启动那条命令拉起（最小化到任务栏）：${plan.describe}` }
+        }
+        const exe = plan.value.replace(/^"|"$/gu, '')
+        const child = spawn(exe, [], { detached: true, stdio: 'ignore' })
+        child.unref()
+        return { ok: true, message: `已拉起桌面应用（有单实例锁，重复启动只会聚焦已有窗口）` }
+      } catch (error: unknown) {
+        return { ok: false, message: `试一次失败：${errorText(error)}` }
+      }
+    }
+
+    const handleAutostart = async (
+      req: { method?: string } & AsyncIterable<unknown>,
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+    ): Promise<void> => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      try {
+        if (method === 'GET') {
+          sendAutoJson(res, 200, { ok: true, state: stateOf() })
+          return
+        }
+        if (method !== 'POST') {
+          sendAutoJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+          return
+        }
+        const raw = await readAutoBody(req)
+        let body: Record<string, unknown> = {}
+        if (raw.trim() !== '') {
+          try {
+            body = objectOf(JSON.parse(raw)) ?? {}
+          } catch {
+            sendAutoJson(res, 400, { ok: false, error: '请求体不是合法 JSON' })
+            return
+          }
+        }
+        if (body.action === 'try') {
+          const result = tryOnce()
+          sendAutoJson(res, result.ok ? 200 : 500, { ...result, state: stateOf(), action: 'try' })
+          return
+        }
+        if (typeof body.enabled !== 'boolean') {
+          sendAutoJson(res, 400, { ok: false, error: '要带 enabled: true/false（或 action: "try"）' })
+          return
+        }
+        const applied = applyEnabled(body.enabled)
+        sendAutoJson(res, applied.ok ? 200 : 500, {
+          ok: applied.ok,
+          error: applied.error,
+          state: stateOf(),
+          action: body.enabled ? 'on' : 'off',
+        })
+      } catch (error: unknown) {
+        sendAutoJson(res, 500, { ok: false, error: errorText(error) })
+      }
+    }
+
+    autoCtx.effect(() => autoCtx.webServer.register({
+      kind: 'exact',
+      path: AUTOSTART_API_PATH,
+      handler: handleAutostart as never,
+    }), 'composer-ux: autostart route')
   })
 
   // ── 重启 DSH ──────────────────────────────────────────────────────────────

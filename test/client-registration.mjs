@@ -1299,5 +1299,40 @@ console.log('18. 0.22.0：启动期写一律走 retryWrite；覆盖状态是共�
 }
 
 
+console.log('19. 0.23.0 自启动：开关不落 settings 字段，真相读注册表')
+{
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const host = strip(readFileSync('src/host.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const client = strip(readFileSync('src/client/autostart.ts', 'utf8').replace(/\r\n/g, '\n'))
+  const section = strip(readFileSync('src/client/SettingsSection.tsx', 'utf8').replace(/\r\n/g, '\n'))
+  const contract = readFileSync('src/settings-contract.ts', 'utf8')
+
+  check('宿主半注册了自启动路由', host.includes("path: AUTOSTART_API_PATH"))
+  check('路由常量在契约里', contract.includes("export const AUTOSTART_API_PATH = '/composer-ux/autostart'"))
+  check('❗开关不写 settings 字段（真相在注册表；写成字段就会出现"设置说开、系统里没有"）',
+    !contract.includes('autostartEnabled') && !section.includes('setField(AUTOSTART'),
+    '契约里出现了 autostartEnabled 字段')
+  check('客户端读状态用 GET、改状态用 POST', /method: body === undefined \? 'GET' : 'POST'/.test(client))
+  check('❗读注册表用整键查询（不靠本地化报错判断"值不存在"）',
+    host.includes('listArgs()') && !host.includes("'query', RUN_KEY, '/v'"))
+  check('❗只在 Windows 上真写（判断走纯函数，能逐格测也能被锚点咬住）',
+    host.includes('unsupportedReason(process.platform)') && readFileSync('src/autostart.ts', 'utf8').includes('export function unsupportedReason'))
+  check('❗注册的键是当前用户（不需要管理员）', host.includes('addArgs(plan.entryName, plan.value)'))
+  check('撤销时删自己的值 + 删启动器脚本',
+    host.includes('deleteArgs(plan.entryName)') && host.includes('removeLauncher(plan)'))
+  check('网页版启动器落盘在插件自己的状态目录',
+    host.includes("join(dirname(quickStorePath()), 'composer-ux')"))
+  check('❗运行时判定只看入口路径（ELECTRON_RUN_AS_NODE 会泄漏到子进程，信不得）',
+    host.includes('runtimeOf(process.argv[1])')
+    && !host.includes('ELECTRON_RUN_AS_NODE')
+    && readFileSync('src/autostart.ts', 'utf8').includes("dsh-desktop-host"))
+  check('桌面 exe 从父进程路径取（宿主自己不知道 exe 在哪）',
+    host.includes('process.ppid') && host.includes('Get-Process -Id'))
+  check('试一次会先判"是不是已经在跑"，不重复起第二个',
+    client.includes("action: 'try'") && host.includes('已经在服务'))
+  check('卡头开关的 checked 来自宿主返回的状态（不是本地意图）',
+    section.includes('checked: autostartEnabled') && section.includes('onChange: next => { autostart.set(next) }'))
+}
+
 console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

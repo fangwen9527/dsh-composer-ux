@@ -1716,5 +1716,8 @@ export const ALL_SETTINGS_FIELDS: readonly string[] = [
   TERMINAL_ENABLED_FIELD,
 ]
 
+/** 「自启动」的路由（GET 读状态 / POST 开关 / POST {action:'try'} 立即试一次）。 */
+export const AUTOSTART_API_PATH = '/composer-ux/autostart'
+
 /** 自检报告的路由（客户端设置页那张卡取它）。 */
 export const DOCTOR_API_PATH = '/composer-ux/doctor'

@@ -13,3 +13,6 @@ test/.build/
 # 最近一次真实运行的记录（供 check-docs 判漂移；本机事实，不进仓库）
 test/.last-run.json
 test/.last-mutation.json
+
+# npm pack 的产物（发版时临时生成，别进仓库 —— 2026-10-15 误提交过一次）
+dsh-composer-ux-*.tgz

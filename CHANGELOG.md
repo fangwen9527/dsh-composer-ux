@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.23.2] — 2026-10-16（适配 dsh 0.2.1-alpha.5：无需改代码，只做验证与版本对齐）
+
+用户 2026-10-16：「网页版 dsh 更新，并插件适配 dsh」（目标 `dsh-v0.2.1-alpha.5`）。
+
+- **检出更新**：新分支 `upgrade-0.2.1-alpha.5`（保留 alpha.4 分支）。当时 `github.com:443` 连不上
+  （curl 28 / 连接重置），所以给检出加了一条 **SSH 远程**把 tag 取下来（HTTPS 断、SSH 与 codeload 通）。
+  `pnpm install` + 全量 `npm run build` —— **9 passed / 0 failed**（146s）。
+- **适配结论：不需要改任何代码**。我依赖的接缝在 alpha.4→alpha.5 之间**只改了 package.json 的版本号**
+  （app-boot 的兼容闸门、package-manifest、webserver、tool-terminal、terminal-bundle、sandbox 三个包，
+  共 9 个文件 +9/-9）；形状核对 36 项对着 alpha.5 源码全部通过，而 `@deepseek-ai/dsh-tool-terminal@0.2.1-alpha.5`
+  本来就落在声明范围内。alpha.5 里与终端有关的改动落在官方**客户端**的
+  `terminal-controller/client`（面板侧减少重复查询、失败终端不再反复重试），与本插件用的宿主侧接缝无关。
+- **真机验证**（alpha.5 + 本机，profile `a5web`）：启动日志干净、**0 行被禁用**、自检 10 行全对
+  （含「持久终端工具 — 已挂上；tool-terminal 0.2.1-alpha.5（要求 0.2.1-alpha.5，profile 里同版）」）、
+  自启动默认关且值名按 profile（`dsh-composer-ux:autostart:a5web`）、运行期请求头覆盖已挂上。
+- 这个版本**没有功能变化**：它是"已在 alpha.5 上验证 + 版本对齐"的补丁版。web 装它并把 tool-terminal
+  钉到 0.2.1-alpha.5；桌面端仍跑 0.2.0-rc.2，装同一份插件、tool-terminal 保持 0.2.0-rc.2。
+
+
+
 ## [0.23.1] — 2026-10-16（修：「重启 DSH」的确认条离按钮太远）
 
 用户 2026-10-16 截图指出：「重启按钮与重启栏目离得太远」。

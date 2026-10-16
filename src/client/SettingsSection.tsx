@@ -1239,7 +1239,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           {/*
             「重启 DSH」放在抬头右端、GitHub 链接左边：这是设置页第一眼就扫到的位置，
             而它要解决的问题（宿主半改了要重启才生效）恰好是用户点进设置页时最想做的事。
-            确认条在抬头正下方（见下面的 RestartBanner），跟市场的「待重启」横幅同一个位置。
+            确认条就在这排按钮下面（RestartBanner，0.23.1 修正了位置）。
           */}
           <span className="dsh-ux-cardActions">
             {/*
@@ -1278,6 +1278,12 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             </a>
           </span>
         </div>
+        {/*
+          0.23.1：确认条**必须在抬头正下方**（用户 2026-10-15 的截图：点上面的按钮、确认条在
+          所有卡片之后冒出来，离得太远；重启会打断正在跑的会话，这条确认不能让人找不到）。
+          想把它挪回卡片后面的话，先看 test/client-registration.mjs 里那条顺序断言。
+        */}
+        <RestartBanner restart={restart} />
         <NotifyCard settings={settings} setField={actions.setField} />
         <DirectoryPickCard settings={settings} setField={actions.setField} />
         {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
@@ -1298,10 +1304,9 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         >
           <AutostartCard view={autostart} />
         </FoldCard>
-        <RestartBanner restart={restart} />
         {/*
-          写入失败 / 写了但没生效的说明条：与「重启 DSH」横幅同一个位置、同一套样式。
-          为什么值得占这个位置：2026-09-23 的真机事故里，设置写入被一把孤儿写入锁挡住，
+          写入失败 / 写了但没生效的说明条：**留在卡片区末尾**（用户 2026-10-15 选定）。
+          为什么不跟重启横幅一起挪到上面：它的触发点是**卡片里的开关**（在卡片区中下部拨动时，
           用户看到的只有"开关不动"，**一句提示都没有**，排查只能靠翻宿主日志。
           所以这条横幅的作用是让下一次同类故障当场说得出话（判据见 client.tsx 的 setField）。
         */}

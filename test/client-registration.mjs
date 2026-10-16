@@ -712,8 +712,15 @@ console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号
   check('按钮与 GitHub 链接同组（抬头右端），且按钮在链接左边',
     actionsAt > 0 && buttonAt > actionsAt && linkAt > buttonAt,
     `actions=${String(actionsAt)} button=${String(buttonAt)} link=${String(linkAt)}`)
-  check('确认条挂在抬头与卡片内容之间（市场那条横幅的位置）',
-    bannerAt > linkAt, `banner=${String(bannerAt)} link=${String(linkAt)}`)
+  // 0.23.1：这条原来只验"在链接之后"，而横幅当时渲染在所有卡片之后 —— 放错了也照样绿。
+  // 现在真的钉"抬头之后、第一张卡之前"。
+  const firstCardAt = section.indexOf('<NotifyCard')
+  check('❗确认条挂在抬头正下方（在第一张卡之前）',
+    bannerAt > linkAt && firstCardAt > 0 && bannerAt < firstCardAt,
+    `link=${String(linkAt)} banner=${String(bannerAt)} firstCard=${String(firstCardAt)}`)
+  const noticeAt = section.indexOf("writeNotice !== ''")
+  check('写入失败提示留在卡片区末尾（不再和重启横幅同位置）',
+    noticeAt > firstCardAt, `notice=${String(noticeAt)} firstCard=${String(firstCardAt)}`)
 
   // 两步确认：第一步只读状态，第二步才 POST。
   // 0.15.3：第一步改成多行（要带防跨站头），所以断言改成「这次读状态没写 method」。

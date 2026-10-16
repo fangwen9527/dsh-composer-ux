@@ -1655,6 +1655,14 @@ const cases = [
     expect: "❗条目在、但值对不上",
   },
   {
+    name: "IK 重启确认条被挪回卡片之后（用户抱怨的那个位置）",
+    file: "src/client/SettingsSection.tsx",
+    from: "        <RestartBanner restart={restart} />\n        <NotifyCard",
+    to: "        <NotifyCard",
+    test: "test/client-registration.mjs",
+    expect: "❗确认条挂在抬头正下方",
+  },
+  {
     name: "IJ 运行时判定改成猜环境变量（网页版会被认成桌面端，注册出 bash.exe）",
     file: "src/autostart.ts",
     from: "  return /dsh-desktop-host/iu.test(argv1 ?? '') ? 'desktop' : 'web'",

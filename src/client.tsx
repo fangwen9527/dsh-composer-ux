@@ -794,14 +794,24 @@ export function apply(ctx: any): void {
    * 装卸的幂等与"关掉要能再打开"由 `createDirectoryFlowController`（有单测 + 变异守着）负责。
    */
   ctx.effect(() => {
+    /*
+      0.23.3 起**停用接管**（用户 2026-10-16 真机拍板）。
+
+      真机现象：在桌面应用里选完工作区，输入框芯片先正常变成 Downloads，**几秒后自己退回
+      「选择一个工作区开始」**（工作区其实已经建好，只是界面状态被顶回去）；把这一栏关掉
+      （=不接管，回到官方 browse）就完全正常。
+
+      为什么停：这层接管是在官方占用者（宿主绑内网地址时官方解析成 browse）仍然活着的时候，
+      用 -1 优先级插进同一格。本插件那份占用者与官方 native 占用者逐行等价（都只弹一次框、
+      只报一次结果），差异只剩"与官方占用者共存"这件事本身 —— 而那正是官方从不使用的方式。
+      在弄清回滚来自哪一步之前，宁可停用，也不用一个会改坏工作区状态的功能。
+
+      恢复点（要恢复时改这一行 + 把上面结论换掉 + 更新 test/client-registration.mjs 第 15 节）：
+        flow.sync(live.getSnapshot().directoryPickEnabled === true)
+    */
     const flow = createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })
-    const syncDirectoryFlow = (): void => { flow.sync(live.getSnapshot().directoryPickEnabled === true) }
-    syncDirectoryFlow()
-    const unsubscribe = live.subscribe(syncDirectoryFlow)
-    return () => {
-      unsubscribe()
-      flow.dispose()
-    }
+    flow.sync(false)
+    return () => { flow.dispose() }
   }, 'composer-ux: directory flow')
 
   // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。

@@ -1190,30 +1190,27 @@ console.log('14. React 副作用：alive ref 必须在 effect 体里重置（Str
   }
 }
 
-console.log('15. 「工作区目录选择」的接线：默认关、开机同步、随设置即时装卸（0.19.0）')
+console.log('15. 「工作区目录选择」：0.23.3 起**停用接管**（不许再按设置值装影子）')
 {
-  // 为什么钉源码级：真正的开关行为在浏览器里（设置页拨一下 → 槽位装卸），本仓测不到那一步。
-  // 能测的是"接线有没有接对"：字段是否在契约里且默认为关、净化是否读它、客户端半是不是
-  // 订阅了设置而不是只在启动时看一次 —— 这三处任一写错，症状都是"开关像坏的"。
+  // 为什么钉源码级：真机现象是"选完工作区几秒后自己退回选择工作区"，只有真的装上才复现。
+  // 本仓测不到浏览器里那一步，能钉的是**接线本身**：接管必须被硬编码为不安装。
   const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
-  check('契约里有这个字段', contract.includes("export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'"))
-  check('默认值是 false（接管官方槽位这件事必须用户自己点）',
-    /directoryPickEnabled: false,/.test(contract))
-  check('净化会读它（不然用户拨了开关、重启就丢）',
+  check('字段仍留在契约里且默认关（字段不再驱动接管，留着是为了 schema 稳定）',
+    contract.includes("export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'")
+    && /directoryPickEnabled: false,/.test(contract))
+  check('净化仍会读它（历史值不会被当成未知键）',
     /directoryPickEnabled: asBool\(DIRECTORY_PICK_ENABLED_FIELD\)/.test(contract))
 
   const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  check('客户端半用了控制器（幂等装卸都收在它里面）',
+  check('❗接管被硬编码为不安装（flow.sync(false)）—— 2026-10-16 真机拍板停用',
+    /flow\.sync\(false\)/.test(client))
+  check('❗不许再按设置值决定接管（那条路会回滚工作区状态）',
+    !client.includes('flow.sync(live.getSnapshot().directoryPickEnabled === true)'))
+  check('控制器还在（恢复时只改一个实参，不用重搭）',
     client.includes('createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })'))
-  check('启动时先同步一次（不然"已经开着的开关"要等下次改设置才生效）',
-    /syncDirectoryFlow\(\)/.test(client))
-  check('订阅设置变化 —— 开关必须即时生效，不是重启才生效',
-    /live\.subscribe\(syncDirectoryFlow\)/.test(client))
-  check('卸载时先退订、再卸控制器（HMR / 插件卸载不留影子占用者）',
-    /unsubscribe\(\)\s*\n\s*flow\.dispose\(\)/.test(client))
-  check('判断看的是 live 快照里的开关，不是写死的 true',
-    client.includes('flow.sync(live.getSnapshot().directoryPickEnabled === true)'))
+  check('卸载仍会 dispose（不留影子占用者）',
+    /flow\.dispose\(\)/.test(client))
 }
 
 console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须都在 ownSchema() 里（0.19.0 补漏）')

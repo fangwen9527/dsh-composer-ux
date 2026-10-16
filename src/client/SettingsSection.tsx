@@ -26,7 +26,6 @@ import {
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS, SITE_URL,
   NOTIFY_CHANNEL_FIELD, NOTIFY_ENABLED_FIELD, NOTIFY_KINDS_FIELD, NOTIFY_PUSHPLUS_FIELD,
   NOTIFY_TEST_API_PATH, NOTIFY_WECOM_FIELD,
-  DIRECTORY_PICK_ENABLED_FIELD,
   KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
@@ -1022,35 +1021,33 @@ function NotifyCard({ settings, setField }: {
 }
 
 /**
- * 「工作区目录选择」（0.19.0，默认**关**）。
+ * 「工作区目录选择」（0.19.0 加开关；**0.23.3 起停用**，保留说明与恢复点）。
  *
- * 为什么要有这张卡：0.18.0 把这个功能做成了"装了就生效"，而它的做法是**接管官方那两个
- * 目录流程槽位**（比官方更低的优先级，见 src/client/directory-flow.ts）—— 属于改默认行为，
- * 不打招呼就换掉别人的选择框是越界。所以这里给一个开关，默认关，用户自己点。
+ * 停用原因（2026-10-16 真机 + 用户拍板）：这一栏的做法是**接管官方那两个目录流程槽位**
+ * （在官方占用者仍然活着时，用比它更低的优先级插进同一格）。真机上表现为：在桌面应用里
+ * 选完工作区，输入框芯片先正常变成 Downloads，**几秒后自己退回「选择一个工作区开始」**；
+ * 把这一栏关掉（=不接管、回到官方 browse）就完全正常。本插件那份占用者与官方 native 占用者
+ * 逐行等价（都只弹一次框、只报一次结果），差异只剩"与官方占用者共存"这件事本身 ——
+ * 而那正是官方从不使用的方式。在弄清回滚来自哪一步之前，宁可停用。
+ *
+ * 所以这张卡**不给开关**：不给一个"看起来能开、其实不生效"的控件。接管本身在
+ * src/client.tsx 里被硬编码为不安装（恢复点写在那儿的注释里）。
  */
-function DirectoryPickCard({ settings, setField }: {
-  readonly settings: ComposerUxSettings
-  readonly setField: (field: SettingsField, value: unknown) => void
-}) {
-  const on = settings.directoryPickEnabled
+function DirectoryPickCard() {
   return (
     <FoldCard
       name="工作区目录选择"
-      summary={on ? '开启中 · 桌面应用里弹系统文件夹框（任意盘符点选）' : '用官方应用内浏览对话框'}
-      toggle={{ checked: on, onChange: next => { setField(DIRECTORY_PICK_ENABLED_FIELD, next) } }}
+      summary="已停用 · 与官方目录流程共存时会回滚工作区状态（现在用官方应用内浏览对话框）"
     >
       <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
-        打开后：在<strong>桌面应用</strong>里点「选择工作区目录」直接弹 Windows 系统文件夹框 —— 任意盘符点进去选，
-        <strong>不用再手动输入盘符路径</strong>，也能在里面新建文件夹。
+        <strong>暂时停用</strong>：打开它时，插件会接管官方那两个目录流程槽位，真机上表现为
+        <strong>选完工作区几秒后又退回「选择一个工作区开始」</strong>（工作区其实已经建好，
+        只是界面状态被顶回去）。不接管就正常，所以现在默认不接管。
         <br />
         <span style={{ opacity: 0.75 }}>
-          官方那个应用内对话框在 Windows 上祖先链止于盘符根（它自己的 README 写着「不枚举盘符根 ——
-          跨盘依赖浏览器 UI 的路径输入入口」），所以换盘才要手输；这一项就是把它换成系统框。
-        </span>
-        <br />
-        <span style={{ opacity: 0.75 }}>
-          只在桌面应用里生效（只有那儿有系统对话框的接入口）；手机 / 浏览器里仍是官方那个应用内浏览
-          对话框（带路径输入），远端体验不变。开关<strong>即时生效</strong>，不用重启；关掉即回到官方原样。
+          它本来要解决的问题还在：官方那个应用内对话框在 Windows 上祖先链止于盘符根
+          （它自己的 README 写着「不枚举盘符根 —— 跨盘依赖浏览器 UI 的路径输入入口」），
+          所以换盘要手输；这一项就是把它换成系统文件夹框。等修好共存那一步再恢复。
         </span>
       </div>
     </FoldCard>
@@ -1285,7 +1282,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         */}
         <RestartBanner restart={restart} />
         <NotifyCard settings={settings} setField={actions.setField} />
-        <DirectoryPickCard settings={settings} setField={actions.setField} />
+        <DirectoryPickCard />
         {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
         <FoldCard name="自检" summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）">
           <DoctorCard />

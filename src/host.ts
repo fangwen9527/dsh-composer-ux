@@ -70,7 +70,9 @@ import type { NotifyEvent, NotifySettings } from './notify.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
-import { createUsageCache, type UsageTier } from './usage-fold.ts'
+import {
+  addBuckets, createUsageCache, zeroBuckets, type SessionUsageFold, type UsageTier,
+} from './usage-fold.ts'
 import {
   TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
   TERMINAL_MODE_FIELD, TERMINAL_STATUS_FIELD,
@@ -1898,7 +1900,7 @@ export function apply(ctx: Context, config?: unknown): void {
      *   · `sync()` 里的 `seq` 落后检测 —— 首次（或发现落后）时完整读一次播种，
      *     播种期间订阅来的事件由缓存内部攒着、读完按 seq 补上（细节见 `usage-fold.ts`）。
      */
-    const usageCache = createUsageCache(tierAt)
+    const usageCache = createUsageCache(tierAt, { maxSessions: 32 })
     usageCtx.on?.('session/event', ((session: unknown, event: unknown) => {
       try {
         const id = (session as { id?: unknown } | null)?.id
@@ -1951,6 +1953,179 @@ export function apply(ctx: Context, config?: unknown): void {
       }
     }
 
+    /**
+     * 读一份会话快照。返回 `undefined` = 读不到（会话不存在 / 归档后持久化也找不到 / 读失败）。
+     *
+     * 子代理这条路必须知道 `inheritedEventCount`：fork 出来的子代理会带着父会话的历史开头，
+     * 那段事件里的 usage **父会话已经计过账**（见下面 {@link ownEvents}）。
+     */
+    const readSnapshot = async (
+      id: string,
+    ): Promise<{ readonly events: readonly unknown[]; readonly inherited: number } | undefined> => {
+      try {
+        const query = usageCtx.get('sessionQuery') as
+          | {
+            readSession?: (session: string) => Promise<
+              { events?: readonly unknown[]; inheritedEventCount?: unknown } | undefined
+            >
+          }
+          | undefined
+        if (typeof query?.readSession !== 'function') return undefined
+        const snapshot = await query.readSession(id)
+        if (snapshot === undefined) return undefined
+        const inherited = typeof snapshot.inheritedEventCount === 'number'
+          && Number.isFinite(snapshot.inheritedEventCount) && snapshot.inheritedEventCount > 0
+          ? snapshot.inheritedEventCount
+          : 0
+        return { events: Array.isArray(snapshot.events) ? snapshot.events : [], inherited }
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
+     * 一个会话**自己产生**的事件（剔掉 fork 继承前缀）。
+     *
+     * 为什么必须有这一步（0.24.0）：`subagent-fork-in-process` 这类子代理是把父会话的历史当种子
+     * 建出来的，它的事件日志**开头就是父会话那一段**，里面带着父会话已经上报过的 usage。
+     * 整段照折等于把父会话的账再收一遍 —— 而且金额会随上下文大小成倍放大，界面上看不出错。
+     * 判据与官方投影**同一条**：`event.seq < inheritedEventCount` 就是继承来的
+     * （`packages/subagent/subagent/src/catalog.ts` 的投影也这么判）。
+     * 没有 `seq` 的事件（理论上不会有）无法判归属，按"自己的"处理 —— 宁可多算一条，
+     * 也不静默丢账。
+     */
+    const ownEvents = (
+      snapshot: { readonly events: readonly unknown[]; readonly inherited: number },
+    ): readonly unknown[] => {
+      if (snapshot.inherited <= 0) return snapshot.events
+      return snapshot.events.filter(event => {
+        const seq = (event as { seq?: unknown } | null)?.seq
+        return typeof seq !== 'number' || seq >= snapshot.inherited
+      })
+    }
+
+    /**
+     * 把一个折叠结果按 route 计价。
+     *
+     * 本会话与每个子代理**共用这一处**：胶囊、浮层与测试看到的必须是同一套"折叠 → 分档 → 单价"，
+     * 各写一份就一定会有一处忘了峰谷或价格档（0.8.0 的静默错处就是这么来的）。
+     */
+    const priceFold = (target: SessionUsageFold, overrides: PriceOverrideTable | undefined) => {
+      const routes = target.routes.map(item => {
+        const resolved = resolvePrice(item.model, {
+          provider: item.provider,
+          peak: item.peak,
+          era: item.era,
+          overrides,
+          providers: moneyRules.providers,
+        })
+        const parts = costPartsOf(costBucketsOf(item.usage), resolved.prices)
+        return {
+          ...item,
+          cost: parts.total,
+          parts,
+          /** 这一条实际用的单价（界面要原样显示"按什么价算的"）。 */
+          price: resolved.prices,
+          priceCurrency: resolved.currency,
+          priceSource: resolved.source,
+          priceEra: resolved.era,
+          overridden: resolved.overridden,
+          unpriced: resolved.unpriced,
+          /** 单价来自**内置快照**（没点过同步时的兜底）：界面会如实标明。 */
+          priceBuiltin: resolved.builtin,
+        }
+      })
+      const cost = routes.reduce(
+        (sum, item) => ({
+          miss: sum.miss + item.parts.miss,
+          hit: sum.hit + item.parts.hit,
+          out: sum.out + item.parts.out,
+          total: sum.total + item.cost,
+        }),
+        { miss: 0, hit: 0, out: 0, total: 0 },
+      )
+      return { routes, cost, unpriced: routes.filter(item => item.unpriced).length }
+    }
+
+    /** 子代理递归的天花板（0.24.0）：金额胶囊每 600ms 就可能问一次，不能无界递归。 */
+    const SUBAGENT_MAX_DEPTH = 4
+    const SUBAGENT_MAX_SESSIONS = 32
+
+    /** 一个折到的子代理会话（带深度：`1` = 直系子代理，`2` = 孙代理 …）。 */
+    interface SubagentFoldRow {
+      readonly sessionId: string
+      readonly depth: number
+      readonly fold: SessionUsageFold
+    }
+
+    /**
+     * 递归折**全部子代理**（0.24.0）。这是"金额胶囊不计算子代理费用"的修复本体。
+     *
+     * 三条口径：
+     *  1. **子会话的来源只有 catalog**（父会话自己的 `subagent/catalog` 事件，见 `usage-fold.ts`
+     *     的 {@link SubagentChildRef}），不扫全局会话列表 —— 后者会把"用户自己 fork 出来的会话"
+     *     也算进来，而且每 600ms 列一遍持久化目录太贵；
+     *  2. **继承前缀要剔掉**（{@link ownEvents}），否则 fork 型子代理会把父会话的账重复收一遍；
+     *  3. **读不到就如实报**（`missing`），外部执行（`external`，本机没有会话）与超过上限
+     *     （`skipped`）分开记 —— 界面要能把"没算进来"的部分说出来，而不是安静地少算。
+     *
+     * @param root 根会话（本会话）的折叠结果。
+     * @param rootId 根会话 id（防止子代理的 catalog 指回根会话时重复折）。
+     * @param liveSeqs 活会话 → `seq`。子代理跑着的时候它的日志在增长，得靠这个判"落后了"。
+     */
+    const foldSubagents = async (
+      root: SessionUsageFold,
+      rootId: string,
+      liveSeqs: ReadonlyMap<string, number | undefined>,
+    ): Promise<{
+      readonly rows: readonly SubagentFoldRow[]
+      readonly missing: number
+      readonly external: number
+      readonly skipped: number
+    }> => {
+      const rows: SubagentFoldRow[] = []
+      const seen = new Set<string>([rootId])
+      let missing = 0
+      let external = 0
+      let skipped = 0
+      const queue: Array<{ readonly sessionId: string; readonly external: boolean; readonly depth: number }> =
+        root.children.map(child => ({ sessionId: child.sessionId, external: child.external, depth: 1 }))
+      while (queue.length > 0) {
+        const next = queue.shift()
+        if (next === undefined) break
+        if (seen.has(next.sessionId)) continue
+        seen.add(next.sessionId)
+        if (next.external) {
+          external += 1
+          continue
+        }
+        if (next.depth > SUBAGENT_MAX_DEPTH || rows.length >= SUBAGENT_MAX_SESSIONS) {
+          skipped += 1
+          continue
+        }
+        let unreadable = false
+        const outcome = await usageCache.sync(next.sessionId, liveSeqs.get(next.sessionId), async () => {
+          const snapshot = await readSnapshot(next.sessionId)
+          if (snapshot === undefined) {
+            unreadable = true
+            throw new Error(`子代理会话 ${next.sessionId} 的日志读不到`)
+          }
+          return ownEvents(snapshot)
+        })
+        // 读不到、而且缓存里本来也没有它 —— 这才是"没算进来"。缓存里有数据就继续用它
+        // （一次读失败不该让胶囊上的数字忽然变小）。
+        if (unreadable && outcome.fold.events === 0) {
+          missing += 1
+          continue
+        }
+        rows.push({ sessionId: next.sessionId, depth: next.depth, fold: outcome.fold })
+        for (const child of outcome.fold.children) {
+          queue.push({ sessionId: child.sessionId, external: child.external, depth: next.depth + 1 })
+        }
+      }
+      return { rows, missing, external, skipped }
+    }
+
     const handle = (
       req: { method?: string; url?: string },
       res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
@@ -1977,15 +2152,19 @@ export function apply(ctx: Context, config?: unknown): void {
         // **2026-09-28 真机踩坑**：这一版没有 `assistant/chunk` 事件，usage 藏在
         // `assistant/attempt` 的 stream 里（见 src/usage-fold.ts 文件头），所以"一条都没读到"
         // 必须如实回报，绝不编一份空分列糊上去。
-        const live = liveSessions().find(row => (row as { id?: unknown } | null)?.id === sessionId) as
-          { seq?: unknown } | undefined
+        const liveSeqs = new Map<string, number | undefined>()
+        for (const row of liveSessions()) {
+          const id = (row as { id?: unknown } | null)?.id
+          if (typeof id !== 'string' || id === '') continue
+          const seq = (row as { seq?: unknown }).seq
+          liveSeqs.set(id, typeof seq === 'number' && Number.isFinite(seq) ? seq : undefined)
+        }
         // `seq` 是"下一条事件的序号"（= 已写入条数），所以最后一条已写入事件的 seq 是 `liveSeq - 1`。
-        const liveSeq = typeof live?.seq === 'number' && Number.isFinite(live.seq) ? live.seq : undefined
+        const liveSeq = liveSeqs.get(sessionId)
         const { fold, source } = await usageCache.sync(sessionId, liveSeq, async () => {
-          const query = usageCtx.get('sessionQuery') as
-            { readSession?: (id: string) => Promise<{ events?: readonly unknown[] } | undefined> } | undefined
-          const snapshot = typeof query?.readSession === 'function' ? await query.readSession(sessionId) : undefined
-          return Array.isArray(snapshot?.events) ? snapshot.events : []
+          const snapshot = await readSnapshot(sessionId)
+          // 读不到就如实回"没有事件"（`sync()` 会保住缓存里已有的那份，绝不冒泡给路由）。
+          return snapshot === undefined ? [] : snapshot.events
         })
 
         // ── 2) 逐 route 计价 ────────────────────────────────────────────────────
@@ -1995,39 +2174,32 @@ export function apply(ctx: Context, config?: unknown): void {
         // （以及 `test/*.mjs`）看到的是同一份数字，不会各算各的。
         const overrides = readOverrides()
         await loadProviders()
-        const routes = fold.routes.map(item => {
-          const resolved = resolvePrice(item.model, {
-            provider: item.provider,
-            peak: item.peak,
-            era: item.era,
-            overrides,
-            providers: moneyRules.providers,
-          })
-          const parts = costPartsOf(costBucketsOf(item.usage), resolved.prices)
-          return {
-            ...item,
-            cost: parts.total,
-            parts,
-            /** 这一条实际用的单价（界面要原样显示"按什么价算的"）。 */
-            price: resolved.prices,
-            priceCurrency: resolved.currency,
-            priceSource: resolved.source,
-            priceEra: resolved.era,
-            overridden: resolved.overridden,
-            unpriced: resolved.unpriced,
-            /** 单价来自**内置快照**（没点过同步时的兜底）：界面会如实标明。 */
-            priceBuiltin: resolved.builtin,
-          }
-        })
-        const cost = routes.reduce(
-          (sum, item) => ({
-            miss: sum.miss + item.parts.miss,
-            hit: sum.hit + item.parts.hit,
-            out: sum.out + item.parts.out,
-            total: sum.total + item.cost,
-          }),
-          { miss: 0, hit: 0, out: 0, total: 0 },
-        )
+        const selfPriced = priceFold(fold, overrides)
+
+        // ── 3) 子代理（0.24.0）──────────────────────────────────────────────────
+        // 用户报的 bug 就是这里：胶囊只算本会话，子代理花的钱一个都没进账。
+        // 子代理的用量在**自己的**会话日志里（父会话只在 catalog 事件里记了"有哪些子会话"），
+        // 所以要递归读、递归折、按同一套价目计。口径见 `foldSubagents`。
+        const children = await foldSubagents(fold, sessionId, liveSeqs)
+        let subTotal = zeroBuckets()
+        let subPeak = zeroBuckets()
+        let subOffPeak = zeroBuckets()
+        const subCost = { miss: 0, hit: 0, out: 0, total: 0 }
+        let subUnpriced = 0
+        let subLive = 0
+        for (const row of children.rows) {
+          subTotal = addBuckets(subTotal, row.fold.total)
+          subPeak = addBuckets(subPeak, row.fold.tiers.peak)
+          subOffPeak = addBuckets(subOffPeak, row.fold.tiers.offPeak)
+          const priced = priceFold(row.fold, overrides)
+          subCost.miss += priced.cost.miss
+          subCost.hit += priced.cost.hit
+          subCost.out += priced.cost.out
+          subCost.total += priced.cost.total
+          subUnpriced += priced.unpriced
+          if (liveSeqs.has(row.sessionId)) subLive += 1
+        }
+
         sendJson(res, 200, {
           ok: true,
           sessionId,
@@ -2038,8 +2210,31 @@ export function apply(ctx: Context, config?: unknown): void {
           total: fold.total,
           /** 高峰 / 空闲两档的小计（界面按档显示，也是"逐笔准时"看得见的地方）。 */
           tiers: fold.tiers,
-          routes,
-          cost,
+          routes: selfPriced.routes,
+          cost: selfPriced.cost,
+          /**
+           * **子代理**（0.24.0）：本会话派出去的全部子代理会话（含孙代理）的合计。
+           *
+           * 刻意**不并进**上面的 `total` / `cost` / `routes` —— 那三个字段的口径是"本会话自己"，
+           * 客户端拿它跟官方 `tokenUsage` 投影对账（`agreesWithProjection`）：投影只有本会话，
+           * 一合并就永远对不上，浮层会退回估算口径（那是 0.8.0 的老毛病）。所以：
+           * 本会话的钱在上面的顶层字段，子代理的钱在这里，**加起来才是这次任务真的花了多少**。
+           *
+           * `missing` / `external` / `skipped` / `unpriced` 是"没算进来"的四个来源，界面必须
+           * 把它们说出来：读不到日志的（已归档/读失败）、外部执行的（claude-code 那类，本机
+           * 没有会话）、超过递归上限的、以及用量有但认不出单价的。
+           */
+          subagents: {
+            sessions: children.rows.length,
+            live: subLive,
+            missing: children.missing,
+            external: children.external,
+            skipped: children.skipped,
+            total: subTotal,
+            tiers: { peak: subPeak, offPeak: subOffPeak },
+            cost: subCost,
+            unpriced: subUnpriced,
+          },
           /**
            * 生效的节假日表（北京日期）。客户端算"下一次峰谷切换"用的是**同一份**规则
            * —— 两边各拿一份自己的表就会出现"胶囊说还有 3 分钟进峰、面板说不是"这种

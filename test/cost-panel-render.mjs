@@ -112,6 +112,36 @@ const FIXTURE = {
   ],
 }
 
+/**
+ * 带子代理（subagent）的夹具（0.24.0）。
+ *
+ * 口径要点：`total` / `cost` / `routes` **仍然只是本会话**（必须与 `PROJECTION` 一致，否则
+ * 组件会退回"估算"口径、根本不走分列）。子代理的钱只出现在 `subagents` 这一块 —— 这正是
+ * 宿主的契约，而"顶层字段别被并脏"是 `agreesWithProjection` 还能成立的前提。
+ *
+ * 下面断言里的期望值都是**手算**的（不拿被测代码再算一遍，否则组件算错时测试跟着一起错）：
+ *   金额：本会话 4.08 + 子代理 1.14 = **5.22**
+ *   分项：未缓存输入 2.00+0.60=2.60、缓存命中 0.08+0.04=0.12、输出 2.00+0.50=2.50
+ *         2.60 + 0.12 + 2.50 = 5.22 ✓（"分项之和 = 合计"并了子代理之后照样成立）
+ *   tokens：本会话 3.7M + 子代理 1.22M = 4.92M
+ *   峰谷：高峰档 1M + 0.2M = 1.2M，空闲档 2M + 0.92M = 2.92M（**只有 token 被并**，
+ *         金额仍是本会话的 ¥2.00 / ¥0.30 —— 宿主没把子代理的钱按峰谷拆开）
+ */
+const SUBAGENTS = {
+  sessions: 3,
+  live: 1,
+  // 读不全的两种原因都非零：界面上必须点名，否则用户只会觉得"钱怎么比预期少"。
+  missing: 2,
+  external: 1,
+  total: { inputTokens: 300_000, outputTokens: 120_000, cacheReadTokens: 800_000, cacheWriteTokens: 0 },
+  cost: { miss: 0.6, hit: 0.04, out: 0.5, total: 1.14 },
+  tiers: {
+    peak: { inputTokens: 200_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    offPeak: { inputTokens: 0, outputTokens: 120_000, cacheReadTokens: 800_000, cacheWriteTokens: 0 },
+  },
+}
+const SUB_FIXTURE = { ...FIXTURE, subagents: SUBAGENTS }
+
 const ENTRY = `
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -269,6 +299,68 @@ console.log('1.1 非默认时才多出来的两样（跨价档说明 / 覆盖价
     overridden.includes('高峰单价（每 1M · 已自定义）'), (overridden.match(/高峰单价[^ ]*/) ?? [''])[0])
   const plain = visible(render(FIXTURE))
   check('没覆盖过价时小标不出现（默认不占字）', !plain.includes('已自定义'))
+}
+
+console.log('1.2 子代理的费用并进来（0.24.0）')
+{
+  const html = render(SUB_FIXTURE)
+  const text = visible(html)
+  // 头号数字必须是 **本会话 + 子代理**：4.08 + 1.14 = 5.22（期望值手算，见夹具注释）。
+  check('胶囊头号数字 = 本会话 + 子代理（¥4.08 + ¥1.14 = ¥5.22）',
+    text.startsWith('¥5.22'), text.slice(0, 60))
+  check('本会话那一份的数（¥4.08）不再单独出现在任何地方（合计已含子代理）',
+    !text.includes('¥4.08'))
+  check('胶囊 title 说清这个数字含子代理（免得以为本会话真花了这么多）',
+    html.includes('本会话费用（含子代理，按每笔用量发生的时间计价）'))
+  check('浮层多一行「子代理（3 个会话）」，带它自己的 tokens 与金额',
+    text.includes('子代理（3 个会话） 1.22M · ¥1.14'),
+    (text.match(/子代理（3 个会话） [^ ]* · [^ ]*/) ?? [''])[0])
+  check('「合计」= 本会话 + 子代理（tokens 3.7M + 1.22M = 4.92M；金额 4.08 + 1.14 = 5.22）',
+    text.includes('合计 4.92M · ¥5.22'), (text.match(/合计 [^ ]* · [^ ]*/) ?? [''])[0])
+  check('分项三行并进子代理（未缓存输入 2.00+0.60、缓存命中 0.08+0.04、输出 2.00+0.50）',
+    text.includes('未缓存输入 1.5M · ¥2.60')
+    && text.includes('缓存命中 2.8M · ¥0.12')
+    && text.includes('输出 620K · ¥2.50'))
+  check('分项三行之和仍然**恰好**等于合计（2.60 + 0.12 + 2.50 = 5.22，与合计同屏可核）',
+    Math.abs(2.60 + 0.12 + 2.50 - 5.22) < 1e-9 && text.includes('合计 4.92M · ¥5.22'))
+  // 峰谷两档：token 并进子代理那一档，金额只含本会话（不拿 token 乘单价编一个按档金额）。
+  check('高峰档的 token 并进子代理那一档（1M + 0.2M），金额仍只含本会话（¥2.00）',
+    text.includes('高峰档 1.2M · ¥2.00'), (text.match(/高峰档 [^ ]* · [^ ]*/) ?? [''])[0])
+  check('空闲档的 token 并进子代理那一档（2M + 0.92M），金额仍只含本会话（¥0.30）',
+    text.includes('空闲档 2.92M · ¥0.30'), (text.match(/空闲档 [^ ]* · [^ ]*/) ?? [''])[0])
+  check('并了 token 就必须说清"金额只含本会话"（否则读者以为两档加起来就是全额）',
+    text.includes('token 已含子代理，金额只含本会话'))
+  check('读不全的子代理要点名（2 个读不到日志 + 1 个外部执行 = 3 个没算进来）',
+    text.includes('另有 3 个子代理的费用没算进来')
+    && text.includes('2 个读不到会话日志') && text.includes('1 个是外部执行'),
+    (text.match(/另有 3 个子代理[^。]*/) ?? [''])[0])
+  check('这些说明同样是纯文本（没有 markdown 记号，否则浮层里会看到字面星号）',
+    !text.includes('**'))
+  // 子代理全未定价：金额位置写「未定价」而不是 ¥0.00，且分项/合计仍自洽（合计退回本会话那份）。
+  const unpriced = visible(render({
+    ...FIXTURE,
+    subagents: {
+      ...SUBAGENTS,
+      cost: { miss: 0, hit: 0, out: 0, total: 0 },
+      unpriced: 2,
+      missing: 0,
+      external: 0,
+    },
+  }))
+  check('子代理全未定价：那一行写「未定价」而不是 ¥0.00',
+    unpriced.includes('子代理（3 个会话） 1.22M · 未定价'),
+    (unpriced.match(/子代理（3 个会话） [^ ]* · [^ ]*/) ?? [''])[0])
+  check('未定价的子代理单独点名（按 0 计），金额仍是本会话那份',
+    unpriced.includes('子代理里有费用没算进来：2 行没认出价，按 0 计')
+    && unpriced.includes('合计 4.92M · ¥4.08'),
+    (unpriced.match(/子代理里有[^。]*/) ?? [''])[0])
+  // 老宿主 / 没跑子代理的会话走同一条路径：一个字节都不许多（反向断言，防"顺手加一行空行"）。
+  const legacy = render(FIXTURE)
+  const legacyText = visible(legacy)
+  check('没有子代理时浮层里一个「子代理」字都没有',
+    !legacyText.includes('子代理') && !legacyText.includes('含子代理'))
+  check('没有子代理时胶囊文案保持原文案',
+    legacy.includes('本会话费用（按每笔用量发生的时间计价）'))
 }
 
 console.log('2. 宿主数据还没到手 / 认不出价时：不许显示 ¥0.00')

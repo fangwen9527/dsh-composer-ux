@@ -57,6 +57,55 @@ export interface SessionCostRoute {
   readonly priceBuiltin?: boolean
 }
 
+/**
+ * 子代理（subagent）那半边账（0.24.0）。
+ *
+ * ## 为什么单列一块，不折进顶层 `total` / `cost`
+ *
+ * 顶层的 `total` / `cost` / `routes` / `tiers` **只统计本会话**，而且必须一直如此：客户端拿
+ * `agreesWithProjection()` 判"宿主半的分列敢不敢当权威"时，比对的是官方 `tokenUsage` 投影，
+ * 而那份投影**只有本会话**（子会话的事件在自己的日志里，不进父会话投影）。把子代理的钱并进
+ * 顶层，那个判据会永远不成立 —— 宿主半算得分毫不差，界面却退化成"估算"口径（"日志 vs 投影"
+ * 这条判据的来历见 `usage-fold.ts` 文件头）。所以子代理的合计单独一块交给客户端，
+ * 由它在"本会话分列可信"之后**自己决定**怎么并进展示数字。
+ *
+ * ## 字段都是可选的，缺了就是"没有子代理"
+ *
+ * 老宿主（0.23.x 及以前）根本不会回这块；客户端必须把 `subagents === undefined` 当成
+ * `sessions === 0` 处理 —— 浮层一个字都不许多出来。
+ *
+ * ## 为什么 `missing` / `external` / `skipped` / `unpriced` 要一个个报出来
+ *
+ * 子代理的费用是"读别人的日志读出来的"，读不全有四种完全不同的原因（见下面每个字段），
+ * 而界面上只有一个金额。不把这些数报出来，用户看到的就是"我明明跑了 5 个子代理，钱怎么只多了
+ * 一点点"—— 只能自己猜。所以它们不是诊断字段，是**金额的一部分解释**，界面要写在脸上。
+ */
+export interface SessionCostSubagents {
+  /** 折到日志的子代理会话数（含孙代理：递归折下去的都算）。 */
+  readonly sessions?: number
+  /** 其中当前仍活着的会话数（还可能在长；胶囊本身随着用量刷新，这里只用于诊断展示）。 */
+  readonly live?: number
+  /** catalog 里有、但本机读不到日志（已归档 / 外部执行到一半失去日志 / 读失败）的个数。 */
+  readonly missing?: number
+  /** catalog 里 `mode: 'external'`（claude-code / codex / acp 那类外部执行）的个数：本机没有会话，用量拿不到。 */
+  readonly external?: number
+  /** 因超过单次读取上限没读的个数（会话太多时只折前 N 个，省得一个请求读完几百个日志）。 */
+  readonly skipped?: number
+  /** 子代理合计 token 桶（四个键名与顶层 `total` 相同）。 */
+  readonly total?: SessionCostBuckets
+  /**
+   * 子代理合计金额（与顶层 `cost` 同形）。
+   *
+   * 注意它**没有**按下峰谷/价格档拆开（见 `tiers`）：宿主半只把子代理的总金额算出来，
+   * 所以界面不能用"子代理 token × 某一档单价"去编造按档金额。
+   */
+  readonly cost?: { readonly miss?: number; readonly hit?: number; readonly out?: number; readonly total?: number }
+  /** 子代理的高峰 / 空闲小计（**桶，不是金额**）。 */
+  readonly tiers?: { readonly peak?: SessionCostBuckets; readonly offPeak?: SessionCostBuckets }
+  /** 子代理里有几行没认出价（那部分金额按 0 计）。 */
+  readonly unpriced?: number
+}
+
 /** `/composer-ux/usage` 的响应（0.9.1 起多带回 `tiers` 与算好的 `cost`；0.10.0 加价格档与节假日）。 */
 export interface SessionCostResponse {
   readonly ok?: boolean
@@ -70,6 +119,13 @@ export interface SessionCostResponse {
   readonly tiers?: { readonly peak?: SessionCostBuckets; readonly offPeak?: SessionCostBuckets }
   readonly routes?: readonly SessionCostRoute[]
   readonly cost?: { readonly miss?: number; readonly hit?: number; readonly out?: number; readonly total?: number }
+  /**
+   * 子代理的合计（0.24.0）。**顶层那几个字段因此不变**：它们仍然只统计本会话，见
+   * {@link SessionCostSubagents} 里"为什么单列一块"。
+   *
+   * 老宿主不回这个字段 ⇒ 一律当"没有子代理"处理（金额、浮层、胶囊文案逐字节保持 0.23.x）。
+   */
+  readonly subagents?: SessionCostSubagents
   /**
    * 宿主半当前生效的节假日表（北京日期）。
    *

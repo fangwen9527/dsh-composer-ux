@@ -67,6 +67,30 @@
  *  · **价格档段**：改成**只在非默认时出现**（本会话用到的档 ≠ 当前生效的档）。
  *    这一条不能简单删：跨了 9-10 调价的会话，浮层上的单价是今天的价、金额却是当时的价，
  *    不说反而是误导。
+ *
+ * ## 0.24.0：子代理（subagent）的费用并进展示数字
+ *
+ * 用户报的是"金额胶囊不算子代理花的钱"。原因在数据源头，不在格式化：子代理跑在**自己的**会话里，
+ * 它的 usage 事件落在**自己的**日志里，父会话的折叠器看不到；官方 `tokenUsage` 投影同样只有本会话。
+ * 于是 0.23.x 的胶囊只报父会话自己那一份，跑一堆子代理之后数字几乎不动。
+ *
+ * 0.24.0 由宿主半递归折子代理的日志，并在响应里**单列**一块 `subagents`（契约见
+ * `session-cost.ts` 的 {@link SessionCostSubagents}），客户端把它并进展示数字。四条口径：
+ *
+ *  · **只在 `useBreakdown` 为真时并**。为假说明本会话的分列还不可信（日志没跟上投影），
+ *    这时展示的是本地估值 —— 拿"估出来的本会话"加"宿主算准的子代理"，同一个数字里两套口径，
+ *    比少算更糟。所以并子代理这一律以"本会话分列可信"为前提。
+ *  · **顶层的 `total` / `cost` 仍然只是本会话**，`agreesWithProjection` 的判据一个字都没动：
+ *    那份投影也只有本会话。谁要是把子代理并进顶层字段，这个判据会永远不成立，界面反而退化成估算。
+ *  · **分项三行必须跟着并**（`view.parts` 并 `subagents.cost`），否则"未缓存输入 + 缓存命中 + 输出
+ *    = 合计"这条承诺当场破掉。
+ *  · **峰谷两档只并 token、不并金额**：宿主半只给子代理的**总**金额，没按峰谷拆开。
+ *    拿"子代理 token × 某一档单价"凑一个按档金额就是编数字，所以两档的金额仍只含本会话，
+ *    并在浮层里写明（高峰档 / 空闲档两行的 token 已含子代理、金额不含）。那两行只在**本会话**
+ *    该档有量时才出现：只有子代理在该档有量时画一个"高峰档 1.2M · ¥0.00"，比不显示更误导。
+ *
+ * 没有子代理（字段缺失或 `sessions === 0`）时上面这些分支全不成立：浮层、胶囊、文案逐字节
+ * 与 0.23.x 相同 —— 老宿主、不用子代理的会话都走这条路。
  */
 import React, { type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
@@ -299,18 +323,79 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
     { miss: 0, hit: 0, out: 0 },
   )
   const useBreakdown = routeRows.length > 0 && foldAgrees && foldTotal !== null
+  // ── 子代理（0.24.0）：宿主半单列的那一块，只在"本会话分列可信"时才并进来 ───────────
+  // `sessions === 0` 与"老宿主根本不回这个字段"同等对待（`sub` 一律 undefined）：下面所有
+  // 子代理分支都不成立，浮层与胶囊逐字节保持 0.23.x 的样子。`sessions` 是"折到日志的子会话数"
+  // （含孙代理），有量就必然 > 0 —— 拿它当总开关，比拿 `cost.total > 0` 稳（全未定价时金额是 0，
+  // 但子代理确实跑过，那一行仍然要出现，否则用户以为插件根本不知道有子代理）。
+  const subRaw = useBreakdown ? data?.subagents : undefined
+  const subSessions = num(subRaw?.sessions)
+  const sub = subSessions > 0 ? subRaw : undefined
+  const subMissing = num(sub?.missing)
+  const subExternal = num(sub?.external)
+  const subSkipped = num(sub?.skipped)
+  const subUnpriced = num(sub?.unpriced)
+  const subCost = num(sub?.cost?.total)
+  const subTokens = tokenTotal(sub?.total)
+  /** 子代理的四桶（并进展示桶用）。 */
+  const subParts = {
+    miss: num(sub?.total?.inputTokens),
+    hit: num(sub?.total?.cacheReadTokens),
+    write: num(sub?.total?.cacheWriteTokens),
+    out: num(sub?.total?.outputTokens),
+  }
+  /**
+   * 子代理落在两档里的 token（**桶**，不是钱）。
+   *
+   * 只在**本会话这一档确实有量**时才并：否则本会话高峰档是 0、子代理高峰档有量，就会画出一行
+   * "高峰档 1.2M · ¥0.00" —— 那比不显示更误导（看着像"高峰不要钱"）。所以这一档的可见条件
+   * 仍旧只由本会话的量决定，并进来的子代理 token 是"附加信息"。
+   *
+   * ⚠️ 子代理走的**第三方**路由（既不在高峰档、也不在空闲档）没有小计行可并：`subagents`
+   * 只给了峰谷两个桶。那部分量只出现在「合计」和三个分项里 —— 这是宿主契约的边界，宁可少一行
+   * 小计，也不拿"总数减两档"去猜第三方那一路有多少（猜错就是把 token 记到别的档上）。
+   */
+  const peakTierTokens = peakTier.tokens + (peakTier.tokens > 0 ? tokenTotal(sub?.tiers?.peak) : 0)
+  const offTierTokens = offTier.tokens + (offTier.tokens > 0 ? tokenTotal(sub?.tiers?.offPeak) : 0)
+  /** 真的并进去过 token（浮层里那句"两档的 token 含子代理、金额只含本会话"只在此时才写）。 */
+  const subTierMerged = peakTierTokens > peakTier.tokens || offTierTokens > offTier.tokens
+  /**
+   * 子代理里"没算进来的那部分"：只列**实际非零**的几项，写成人话。
+   *
+   * 为什么非得写：金额只有一个数，而它可能来自四种完全不同的残缺（读不到日志 / 外部执行 /
+   * 超上限没读 / 没认出价），不点明的话用户只会觉得"钱怎么比预期少"。`note()` 是纯文本，
+   * 所以这里一个 markdown 记号都不能有。
+   */
+  const subGapParts: string[] = []
+  if (subMissing > 0) subGapParts.push(`${subMissing} 个读不到会话日志（已归档，或本机没有它的日志）`)
+  if (subExternal > 0) subGapParts.push(`${subExternal} 个是外部执行（本机没有这个会话，用量拿不到）`)
+  if (subSkipped > 0) subGapParts.push(`${subSkipped} 个超出单次读取上限`)
+  if (subUnpriced > 0) subGapParts.push(`${subUnpriced} 行没认出价，按 0 计`)
+  const subUnaccounted = subMissing + subExternal + subSkipped
+  const subGapText = subGapParts.length === 0
+    ? null
+    : subUnaccounted > 0
+      ? `另有 ${subUnaccounted} 个子代理的费用没算进来：${subGapParts.join('、')}`
+      : `子代理里有费用没算进来：${subGapParts.join('、')}`
   // ── 展示口径：分列到手就用宿主半算好的那份，否则用本地估值 ───────────────────
   // 命中率必须和面板上那些数字**同源**（否则同一个面板里两个数字互相打脸），而分母必须是
   // 官方 `billedInputTokens()` 的口径（未缓存 + 缓存读 + 缓存写）——注意这里的**键名**，
   // 见文件头"字段名坑"的第二次踩坑记录。
   const view = useBreakdown && foldTotal !== null
     ? {
-        miss: foldTotal.inputTokens,
-        hit: foldTotal.cacheReadTokens,
-        write: foldTotal.cacheWriteTokens,
-        out: foldTotal.outputTokens,
-        parts: { miss: num(data?.cost?.miss), hit: num(data?.cost?.hit), out: num(data?.cost?.out) },
-        total: num(data?.cost?.total),
+        // 子代理的四桶并进展示桶（`sub` 为 undefined 时每一项都是 0，即原样）：
+        // 这样"分项之和 = 合计 = 全额"与命中率都是同一份量，见文件头 0.24.0 第三条。
+        miss: foldTotal.inputTokens + subParts.miss,
+        hit: foldTotal.cacheReadTokens + subParts.hit,
+        write: foldTotal.cacheWriteTokens + subParts.write,
+        out: foldTotal.outputTokens + subParts.out,
+        // ⚠️ 三个分项**也要**并钱：只并桶不并钱，"未缓存输入 + 缓存命中 + 输出 = 合计"当场破。
+        parts: {
+          miss: num(data?.cost?.miss) + num(sub?.cost?.miss),
+          hit: num(data?.cost?.hit) + num(sub?.cost?.hit),
+          out: num(data?.cost?.out) + num(sub?.cost?.out),
+        },
+        total: num(data?.cost?.total) + subCost,
       }
     : {
         miss: buckets.miss,
@@ -349,7 +434,10 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         data-composer-ux-cost=""
         aria-expanded={open}
         title={(useBreakdown
-          ? '本会话费用（按每笔用量发生的时间计价）'
+          // 有子代理时那个数字里不止本会话：说清"含子代理"，免得用户以为本会话真花了这么多。
+          ? sub !== undefined
+            ? '本会话费用（含子代理，按每笔用量发生的时间计价）'
+            : '本会话费用（按每笔用量发生的时间计价）'
           : '本会话费用（估算）') + ` · ${peakText}`}
         onClick={toggle}
         onMouseEnter={() => setHover(true)}
@@ -436,15 +524,30 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
                   `${formatTokens(route.tokens)} · ${route.unpriced ? '未定价' : formatMoney(route.cost)}`,
                   `${route.provider}|${route.model}|${String(route.peak)}|${route.era}`,
                 ))}
+                {sub !== undefined
+                  // 子代理的行放在本会话各 route 之后、"合计"之前：合计 = 本会话 + 子代理，
+                  // 顺序与这个等式一致。全未定价时金额写"未定价"而不是 ¥0.00（同 route 行口径）。
+                  ? detail(
+                    `子代理（${subSessions} 个会话）`,
+                    `${formatTokens(subTokens)} · ${subUnpriced > 0 ? '未定价' : formatMoney(subCost)}`,
+                    '__subagents__',
+                  )
+                  : null}
                 {detail('合计', `${formatTokens(view.miss + view.hit + view.write + view.out)} · ${formatMoney(view.total)}`, '__total__')}
                 {peakTier.tokens > 0
-                  ? detail('高峰档', `${formatTokens(peakTier.tokens)} · ${formatMoney(peakTier.cost)}`, '__peak__')
+                  ? detail('高峰档', `${formatTokens(peakTierTokens)} · ${formatMoney(peakTier.cost)}`, '__peak__')
                   : null}
                 {offTier.tokens > 0
-                  ? detail('空闲档', `${formatTokens(offTier.tokens)} · ${formatMoney(offTier.cost)}`, '__off__')
+                  ? detail('空闲档', `${formatTokens(offTierTokens)} · ${formatMoney(offTier.cost)}`, '__off__')
                   : null}
                 {otherTier.tokens > 0
                   ? detail('其他路由（无峰谷）', `${formatTokens(otherTier.tokens)} · ${formatMoney(otherTier.cost)}`, '__other__')
+                  : null}
+                {subTierMerged
+                  // 紧跟在那三行小计后面：读者刚看完"高峰档 / 空闲档"就会觉得"那两行的金额加起来
+                  // 怎么不等于合计"，这一句是给他的答案（总额的那个答案是宿主的，这里只能给量）。
+                  ? note('高峰 / 空闲两档的 token 已含子代理，金额只含本会话'
+                    + '（宿主半没把子代理的钱按峰谷拆开，所以不拿 token 乘单价编一个按档金额出来）。', '__sub_tier__')
                   : null}
                 {detail('未缓存输入', `${formatTokens(view.miss)} · ${formatMoney(view.parts.miss)}`, '__miss__')}
                 {detail('缓存命中', `${formatTokens(view.hit)} · ${formatMoney(view.parts.hit)}`, '__hit__')}
@@ -459,6 +562,7 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
                   ? note(`有 ${unpricedCount} 行「未定价」：那是非 DeepSeek 模型，同步价目与内置快照里都没有它，`
                     + '所以那部分按 0 计。去设置页「金额」刷新一次「同步第三方价目」，或给那行直接填个价。', '__unpriced__')
                   : null}
+                {subGapText !== null ? note(subGapText, '__sub_gap__') : null}
               </>
             ) : (
               <>

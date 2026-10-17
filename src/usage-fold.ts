@@ -47,6 +47,20 @@
  * 这样金额胶囊每次取价是 O(1)，不必反复重读整份会话日志（`readSession` 会深拷贝全部事件）。
  * `feed()` 按 `seq` 幂等：重复喂同一批事件不会重复计费（这一点是缓存能安全复用的前提）。
  *
+ * ## 子代理的费用（0.24.0）
+ *
+ * 折叠器顺手把父会话自己的 `subagent/catalog` 事件里记下的**直系**子会话 id 交出来
+ * （{@link SessionUsageFold.children}），但**不折它们的用量** —— 子会话的事件在**自己的**日志里。
+ * 原因与"为什么不用全局会话列表"见 {@link SubagentChildRef}。
+ *
+ * 递归折叠由宿主半做（`host.ts` 的用量路由），有两条必须遵守的口径：
+ *
+ * 1. **fork 出来的子会话要跳过继承前缀**：`subagent-fork-in-process` 这一类子代理会带着父会话
+ *    的历史开头（`readSession()` 的 `inheritedEventCount`）。那段事件里的 usage 是**父会话自己
+ *    已经计过账的**，子会话再折一遍就是凭空多收一份钱（而且金额会随上下文大小翻倍）。
+ * 2. **只认 catalog**：`header.parentSession` 对"用户 fork 出来的会话"也成立，按它扫会把用户
+ *    自己开的会话算进本会话的账上。catalog 事件只由子代理创建路径追加，正好排除这类误认。
+ *
  * ## 出处
  *
  * 折叠口径与官方 `packages/llm/token-meter/src/usage-projection.ts` 逐条对齐
@@ -92,6 +106,30 @@ export interface TierUsage {
   readonly offPeak: UsageBuckets
 }
 
+/**
+ * 一个直系子代理会话（0.24.0）。
+ *
+ * 来源是**父会话自己的** `subagent/catalog` 事件（官方 `packages/subagent/subagent/src/catalog.ts`
+ * 在建立子会话时往父会话追加），不是全局会话列表。为什么必须用这个而不是"扫一遍所有会话找
+ * `header.parentSession === 我`"：
+ *
+ *  · **便宜**：父会话的事件流本来就要读一遍给用量折叠用，顺手就能读出全部子会话 id；
+ *    而 `sessionQuery.listSessions()` 要列一遍持久化目录（几百个会话要读几百个文件头），
+ *    金额胶囊每 600ms 就刷一次，扛不住。
+ *  · **不误认**：用户自己"从某个会话 fork 出的新会话"在 `header.parentSession` 上与子代理长得
+ *    一模一样（`origin` 字段是本版才有的），按 header 扫会把用户 fork 出来的会话算进父会话的账上。
+ *    catalog 事件只由子代理创建路径追加，正好排除这种误认。
+ *
+ * `external` 是外部执行（`mode: 'external'`：claude-code / codex / acp 那类，本机**没有**对应的
+ * DSH 会话）。它的用量不在任何本地会话日志里，所以只能如实报"拿不到"，不能假装是 0。
+ */
+export interface SubagentChildRef {
+  /** 子会话 id。 */
+  readonly sessionId: string
+  /** 外部执行：本机没有这个会话，用量拿不到。 */
+  readonly external: boolean
+}
+
 /** 一个会话折出来的结果。 */
 export interface SessionUsageFold {
   /** 全部 route 相加（应当等于官方 `tokenUsage` 投影的四个桶）。 */
@@ -100,6 +138,13 @@ export interface SessionUsageFold {
   readonly tiers: TierUsage
   /** 按 token 总量从多到少排好的 route 列表（峰谷与价格档都已拆开）。 */
   readonly routes: readonly RouteUsage[]
+  /**
+   * 本次折到的事件里记下的**直系**子代理会话（0.24.0；按 catalog 出现顺序、按 id 去重）。
+   *
+   * 只给"有哪些子会话"，**不含**它们自己的用量 —— 子会话的日志要单独读（调用方递归折叠）。
+   * 这里能给出这个字段，是因为父会话的 `subagent/catalog` 事件就在同一份事件流里。
+   */
+  readonly children: readonly SubagentChildRef[]
   /** 折过的事件条数（诊断用：分列出不来时，界面靠它区分"没事件"和"形状不对"）。 */
   readonly events: number
   /** 真正折到 usage 的样本条数（诊断用）。 */
@@ -202,6 +247,17 @@ function headerOf(event: Record<string, unknown>): { provider: string; model: st
   return { provider, model }
 }
 
+/** 从 `subagent/catalog` 取直系子会话（不是这个事件类型就返回 undefined）。 */
+function catalogChildOf(event: Record<string, unknown>): SubagentChildRef | undefined {
+  if (event.type !== 'subagent/catalog') return undefined
+  const data = event.data as { childId?: unknown; mode?: unknown } | undefined
+  const childId = data?.childId
+  if (typeof childId !== 'string' || childId === '') return undefined
+  // `version: 2` 的 `mode: 'external'` 才是外部执行；老版本 payload 没有 mode 时按本地会话处理
+  // （那些版本只会追加本地子会话的 catalog）。
+  return { sessionId: childId, external: data?.mode === 'external' }
+}
+
 /** 官方 `lastAssistantStreamChunk(stream,'usage')`：从后往前找最后一条 usage 原始块。 */
 function lastUsageOf(stream: unknown): unknown {
   if (!Array.isArray(stream)) return undefined
@@ -266,6 +322,8 @@ interface MutableRouteUsage {
  */
 export function createUsageFolder(tierAt: TierAt): UsageFolder {
   const byRoute = new Map<string, MutableRouteUsage>()
+  /** 直系子代理会话：id → 是否外部执行（见 {@link SubagentChildRef}）。 */
+  const children = new Map<string, boolean>()
   let provider = UNKNOWN_ROUTE
   let model = UNKNOWN_ROUTE
   /** 最近一条 `request/header` 的时刻（请求发出时刻 = 官方计费时刻）。 */
@@ -288,6 +346,13 @@ export function createUsageFolder(tierAt: TierAt): UsageFolder {
         if (seq !== undefined && lastSeq !== undefined && seq <= lastSeq) continue
         if (seq !== undefined) lastSeq = seq
         events += 1
+
+        // 子会话登记（0.24.0）：它既不是 header 也不是 usage，单独收一下就跳过。
+        const child = catalogChildOf(event)
+        if (child !== undefined) {
+          if (!children.has(child.sessionId)) children.set(child.sessionId, child.external)
+          continue
+        }
 
         const header = headerOf(event)
         if (header !== undefined) {
@@ -332,6 +397,7 @@ export function createUsageFolder(tierAt: TierAt): UsageFolder {
         total,
         tiers: { peak: tierPeak, offPeak: tierOffPeak },
         routes,
+        children: [...children].map(([sessionId, external]) => ({ sessionId, external })),
         events,
         samples,
       }
@@ -358,6 +424,7 @@ export function emptyFold(): SessionUsageFold {
     total: zeroBuckets(),
     tiers: { peak: zeroBuckets(), offPeak: zeroBuckets() },
     routes: [],
+    children: [],
     events: 0,
     samples: 0,
   }

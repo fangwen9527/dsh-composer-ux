@@ -1753,7 +1753,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.23.4\",",
+    from: "\"version\": \"0.24.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1773,6 +1773,40 @@ const cases = [
     to: "      throw error",
     test: "test/retry-write.mjs",
     expect: "第 3 次成功（总共 3 次）",
+  },
+  // ── 子代理的费用（0.24.0）─────────────────────────────────────────────────────────
+  // 这四条的错法都不会报错、也不会少画一行：屏幕上只是一个**偏小的数字**。
+  {
+    name: "SA 子代理的 fork 继承前缀没剔掉（父会话那段用量被重复收一遍）",
+    file: "src/host.ts",
+    from: "      if (snapshot.inherited <= 0) return snapshot.events",
+    to: "      if (true) return snapshot.events",
+    test: "test/subagent-cost.mjs",
+    expect: "继承前缀里那 99 万 token 没进子代理的账",
+  },
+  {
+    name: "SB 外部执行的子会话也拿去读本机会话（白抛一次、还记成 missing）",
+    file: "src/host.ts",
+    from: "        if (next.external) {",
+    to: "        if (false) {",
+    test: "test/subagent-cost.mjs",
+    expect: "外部执行**没有**被拿去读本机会话",
+  },
+  {
+    name: "SC 子代理的钱并进顶层 cost（客户端对账判据永远不成立 ⇒ 退回估算）",
+    file: "src/host.ts",
+    from: "          cost: selfPriced.cost,",
+    to: "          cost: { ...selfPriced.cost, total: selfPriced.cost.total + subCost.total },",
+    test: "test/subagent-cost.mjs",
+    expect: "顶层 cost 与\"没有子代理时\"逐项相同",
+  },
+  {
+    name: "SD 子代理递归不设上限（深链把宿主拖死）",
+    file: "src/host.ts",
+    from: "        if (next.depth > SUBAGENT_MAX_DEPTH || rows.length >= SUBAGENT_MAX_SESSIONS) {",
+    to: "        if (false) {",
+    test: "test/subagent-cost.mjs",
+    expect: "递归到上限就停",
   },
 
 ]

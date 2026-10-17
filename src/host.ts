@@ -71,7 +71,8 @@ import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
 import {
-  addBuckets, createUsageCache, zeroBuckets, type SessionUsageFold, type UsageTier,
+  addBuckets, createUsageCache, zeroBuckets,
+  type SessionUsageFold, type SubagentChildRef, type UsageTier,
 } from './usage-fold.ts'
 import {
   TERMINAL_BASH_PATH_FIELD, TERMINAL_CANDIDATES_FIELD, TERMINAL_EFFECTIVE_FIELD,
@@ -2051,6 +2052,79 @@ export function apply(ctx: Context, config?: unknown): void {
     const SUBAGENT_MAX_DEPTH = 4
     const SUBAGENT_MAX_SESSIONS = 32
 
+    /**
+     * 「谁是谁的父会话」的反查索引（0.24.0）。
+     *
+     * 为什么需要**第二条**来源：`subagent/catalog` 是 DSH 较新版本才写进父会话的事件；更早的
+     * 会话只把关系记在**子会话自己的 header** 上（`origin: 'subagent'` + `parentSession`）。
+     * 2026-10-17 在这台机器上核过：`~/.dsh/sessions` 下 211 份会话日志里，带 `origin: 'subagent'`
+     * 的子会话有 35 份，而**没有任何一份**父会话日志里有 `subagent/catalog` —— 只认 catalog 的话，
+     * 用户去看那些老会话（他报现象时看的多半就是这种），胶囊里的钱还是少的。
+     *
+     * 三条纪律：
+     *  1. **只认 `origin: 'subagent'`**：用户自己"从某会话 fork 出来的会话"在 header 里同样只有
+     *     `parentSession`、没有 `origin` —— 见谁都认会把用户自己开的会话算进别人的账上；
+     *  2. **短 TTL 缓存 + 允许失败**：本机实测 211 份会话全量列一遍约 80ms（每份只取 header），
+     *     但胶囊每 600ms 就可能问一次，所以缓存 {@link CHILD_INDEX_TTL_MS}；列举失败就沿用上一份
+     *     （首次为空 ⇒ 本次只靠 catalog），绝不因为列举失败把金额打掉；
+     *  3. **与 catalog 取并集**：老会话后来又被派了新子代理时，两条来源各有一半。
+     */
+    const CHILD_INDEX_TTL_MS = 30_000
+    let childIndexAt = 0
+    let childIndexBuilding = false
+    let childIndexByParent: ReadonlyMap<string, readonly string[]> = new Map()
+    const childIndexOf = async (): Promise<ReadonlyMap<string, readonly string[]>> => {
+      if (childIndexAt !== 0 && Date.now() - childIndexAt < CHILD_INDEX_TTL_MS) return childIndexByParent
+      if (childIndexBuilding) return childIndexByParent
+      childIndexBuilding = true
+      try {
+        const query = usageCtx.get('sessionQuery') as
+          { listSessions?: () => Promise<readonly unknown[]> } | undefined
+        if (typeof query?.listSessions !== 'function') return childIndexByParent
+        const records = await query.listSessions()
+        const next = new Map<string, string[]>()
+        for (const record of records) {
+          const header = (record as {
+            header?: { id?: unknown; origin?: unknown; parentSession?: unknown }
+          } | null)?.header
+          if (header?.origin !== 'subagent') continue
+          if (typeof header.id !== 'string' || header.id === '') continue
+          if (typeof header.parentSession !== 'string' || header.parentSession === '') continue
+          const list = next.get(header.parentSession) ?? []
+          list.push(header.id)
+          next.set(header.parentSession, list)
+        }
+        childIndexByParent = next
+        childIndexAt = Date.now()
+      } catch {
+        /* 列举失败：沿用上一份 */
+      } finally {
+        childIndexBuilding = false
+      }
+      return childIndexByParent
+    }
+
+    /**
+     * 一个会话的直系子会话 = catalog（父会话自己的记录）∪ 反查索引（子会话 header 的反向关系）。
+     * @param sessionId 父会话 id。
+     * @param catalog 父会话日志里读到的 catalog 子会话（可能为空：老会话没有这个事件）。
+     * @param index 反查索引（见 {@link childIndexOf}）。
+     */
+    const childrenOf = (
+      sessionId: string,
+      catalog: readonly SubagentChildRef[],
+      index: ReadonlyMap<string, readonly string[]>,
+    ): Array<{ readonly sessionId: string; readonly external: boolean }> => {
+      const rows = catalog.map(child => ({ sessionId: child.sessionId, external: child.external }))
+      const known = new Set(rows.map(child => child.sessionId))
+      for (const childId of index.get(sessionId) ?? []) {
+        if (known.has(childId)) continue
+        known.add(childId)
+        rows.push({ sessionId: childId, external: false })
+      }
+      return rows
+    }
+
     /** 一个折到的子代理会话（带深度：`1` = 直系子代理，`2` = 孙代理 …）。 */
     interface SubagentFoldRow {
       readonly sessionId: string
@@ -2062,9 +2136,9 @@ export function apply(ctx: Context, config?: unknown): void {
      * 递归折**全部子代理**（0.24.0）。这是"金额胶囊不计算子代理费用"的修复本体。
      *
      * 三条口径：
-     *  1. **子会话的来源只有 catalog**（父会话自己的 `subagent/catalog` 事件，见 `usage-fold.ts`
-     *     的 {@link SubagentChildRef}），不扫全局会话列表 —— 后者会把"用户自己 fork 出来的会话"
-     *     也算进来，而且每 600ms 列一遍持久化目录太贵；
+     *  1. **子会话的来源有两条**（{@link childrenOf}）：父会话自己的 `subagent/catalog` 事件
+     *     （较新版本的 DSH 才写）+ 子会话 header 里的 `origin: 'subagent'` 反查（老会话只有这个）。
+     *     两条都只认子代理关系 —— 用户自己 fork 出来的会话 header 里没有 `origin`，不会被算进来；
      *  2. **继承前缀要剔掉**（{@link ownEvents}），否则 fork 型子代理会把父会话的账重复收一遍；
      *  3. **读不到就如实报**（`missing`），外部执行（`external`，本机没有会话）与超过上限
      *     （`skipped`）分开记 —— 界面要能把"没算进来"的部分说出来，而不是安静地少算。
@@ -2085,11 +2159,14 @@ export function apply(ctx: Context, config?: unknown): void {
     }> => {
       const rows: SubagentFoldRow[] = []
       const seen = new Set<string>([rootId])
+      const index = await childIndexOf()
       let missing = 0
       let external = 0
       let skipped = 0
       const queue: Array<{ readonly sessionId: string; readonly external: boolean; readonly depth: number }> =
-        root.children.map(child => ({ sessionId: child.sessionId, external: child.external, depth: 1 }))
+        childrenOf(rootId, root.children, index).map(child => ({
+          sessionId: child.sessionId, external: child.external, depth: 1,
+        }))
       while (queue.length > 0) {
         const next = queue.shift()
         if (next === undefined) break
@@ -2119,7 +2196,7 @@ export function apply(ctx: Context, config?: unknown): void {
           continue
         }
         rows.push({ sessionId: next.sessionId, depth: next.depth, fold: outcome.fold })
-        for (const child of outcome.fold.children) {
+        for (const child of childrenOf(next.sessionId, outcome.fold.children, index)) {
           queue.push({ sessionId: child.sessionId, external: child.external, depth: next.depth + 1 })
         }
       }

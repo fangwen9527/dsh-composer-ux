@@ -137,29 +137,48 @@ section('1. 纯逻辑：父会话的 catalog 事件里能读出"有哪些子会�
 // ══════════════════════════ 2. 宿主半：子代理的钱要进账，顶层口径不变 ══════════════════════
 section('2. 宿主半：本会话 + 一个子代理')
 
-/** 一个"父会话 + 若干子会话"的假宿主。 */
-async function bootHost({ parentId = 'root', events, children = {}, live = [] } = {}) {
+/**
+ * 一个"父会话 + 若干子会话"的假宿主。
+ *
+ * @param options.sessionList `sessionQuery.listSessions()` 的返回（**老会话**的子代理只在这条路上
+ *   看得见：父会话日志里没有 catalog 事件，关系记在子会话自己的 header 上）。
+ * @param options.listFails 让 `listSessions()` 抛错（断言"列不动也不许把金额打掉"）。
+ * @param options.noList 干脆不提供 `listSessions`（更老的宿主）。
+ */
+async function bootHost({
+  parentId = 'root', events, children = {}, live = [], sessionList = [], listFails = false, noList = false,
+} = {}) {
   process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-subagent-home-'))
   const realFetch = globalThis.fetch
   const routes = []
   /** 谁被读过日志（断言"外部执行不去读本机会话"用）。 */
   const readCalls = []
+  /** `listSessions()` 被调了几次（断言 TTL 缓存真的在挡）。 */
+  let listCalls = 0
   const settings = {
     describe: () => [{ ns: 'composer-ux', value: {} }],
     mutate: async () => {},
   }
+  const sessionQuery = {
+    readSession: async id => {
+      readCalls.push(id)
+      if (id === parentId) return { events, inheritedEventCount: 0 }
+      const child = children[id]
+      if (child === undefined) throw new Error(`no such session: ${id}`)
+      return { events: child.events, inheritedEventCount: child.inheritedEventCount ?? 0 }
+    },
+  }
+  if (!noList) {
+    sessionQuery.listSessions = async () => {
+      listCalls += 1
+      if (listFails) throw new Error('persistence listing failed')
+      return sessionList
+    }
+  }
   const services = {
     settings,
     sessions: { list: () => live.map(id => ({ id, seq: 99 })) },
-    sessionQuery: {
-      readSession: async id => {
-        readCalls.push(id)
-        if (id === parentId) return { events, inheritedEventCount: 0 }
-        const child = children[id]
-        if (child === undefined) throw new Error(`no such session: ${id}`)
-        return { events: child.events, inheritedEventCount: child.inheritedEventCount ?? 0 }
-      },
-    },
+    sessionQuery,
     webServer: { register: route => { routes.push(route); return () => {} } },
     effect: fn => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose() } },
     get: name => services[name],
@@ -173,6 +192,7 @@ async function bootHost({ parentId = 'root', events, children = {}, live = [] } 
   await settle(20)
   return {
     readCalls,
+    listCalls: () => listCalls,
     route: path => routes.find(candidate => candidate.path === path),
     restore: () => { globalThis.fetch = realFetch },
   }
@@ -281,7 +301,10 @@ section('4. 宿主半：fork 型子代理（日志开头带着父会话那段）
           header(0),
           usage(1, 0, 0, 990_000, 99_000), // ← 父会话那一段（继承来的，**不许**算进子代理）
           header(2),
-          usage(3, 0, 0, 2000, 200), // ← 子代理自己的（父会话的 2 倍）
+          // ⚠️ 这一笔必须是**另一个 (turn, step)**：同一步的二次上报在折叠口径里是"替换"而不是
+          // "累加"，写成 (0, 0) 的话继承那笔会被替换掉 —— 于是一个"没剔前缀"的实现**也能过**，
+          // 这条断言就成了假绿（第一版夹具正是这么写的，变异 SA 当场漏咬）。
+          usage(3, 1, 0, 2000, 200), // ← 子代理自己的（父会话的 2 倍）
         ],
       },
     },
@@ -342,6 +365,74 @@ section('5. 宿主半：没算进来的部分要如实报')
   check('没被拖死：金额 = 4 倍本会话',
     near(body.subagents.cost.total, body.cost.total * 4), `${body.subagents.cost.total} vs ${body.cost.total}`)
   host.restore()
+}
+
+// ═════════════ 5b. 宿主半：老会话（父会话日志里没有 catalog）靠 header 反查 ═════════════
+section('5b. 宿主半：老会话的子代理（父会话没有 catalog 事件，关系只记在子会话 header 上）')
+{
+  /**
+   * 真机核过的事实（2026-10-17，`~/.dsh/sessions`）：211 份会话日志里有 35 份是子代理子会话
+   * （header 带 `origin: 'subagent'` + `parentSession`），但**没有任何一份父会话日志**里有
+   * `subagent/catalog` —— 那个事件是较新版本才有的。所以只靠 catalog 的实现在老会话上会"算不到"。
+   *
+   * 这里也顺手钉住两件不能错的事：
+   *  · **用户自己 fork 出来的会话不算**（header 有 `parentSession`、但 `origin` 不是 `subagent`）；
+   *  · **TTL 缓存真的在挡**（胶囊每 600ms 就可能问一次，不能每次都全量列一遍）。
+   */
+  const records = [
+    // 子代理（要算）
+    { header: { id: 'child-x', origin: 'subagent', parentSession: 'root' } },
+    // 用户自己 fork 出来的会话：有 parentSession、没有 origin（**不算**）
+    { header: { id: 'user-fork', parentSession: 'root' } },
+    // 别人家的子代理（**不算**）
+    { header: { id: 'other-child', origin: 'subagent', parentSession: 'somebody-else' } },
+    { header: { id: 'root' } },
+  ]
+  const host = await bootHost({
+    events: [header(0), usage(1, 0, 0, 1000, 100)], // ← 没有 catalog
+    children: {
+      'child-x': { events: [header(0), usage(1, 0, 0, 1000, 100)] },
+      'user-fork': { events: [header(0), usage(1, 0, 0, 7000, 700)] },
+    },
+    sessionList: records,
+  })
+  const body = (await call(host.route(pure.USAGE_API_PATH), makeReq(usagePath('root')))).body
+  check('老会话也能折到子代理（sessions = 1）', body.subagents.sessions === 1, String(body.subagents.sessions))
+  check('金额 = 那一份子代理的用量（不是 0）',
+    near(body.subagents.cost.total, body.cost.total), `${body.subagents.cost.total} vs ${body.cost.total}`)
+  check('用户自己 fork 出来的会话**没被**算进子代理',
+    !host.readCalls.includes('user-fork'), JSON.stringify(host.readCalls))
+  check('别人家的子代理也没被算进来', !host.readCalls.includes('other-child'), JSON.stringify(host.readCalls))
+  // 同一个会话连问两次：第二次必须走 TTL 缓存，不再列一遍。
+  await call(host.route(pure.USAGE_API_PATH), makeReq(usagePath('root')))
+  check('反查索引有 TTL 缓存（连问两次只列一遍会话）', host.listCalls() === 1, String(host.listCalls()))
+  host.restore()
+}
+
+{
+  // 列不动（持久化炸了 / 更老的宿主根本没有 listSessions）：catalog 那条腿照走，金额不许打掉。
+  const host = await bootHost({
+    events: [header(0), usage(1, 0, 0, 1000, 100), catalog(2, 'child-a')],
+    children: { 'child-a': { events: [header(0), usage(1, 0, 0, 1000, 100)] } },
+    listFails: true,
+  })
+  const body = (await call(host.route(pure.USAGE_API_PATH), makeReq(usagePath('root')))).body
+  check('listSessions 抛错：路由仍 ok，catalog 那条腿照算',
+    body.ok === true && body.subagents.sessions === 1
+    && near(body.subagents.cost.total, body.cost.total),
+    JSON.stringify({ ok: body.ok, sessions: body.subagents.sessions }))
+  host.restore()
+
+  const legacy = await bootHost({
+    events: [header(0), usage(1, 0, 0, 1000, 100), catalog(2, 'child-a')],
+    children: { 'child-a': { events: [header(0), usage(1, 0, 0, 1000, 100)] } },
+    noList: true,
+  })
+  const legacyBody = (await call(legacy.route(pure.USAGE_API_PATH), makeReq(usagePath('root')))).body
+  check('宿主根本没有 listSessions：不炸，catalog 照算',
+    legacyBody.ok === true && legacyBody.subagents.sessions === 1,
+    JSON.stringify({ ok: legacyBody.ok, sessions: legacyBody.subagents.sessions }))
+  legacy.restore()
 }
 
 // ═════════════════════ 6. 宿主半：没有子代理时，老字段一个字节都不许变 ═════════════════════

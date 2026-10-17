@@ -45,7 +45,7 @@ DeepSeek Harness Web 输入体验增强插件：
    - **OpenCode 请求头**：给 OpenCode 的模型请求自动附加 `x-opencode-session`（详见下节）。
    - **默认终端**：Windows 上把模型用的终端工具从 PowerShell 换成 Git Bash（三档在标题行；详见下节）。
    - **统计行**：输入框下方那行「缓存命中 xx%」按三位小数显示（0.7.0 新增，**唯一默认开的栏**，只有一个开关；详见下节）。
-   - **金额**：输入框下方一颗极简金额胶囊（本会话费用估算，按 DeepSeek 官方刊例价；点开看三分项明细）。**这一栏没有卡级开关**（胶囊常驻显示），卡内是**按模型改高峰/空闲两档单价**的编辑器（0.9.1 新增；留空＝沿用官方价，可自加任意模型名；详见下节）。
+   - **金额**：输入框下方一颗极简金额胶囊（本会话费用估算，按 DeepSeek 官方刊例价；点开看三分项明细）。**0.24.0 起把子代理（含孙代理）花的钱也并进来** —— 那个数字是「本会话 + 子代理」的合计。**这一栏没有卡级开关**（胶囊常驻显示），卡内是**按模型改高峰/空闲两档单价**的编辑器（0.9.1 新增；留空＝沿用官方价，可自加任意模型名；详见下节）。
    - **重启 DSH**：卡片抬头右端（GitHub 链接左边）那枚按钮，两步确认后原地重启（详见「维护：重启 DSH」）。
 2. **快捷指令按钮**：输入框工具行里、「展开」按钮左侧的胶囊按钮，点开是常备提示词清单 + 「优化提示词」。
 3. **键位生效**（仅主聊天输入框）：默认值 = 现状（Enter 发送、Shift+Enter 换行、Ctrl+Enter 加速提交），改动即时生效并持久保存。
@@ -496,6 +496,7 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
 - **为什么金额必须自己算**：DSH 送到浏览器的 `tokenUsage` 投影**只有 token 桶**，全库没有一处把"钱"送到客户端；`llm-pi-ai` 里那个 `cost` 只活在 provider 内部，而且用户自定义的路由（profile 里手写的 provider）拿到的是 `NO_COST`（全 0）。所以费用只能由本插件按刊例价算。
 - **数据全部来自官方、不新增采集**：token 桶读 `tokenUsage` 投影（与官方统计行**同一份**），模型读 `modelSelection` 投影（来自 `request/header` 事件）。会话中途换过模型时按**最后一次请求**的模型计价（近似，浮层里写明）。
 - **按 route 分列与"逐笔准时"的取数**（点开才去问宿主半；折叠态那颗胶囊也走同一条路由）：面板里列出每条 route（provider + model + 高峰/空闲）的 token 与花费，**金额由宿主半按档算好**（用户覆盖价一并读自设置），所以"各行加起来等于总额""三项相加等于合计"都精确成立。逐请求归因只能宿主半做，走只读路由 `GET /composer-ux/usage?sessionId=…`（`src/host.ts` 注册）：首次（或发现 `seq` 落后）用官方 `sessionQuery.readSession(sessionId)` 完整读一次，之后靠 `session/event` 订阅**增量**喂折叠缓存（`createUsageCache`，纯逻辑在 [src/usage-fold.ts](src/usage-fold.ts)）—— 所以胶囊取价是 O(1)，不必反复重读整份日志。**播种窗口**（读日志期间追加的事件）会先缓冲、读完按 `seq` 补上：不这么做的话水位会跳过快照里那些中间事件，金额**永久少算**（`feed()` 的 seq 幂等，补也补不进去）。**事件形状按本版官方 `SessionEventMap` 的真实声明**（`assistant/attempt` 的 `stream` 里取最后一条 usage 块，或 `assistant/message` 的 `data.usage`；**本版没有 `assistant/chunk` 事件**），口径对齐官方 `token-meter` 的 `usage-projection`（同一步替换、`llm/retry-started` 重开替换槽）。`test/usage-fold.mjs`（89 项）逐条钉住差分、归属、重试、脏数据、逐笔分档与增量缓存；分列出不来时面板会显示"读了 N 条事件、M 条 usage、来源哪条路"，一眼就能定位。
+- **子代理的钱（0.24.0）**：子代理跑在**自己的**会话里，usage 在自己的日志里 —— 父会话的折叠器与官方 `tokenUsage` 投影都看不到它（用户 2026-10-17 报的「金额胶囊不计算子代理的费用」就是这个）。现在宿主半会把**整棵子代理树**折进来：子会话 id 有两条来源（父会话日志里的 `subagent/catalog` 事件 + 子会话 header 里 `origin: subagent` 的反查，后者覆盖那些父会话日志里没有 catalog 的老会话），递归到深度 4 / 32 个会话；**fork 型子代理的继承前缀要剔掉**（`readSession()` 的 `inheritedEventCount`，否则等于把父会话的账再收一遍）；读不到 / 外部执行（claude-code 那类，本机没有会话）/ 超上限 / 单价认不出 四种「没算进来」的原因分开计数，浮层用人话说出来。顶层 `total`/`cost`/`routes` 仍是**本会话自己**（客户端拿它与官方投影对账，一合并就永远对不上），子代理的合计单列在响应的 `subagents` 里、由客户端相加；峰谷两档**只并 token 不并金额**（宿主没按档拆子代理的钱，不编数字）。`test/subagent-cost.mjs`（38 项）把 fork 前缀、递归上限、外部执行、老会话反查、TTL 缓存逐条钉住。
 - **折叠态那个数字怎么来的**：客户端投影只有累计 token 桶、**没有任何时间信息**，所以"逐笔准时"的数字只能从宿主半拿（`src/client/session-cost.ts`）：最短 600ms 间隔、期间有变化排一次**尾随**请求（保证流结束后的数字是准的）、同一时刻只有一个请求在飞、旧响应按序号丢弃。宿主半那份还没到手、或会话日志与投影对不上时，退回本地的"按当前档位估算"并在面板里说明是哪种口径 —— 胶囊从不空着。
 - **命中率与旁边那行必然是同一个数**：面板只在"分列与投影**四个桶全等**"（`agreesWithProjection` 是精确比较）时才把分列当权威，此时分列算出的命中率与官方胶囊逐位相同；否则退回投影口径。**两个坑**：客户端投影的未缓存输入叫 `uncachedInputTokens`、日志里叫 `inputTokens` —— 第一版在 `billedInputTokens()` 里认对了名字，却在**调用处**传了 `inputTokens`，于是分母丢掉整块未缓存输入、命中率恒 100%（旁边官方胶囊 98.206%）。现在调用处也走官方键名，`test/client-registration.mjs` 同时钉住"调用处键名"与"与输入框下面那一行同一套函数"。
 - **计价按 `(provider, model)`**（0.10.0 起）：DeepSeek 路由（provider 名含 `deepseek` 或模型名以 `deepseek` 开头）走官方价目表与历史档；其它 provider 走同步来的第三方价目，认不出就写"未定价"。所以用 OpenCode（Zen）之类的接口跑 DeepSeek 模型，用量仍按 **DeepSeek 官方价**进这个金额；跑非 DeepSeek 模型则按 models.dev 的价估算。代价如浮层所写：Zen 可能有自己的加价/订阅，这个数字不等于你付给 Zen 的钱。
@@ -720,9 +721,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 32 个套件；当前 2726 passed, 0 failed（2026-10-09 实测；CI 三平台同样全绿）
+npm test                          # 33 个套件；当前 2780 passed, 0 failed（2026-10-17 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（211 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（217 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

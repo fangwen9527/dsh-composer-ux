@@ -1808,6 +1808,22 @@ const cases = [
     test: "test/subagent-cost.mjs",
     expect: "递归到上限就停",
   },
+  {
+    name: "SE 老会话的子代理不再靠 header 反查（父会话没有 catalog 时一个都算不到）",
+    file: "src/host.ts",
+    from: "      const index = await childIndexOf()",
+    to: "      const index = new Map()",
+    test: "test/subagent-cost.mjs",
+    expect: "老会话也能折到子代理",
+  },
+  {
+    name: "SF header 反查不认 origin（用户自己 fork 出来的会话被算成子代理）",
+    file: "src/host.ts",
+    from: "          if (header?.origin !== 'subagent') continue",
+    to: "          if (false) continue",
+    test: "test/subagent-cost.mjs",
+    expect: "用户自己 fork 出来的会话**没被**算进子代理",
+  },
 
 ]
 

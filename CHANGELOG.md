@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.23.4] — 2026-10-16（适配 dsh 0.2.1-rc.1：无功能变化，只做验证与版本对齐）
+
+用户 2026-10-16：「给网页版 dsh 更新最新版，并适配插件」。上游最新 tag 是 **`dsh-v0.2.1-rc.1`**
+（21:46 发布，比 alpha.5 的 19:02 新一档；`@deepseek-ai/dsh-tool-terminal@0.2.1-rc.1` 也已发布）。
+
+- **检出更新**：新分支 `upgrade-0.2.1-rc.1`（alpha.5 分支保留），走 SSH 远程取 tag（HTTPS 那阵不通）。
+- **差异面极小**：alpha.5 → rc.1 共 355 个文件，**全部是 `package.json` 的版本行**（+355/-355）；
+  我依赖的所有接缝（app-boot 兼容闸门、package-manifest、webserver、tool-terminal、sandbox 三包、
+  ui-workspace / ui-slots、directory-picker-auto）**没有一行实质改动**。
+- **适配结论**：不需要改任何插件代码。形状核对 36 项对着 rc.1 源码全部通过，
+  `@deepseek-ai/dsh-tool-terminal@0.2.1-rc.1` 落在声明范围内
+  （`>=0.2.1-alpha.1 <0.3.0`）。
+- **真机验证**：见下方发布记录（profile 上装 rc.1 + 本插件、启动日志/自检/版本号三项）。
+- 本版**无功能变化**：web 装它并把 tool-terminal 钉到 `0.2.1-rc.1`；桌面端仍跑 0.2.0-rc.2，
+  装同一份插件、tool-terminal 保持 `0.2.0-rc.2`。
+
+验证：32 套件 2726 passed / 0 failed；tsc / build / docs / pack / 形状核对全绿。
+（未改任何 src ⇒ 不重跑变异；211 条的最近一次记录仍然有效，`check:docs` 据此核对。）
+
+
 ## [0.23.3] — 2026-10-16（**停用**「工作区目录选择」：它会回滚工作区状态）
 
 用户 2026-10-16：「开启新会话，选择不了工作区」，并补了一句关键观察 ——

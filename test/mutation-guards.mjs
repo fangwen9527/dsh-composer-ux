@@ -1831,15 +1831,15 @@ const cases = [
     from: "          if (nativeSessionHeader().support === 'native') return raw",
     to: "          if (false) return raw",
     test: "test/host-header-mirror.mjs",
-    expect: "原生支持时**一个头都不注入**",
+    expect: "值已经存在时也**不注入**",
   },
   {
     name: "SH 探测判据不看模块文件（裁过包的旧宿主被误判成原生支持 ⇒ 静默失效）",
     file: "src/opencode-header.ts",
     from: "    if (!existsSync(join(piAiRoot, 'dist', 'providers', 'opencode-headers.js'))) return undefined",
-    to: "    if (false) return undefined",
+    to: "    if (!existsSync(join(piAiRoot, 'dist'))) return undefined",
     test: "test/host-header-mirror.mjs",
-    expect: "目录里没有那个模块 ⇒ legacy",
+    expect: "版本够新但没有模块",
   },
   {
     name: "SI 强制开关被忽略（探不到布局的用户没有退路）",

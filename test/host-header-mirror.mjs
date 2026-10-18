@@ -468,6 +468,18 @@ const sentHeaders = (app, route) => app.overlay(app.state[LLM]).providers[route]
     check('用户配置依旧零写入', app.calls.every(call => call.ns === NAMESPACE),
       JSON.stringify(app.calls.map(call => call.ns)))
 
+    // ⚠️ 关键的第二组：**值已经存在**（用户以前填过 / 旧版生成过）。
+    // 这一组才真正盯住"原生支持 ⇒ 不注入"—— 第一组的值是空的，注入计划本来就因为
+    // "值不合法"而作废，掩盖掉"跳过注入"这条规则的缺失（变异 SG 第一次就是这么漏咬的）。
+    const filled = await boot({
+      [NAMESPACE]: baseOwn({ headerEnabled: true, headerValue: '42b662c5-ddd9-4b0c-a6c2-eb3f08b9cff9' }),
+      [LLM]: baseLlm(),
+    })
+    check('❗值已经存在时也**不注入**（否则固定 UUID 会顶掉真实 session id）',
+      sentHeaders(filled, 'opencode-go') === undefined,
+      JSON.stringify(sentHeaders(filled, 'opencode-go')))
+    check('也不把它记成"已注入"', filled.state[NAMESPACE].headerAppliedName === '')
+
     // 关掉开关也一样说"原生支持"（这不是没生效，是不需要）—— 客户端据此换卡片文案。
     app.state[NAMESPACE].headerEnabled = false
     await app.touch(NAMESPACE)
@@ -503,6 +515,11 @@ const sentHeaders = (app, route) => app.overlay(app.state[LLM]).providers[route]
   }
   const nativeRoot = fakePiAi('1.1.0', true)
   const plainRoot = fakePiAi('0.87.1', false)
+  /**
+   * 版本够新、但模块被裁掉（发行渠道裁包）：判据必须是**文件**，不是版本号。
+   * 这条也是变异 SH 的靶子 —— 少了文件判据，它会被误判成原生支持，旧宿主就静默失效。
+   */
+  const strippedRoot = fakePiAi('1.1.0', false)
 
   check('版本比较：1.0.2 ≥ 1.0.2 / 1.1.0 ≥ 1.0.2 / 0.87.1 < 1.0.2',
     pure.versionAtLeast('1.0.2', '1.0.2') && pure.versionAtLeast('1.1.0', '1.0.2')
@@ -516,6 +533,8 @@ const sentHeaders = (app, route) => app.overlay(app.state[LLM]).providers[route]
   const seenPlain = pure.detectNativeSessionHeader({}, [plainRoot])
   check('目录里没有那个模块 ⇒ legacy（版本再新也不算）',
     seenPlain.support === 'legacy' && seenPlain.evidence === '', JSON.stringify(seenPlain))
+  check('版本够新但没有模块 ⇒ legacy（判据是文件，不是版本号）',
+    pure.detectNativeSessionHeader({}, [strippedRoot]).support === 'legacy')
   check('目录都不存在 ⇒ legacy（按旧宿主处理）',
     pure.detectNativeSessionHeader({}, [join(tmp, 'nope')]).support === 'legacy')
   check('环境变量强制 ' + NATIVE_ENV + '=1 ⇒ native（不依赖文件布局）',

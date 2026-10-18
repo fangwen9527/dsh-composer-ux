@@ -37,7 +37,7 @@
 - 桌面 / 网页两个 profile 的 `headerEnabled` 均置 `false`（用户要求"关掉"；不过即便打开，
   探测到原生支持也不会注入）。
 
-**验证**：`test/host-header-mirror.mjs` 新增第 19 / 20 节（原生支持不注入 + 不生成 UUID +
+**验证**：33 套件 **2800 条** 0 失败；变异 **220 条全部咬住**（新增 `SG`/`SH`/`SI`）。`test/host-header-mirror.mjs` 新增第 19 / 20 节（原生支持不注入 + 不生成 UUID +
 状态行；探测判据用假目录逐条钉：模块在⇒native、模块缺⇒legacy、目录缺⇒legacy、环境变量强制、
 版本比较按数字不按字符串）；变异新增 `SG`/`SH`/`SI` 三条。
 

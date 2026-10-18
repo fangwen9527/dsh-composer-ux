@@ -493,6 +493,7 @@ Windows 上 DSH 给模型的终端工具是 **PowerShell**（工具名 `pwsh`）
   - **写完价目要立刻生效，靠的是"写的人通知"，不是设置变更事件**：0.1.7 的 `settings/document-updated` 只在 `describe()` 里比对 raw 变化后发出，而我们自己 `mutate` 写设置时并不调 `describe()` —— 设置页开着时会被界面刷新顺带触发，**设置页没开着**（例如后台的自动同步跑完）就不会发；而折叠缓存按 `seq` 去重、改规则不会重折旧事件，金额会**静静地停在旧价格档**上、界面上看不出。所以宿主半加了模块级 `moneyInvalidators` 注册表：用量路由登记"重读规则 + 作废价目缓存 + 作废折叠缓存"，两条同步路径写完设置直接调 `invalidateMoney()`，事件只作补充。
 - **内置第三方价目快照（0.10.0）**：`src/provider-prices.ts`（**生成**的，别手改：`node scripts/gen-provider-prices.mjs <models.dev-api.json>`）收了 **11 个 provider / 346 个模型**，快照日期写在文件头。**没点过同步时**就是非 DeepSeek 模型的兜底价；点过一次「同步第三方价目」后最新数据会盖住同名条目，界面分别标明"内置快照价"还是已同步。查价优先级：**用户覆盖价 > 已同步价目 > 内置快照 > 未定价**。
 - **非 DeepSeek 模型定价（0.10.0）**：按 `(provider, model)` 查价 —— 精确 provider → `PROVIDER_ALIASES` 别名（`deepseek-official`→`deepseek`、`kimi-coding`→`moonshotai`…）→ **按模型 id 全局唯一匹配**（`glm-5` 在两家都有的价时**拒绝猜**）。**认不出价就说"未定价"**（单价全 0，明细页写明"去同步第三方价目或给这行填个价"），**不再把 DeepSeek 的 flash 价静默套到第三方模型头上** —— 编一个看着合理的假数字，比承认不知道更糟。
+- **「OpenCode 请求头」这一栏（0.25.0 起只给旧宿主）**：OpenCode Go 要求客户端按**每段对话**发 `x-opencode-session`。上游 `@earendil-works/pi-ai` 从 **1.0.2** 起自带 `dist/providers/opencode-headers.js`（`opencode` / `opencode-go` 两个 provider 都被包过），用`options.sessionId` 发**真实会话 id**，且「已有同名头就不覆盖」。本插件注入的是**固定 UUID**，开着反而会顶掉真实 id ⇒ 0.25.0 起宿主半**先探测**（判据是宿主 pi-ai 里有没有那个模块；桌面 asar与 pnpm 检出两种布局都覆盖），探到原生支持就**不注入、不生成 UUID、不记账**，状态行写「宿主已原生支持…本栏不再注入」；探不到按旧宿主处理（继续注入），也可用`DSH_COMPOSER_UX_HEADER_NATIVE=1|0` 强制。`test/host-header-mirror.mjs` 第 19 / 20 节把两条分支与探测判据逐条钉住。
 - **为什么金额必须自己算**：DSH 送到浏览器的 `tokenUsage` 投影**只有 token 桶**，全库没有一处把"钱"送到客户端；`llm-pi-ai` 里那个 `cost` 只活在 provider 内部，而且用户自定义的路由（profile 里手写的 provider）拿到的是 `NO_COST`（全 0）。所以费用只能由本插件按刊例价算。
 - **数据全部来自官方、不新增采集**：token 桶读 `tokenUsage` 投影（与官方统计行**同一份**），模型读 `modelSelection` 投影（来自 `request/header` 事件）。会话中途换过模型时按**最后一次请求**的模型计价（近似，浮层里写明）。
 - **按 route 分列与"逐笔准时"的取数**（点开才去问宿主半；折叠态那颗胶囊也走同一条路由）：面板里列出每条 route（provider + model + 高峰/空闲）的 token 与花费，**金额由宿主半按档算好**（用户覆盖价一并读自设置），所以"各行加起来等于总额""三项相加等于合计"都精确成立。逐请求归因只能宿主半做，走只读路由 `GET /composer-ux/usage?sessionId=…`（`src/host.ts` 注册）：首次（或发现 `seq` 落后）用官方 `sessionQuery.readSession(sessionId)` 完整读一次，之后靠 `session/event` 订阅**增量**喂折叠缓存（`createUsageCache`，纯逻辑在 [src/usage-fold.ts](src/usage-fold.ts)）—— 所以胶囊取价是 O(1)，不必反复重读整份日志。**播种窗口**（读日志期间追加的事件）会先缓冲、读完按 `seq` 补上：不这么做的话水位会跳过快照里那些中间事件，金额**永久少算**（`feed()` 的 seq 幂等，补也补不进去）。**事件形状按本版官方 `SessionEventMap` 的真实声明**（`assistant/attempt` 的 `stream` 里取最后一条 usage 块，或 `assistant/message` 的 `data.usage`；**本版没有 `assistant/chunk` 事件**），口径对齐官方 `token-meter` 的 `usage-projection`（同一步替换、`llm/retry-started` 重开替换槽）。`test/usage-fold.mjs`（89 项）逐条钉住差分、归属、重试、脏数据、逐笔分档与增量缓存；分列出不来时面板会显示"读了 N 条事件、M 条 usage、来源哪条路"，一眼就能定位。
@@ -721,9 +722,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 33 个套件；当前 2780 passed, 0 failed（2026-10-17 实测；CI 三平台同样全绿）
+npm test                          # 33 个套件；当前 2797 passed, 0 failed（2026-10-18 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（217 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（220 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

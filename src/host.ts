@@ -29,6 +29,7 @@ import {
   HEADER_APPLIED_VALUE_FIELD, HEADER_CLEANUP_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
   HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
   LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
+  NATIVE_STATUS_PREFIX,
   OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   MODELS_API_PATH,
@@ -70,6 +71,7 @@ import type { NotifyEvent, NotifySettings } from './notify.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
+import { nativeSessionHeader, resetNativeSessionHeaderCache } from './opencode-header.ts'
 import {
   addBuckets, createUsageCache, zeroBuckets,
   type SessionUsageFold, type SubagentChildRef, type UsageTier,
@@ -435,6 +437,9 @@ function installHeaderOverlay(ctx: Context, read: ReadRow, onInstalled: () => vo
           const raw = next()
           const request = readHeaderRequest(read(NAMESPACE))
           if (request.kind !== 'plan') return raw
+          // 0.25.0：宿主自己会发（pi-ai 自带 opencode-headers.js、用每段对话的真实 session id）
+          // 时**一律不注入** —— 补一个固定值只会把它顶掉（见 src/opencode-header.ts 文件头）。
+          if (nativeSessionHeader().support === 'native') return raw
           // 只认"看着像 llm-pi-ai 那一行"的配置（有 providers）。这里不比较 fiber：
           // 事件是瀑布式派发，`this` 的形态跨版本会变，而"哪份配置里有 providers"足够精确 ——
           // 而且我们只往**已存在的路由**上补一个头，认错的代价是零。
@@ -469,9 +474,11 @@ function installHeaderOverlay(ctx: Context, read: ReadRow, onInstalled: () => vo
 async function syncHeaderOverlay(settings: SettingsLike, read: ReadRow, hasLoader: boolean): Promise<void> {
   const own = read(NAMESPACE)
   if (own === undefined) return
+  // 0.25.0：宿主自己会发这个头时，生成 UUID 与记账都没有意义（注入会被跳过）。
+  const native = nativeSessionHeader()
   // 首次启用且值是空的：生成一个稳定 ID，并写进**本插件自己的**命名空间（此前一直用它）。
   // 注意落点：这是 composer-ux 的字段，不是用户的模型路由配置 —— 后者 0.22.0 起一个字都不写。
-  if (own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true) {
+  if (native.support !== 'native' && own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true) {
     const name = textOf(own[HEADER_NAME_FIELD])
     if (nameIsValid(name) && textOf(own[HEADER_VALUE_FIELD]) === '') {
       const generated = newSessionId()
@@ -487,7 +494,10 @@ async function syncHeaderOverlay(settings: SettingsLike, read: ReadRow, hasLoade
     ? pickRoutes(providers, request.routes)
     : []
 
-  const status = request.kind === 'off'
+  const status = native.support === 'native'
+    // 宿主自己的实现按**每段对话的真实 id** 发；本栏注入的是固定值，所以什么都不做才对。
+    ? `${NATIVE_STATUS_PREFIX}（${native.evidence}）：按每段对话的真实 session id 自动发送，本栏不再注入`
+    : request.kind === 'off'
     ? ''
     : request.kind === 'invalid'
       ? `${request.reason}，未注入`
@@ -504,8 +514,10 @@ async function syncHeaderOverlay(settings: SettingsLike, read: ReadRow, hasLoade
     ownOps.push({ op: 'set', path: [HEADER_STATUS_FIELD], value: status })
   }
   // 记账继续保留（改名/改值后清理要用），但含义从"写入成功"变成"运行期生效"。
-  const nextAppliedName = request.kind === 'plan' && applied.length > 0 ? request.name : ''
-  const nextAppliedValue = request.kind === 'plan' && applied.length > 0 ? request.value : ''
+  // 原生支持时不记账：什么都没注入，记账只会让状态行自相矛盾。
+  const injected = native.support !== 'native' && request.kind === 'plan' && applied.length > 0
+  const nextAppliedName = injected ? request.name : ''
+  const nextAppliedValue = injected ? request.value : ''
   if (textOf(own[HEADER_APPLIED_NAME_FIELD]) !== nextAppliedName) {
     ownOps.push({ op: 'set', path: [HEADER_APPLIED_NAME_FIELD], value: nextAppliedName })
   }
@@ -859,6 +871,9 @@ export const Config: Schema = markVolatile(ownSchema())
  *   （那时读值仍走 `settings.get`，这个参数只用作兜底）。
  */
 export function apply(ctx: Context, config?: unknown): void {
+  // 0.25.0：每次挂载重新探测宿主能力。进程不变，但同一进程里可能换环境变量、换宿主布局
+  // （测试也要能在一次进程里把「原生 / 旧宿主」两条路都跑到）。
+  resetNativeSessionHeaderCache()
   /** 把「读口」包成终端子系统期望的形状：只替换 `get`，`mutate` 原样转发。 */
   const readView = (
     service: unknown,
@@ -3000,6 +3015,9 @@ export function apply(ctx: Context, config?: unknown): void {
           status: text(HEADER_STATUS_FIELD),
           // 0.22.0 起这条链不再写用户配置；真写了就是回归，自检要红。
           writesUserConfig: false,
+          // 0.25.0：宿主自己会发这个头时，上面那些"挂没挂上"都不再重要（见 src/opencode-header.ts）。
+          native: nativeSessionHeader().support === 'native',
+          nativeEvidence: nativeSessionHeader().evidence,
         },
         quick: {
           file: quickStorePath(),

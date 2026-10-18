@@ -16,6 +16,7 @@ import { useAutostart } from './autostart.ts'
 import {
   DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
   HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
+  NATIVE_STATUS_PREFIX,
   MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD,
   OPTIMIZER_CONTEXT_FIELD,
   OPTIMIZER_LEDGER_FIELD,
@@ -1175,17 +1176,24 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
     ? `${settings.panelWidth}×${settings.panelHeight}`
     : '尺寸用官方默认'
   const panelSummary = `边缘缩放 ${settings.panelResize ? '开' : '关'} · ${panelSize}`
-  // 请求头栏目的概览直接复用宿主半写回来的执行结果（'已写入 opencode-go' 这类）。
-  const headerSummary = settings.headerEnabled
-    ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
-    : '未启用'
+  // 请求头栏目的概览直接复用宿主半写回来的执行结果（'宿主已原生支持…' / '运行期注入 …' 这类）。
+  // 0.25.0：宿主自己会发这个头时，正确状态是"不需要"而不是"没生效"——概览优先说这件事，
+  // 哪怕用户把开关关着（关着正好，本来就不用开）。
+  const headerNative = settings.headerStatus.startsWith(NATIVE_STATUS_PREFIX)
+  const headerSummary = headerNative
+    ? '宿主已原生支持（不需要）'
+    : settings.headerEnabled
+      ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
+      : '未启用'
   const quickCounts = bookCounts(book)
   const quickSummary = `${quickCounts.categories} 个分类 · ${quickCounts.prompts} 条`
     + ` · 每次 ${quickCounts.always} · 仅首次 ${quickCounts.first}`
     + ` · 优化档位 ${OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.label ?? '高级'}`
-  const headerStatusText = settings.headerEnabled
-    ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
-    : '未启用（打开上方开关即写入）'
+  const headerStatusText = headerNative
+    ? settings.headerStatus
+    : settings.headerEnabled
+      ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
+      : '未启用（打开上方开关即写入）'
   // 终端卡片的概览：直接复用宿主半写回来的状态（'已生效：…' / '没找到可用的 bash' 这类）。
   // 「这一栏没启用」优先于宿主半的状态 —— 没开的时候状态行写的是"未启用"，但那句话在概览里
   // 不如「未启用」四个字直白（FoldCard 会再加一次前缀，所以这里只给被关掉时的档位描述）。
@@ -1620,6 +1628,18 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           onChange: next => { actions.setField(HEADER_ENABLED_FIELD, next) },
         }}
       >
+        {/* 0.25.0：宿主自己会发这个头时，这张卡只是"旧宿主的兼容层"——把结论放最前面，
+            免得用户以为开关没生效是坏了。文案与自检卡、状态行说同一件事。 */}
+        {headerNative
+          ? (
+            <p style={hintInfo}>
+              本宿主已原生支持：pi-ai 会按每段对话的真实 session id 发送 {DEFAULT_HEADER_NAME}
+              （它同时也是 OpenCode 用来优化路由与提示词缓存的那一维）。所以这一栏现在什么都不做——
+              打开开关也不会注入（注入的是固定值，反而会顶掉真实 id）。只有旧宿主（pi-ai 1.0.2 之前、
+              没有 opencode-headers 模块）才需要打开它。
+            </p>
+          )
+          : null}
         {/* 用户实测踩过的坑，放区块最前面：这一栏是为了 OpenCode 的 API 地址服务的，
             用 DSH 自带的地址配置发图片会报错。 */}
         <p style={hintError}>
@@ -1629,10 +1649,10 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         <p style={bodyLead}>
           OpenCode 的接口要求客户端每次请求都带上一个稳定的会话 ID 请求头（官方 Go 文档
           「可以在哪里使用？」第 3 条：为每段对话在 x-opencode-session 中发送会话 ID，
-          以便其优化路由与提示词缓存）。DSH 的设置页不提供请求头编辑器，所以这里直接把它写进
+          以便其优化路由与提示词缓存）。旧版 DSH 不发这个头，所以这一栏把它补进
           llm-pi-ai 的 provider 配置——下一次模型请求就生效，不用重启，也不用手工改 settings.yaml。
           只对 llm-pi-ai 里「已存在」的 opencode 系路由生效，不会凭空新建 provider；
-          总开关关闭或本栏目停用时，写入的头会自动撤销。
+          总开关关闭或本栏目停用时，补的头会自动撤销。
         </p>
         <TextFieldRow
           title="头名"
@@ -1644,7 +1664,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         />
         <TextFieldRow
           title="值"
-          desc="所有对话共用这一个值；留空时首次启用会自动生成一个 UUID 并保存沿用"
+          desc="旧宿主专用：所有对话共用这一个值；留空时首次启用会自动生成一个 UUID（宿主已原生支持时不会用到它）"
           value={settings.headerValue}
           placeholder="留空 = 自动生成"
           maxLength={HEADER_VALUE_MAX}

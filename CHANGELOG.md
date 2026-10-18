@@ -2,6 +2,49 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.25.0] — 2026-10-18（「OpenCode 请求头」降级为旧宿主兼容层：宿主已原生支持就不注入）
+
+用户 2026-10-18 在设置页看到这一栏，问：**「是否还需要这个功能」**。查完上下游后答案是
+**不需要了，而且开着比不开更差**，用户拍板：关掉 + 改成"启动时探测宿主，有原生支持就不注入"。
+
+**三条证据（都在本机核过）**
+
+1. OpenCode Go 官方文档「可以在哪里使用？」第 3 条仍然要求客户端发
+   `x-opencode-session`（用于优化路由与 prompt cache），所以这个头本身还是要的；
+2. 但**上游已经自己发了**：`@earendil-works/pi-ai` 从 **1.0.2** 起自带
+   `dist/providers/opencode-headers.js`，`opencode` 与 `opencode-go` 两个 provider 都被
+   `withOpenCodeSessionHeader()` 包过；它用的是 `options.sessionId`（**每段对话的真实会话 id**），
+   而且 **`hasHeader()` 命中就不覆盖**；
+3. DSH 的 `llm-pi-ai` 调用时是 `headers: requestHeaders(profile.headers)` 与
+   `sessionId` **一起**交给 pi-ai 的 ⇒ 本插件注入的那个**固定 UUID**（设置页原话"所有对话共用
+   这一个值"）会**顶掉**真实 session id。也就是说：开着它，所有对话在 OpenCode 那边都是同一个
+   会话 —— 正是官方要用来做路由与缓存优化的那一维被抹平了。
+
+**改动**
+
+- 新增 `src/opencode-header.ts`：启动时探测宿主能力。判据是**宿主 pi-ai 安装里有没有
+  `dist/providers/opencode-headers.js`**（能力就是那个模块，版本号只用来写证据），探测面覆盖
+  桌面端（`resources/app.asar` 里的运行时）与网页版（从入口往上找 `node_modules` / `.pnpm`）；
+  探不到时**按旧宿主处理**（继续注入，失败方向是多做一次旧行为），并可用环境变量
+  `DSH_COMPOSER_UX_HEADER_NATIVE=1|0` 强制。
+- 宿主半（`src/host.ts`）：探测到原生支持时 —— 不注入、不生成 UUID、不记"已注入"的账；
+  状态行写「宿主已原生支持（pi-ai 1.1.0 自带 opencode-headers.js）：按每段对话的真实
+  session id 自动发送，本栏不再注入」。
+- 设置页（`src/client/SettingsSection.tsx`）：卡片顶部多一条说明（"本宿主已原生支持…这一栏
+  什么都不做"，与自检卡、状态行说同一件事）；概览写「宿主已原生支持（不需要）」而不是像故障的
+  "未启用"；「值」那一行的说明改成"旧宿主专用"。
+- 自检卡（`src/doctor.ts`）：`header` 那一行在原生支持时如实说明"这一栏不需要、也不会注入"。
+- 桌面 / 网页两个 profile 的 `headerEnabled` 均置 `false`（用户要求"关掉"；不过即便打开，
+  探测到原生支持也不会注入）。
+
+**验证**：`test/host-header-mirror.mjs` 新增第 19 / 20 节（原生支持不注入 + 不生成 UUID +
+状态行；探测判据用假目录逐条钉：模块在⇒native、模块缺⇒legacy、目录缺⇒legacy、环境变量强制、
+版本比较按数字不按字符串）；变异新增 `SG`/`SH`/`SI` 三条。
+
+**未验证（如实说明）**：探测只在本机两种布局（Electron asar / pnpm 检出）上验过；发行渠道若把
+pi-ai 装到别处，会落到"按旧宿主处理"，此时用环境变量强制即可。桌面端要重启后才加载这一版。
+
+
 ## [0.24.0] — 2026-10-17（金额胶囊把**子代理**的费用算进去）
 
 用户 2026-10-17：「**我发现金额胶囊不计算子代理的费用**」。

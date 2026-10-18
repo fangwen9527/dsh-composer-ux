@@ -1753,7 +1753,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.24.0\",",
+    from: "\"version\": \"0.25.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1823,6 +1823,31 @@ const cases = [
     to: "          if (false) continue",
     test: "test/subagent-cost.mjs",
     expect: "用户自己 fork 出来的会话**没被**算进子代理",
+  },
+  // ── 0.25.0：宿主原生支持时不再注入（不然固定 UUID 会顶掉真实 session id）──────────
+  {
+    name: "SG 宿主原生支持时仍然注入（固定 UUID 顶掉每段对话的真实 session id）",
+    file: "src/host.ts",
+    from: "          if (nativeSessionHeader().support === 'native') return raw",
+    to: "          if (false) return raw",
+    test: "test/host-header-mirror.mjs",
+    expect: "原生支持时**一个头都不注入**",
+  },
+  {
+    name: "SH 探测判据不看模块文件（裁过包的旧宿主被误判成原生支持 ⇒ 静默失效）",
+    file: "src/opencode-header.ts",
+    from: "    if (!existsSync(join(piAiRoot, 'dist', 'providers', 'opencode-headers.js'))) return undefined",
+    to: "    if (false) return undefined",
+    test: "test/host-header-mirror.mjs",
+    expect: "目录里没有那个模块 ⇒ legacy",
+  },
+  {
+    name: "SI 强制开关被忽略（探不到布局的用户没有退路）",
+    file: "src/opencode-header.ts",
+    from: "  if (forced === '1' || forced === 'true') return { support: 'native', evidence: '环境变量强制' }",
+    to: "  if (false) return { support: 'native', evidence: '环境变量强制' }",
+    test: "test/host-header-mirror.mjs",
+    expect: "⇒ native（不依赖文件布局）",
   },
 
 ]

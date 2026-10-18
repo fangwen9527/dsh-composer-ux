@@ -238,8 +238,18 @@ export {
 } from '../src/usage-fold.ts'
 /** 「按 route 分列」接口路径（宿主半注册、客户端半调用）。 */
 export {
-  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
+  NATIVE_STATUS_PREFIX, PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
 } from '../src/settings-contract.ts'
+/**
+ * 「OpenCode 请求头」的宿主能力探测（0.25.0）。
+ *
+ * 判据是**宿主 pi-ai 里有没有 `dist/providers/opencode-headers.js`**（能力就是那个模块），
+ * 版本号只用来写给人看的证据。这条逻辑必须能单测，因为它的两个方向都有代价：
+ * 误判成"原生支持"会让旧宿主静默失效；误判成"旧宿主"会顶掉真实 session id。
+ */
+export {
+  NATIVE_SUPPORT_ENV, PI_AI_NATIVE_SINCE, detectNativeSessionHeader, versionAtLeast, versionParts,
+} from '../src/opencode-header.ts'
 /**
  * 样式令牌的配对纪律（0.12.0 截图验收抓到白底白字后补）：把样式对象本身出口出来，
  * 让测试**直接断言令牌名**，而不是去匹配源码文本 —— 令牌写错是"看着像对、实际上瞎"的一类

@@ -64,6 +64,10 @@ export interface DoctorInput {
     readonly migrated: boolean
     readonly status: string
     readonly writesUserConfig: boolean
+    /** 宿主自己会发这个头（0.25.0）：为真时这一栏本来就不需要。 */
+    readonly native: boolean
+    /** 原生支持的证据（pi-ai 版本 / 环境变量强制）；没探到就是空串。 */
+    readonly nativeEvidence: string
   }
   /** 快捷指令本。 */
   readonly quick: {
@@ -175,12 +179,16 @@ export function buildDoctorReport(input: DoctorInput): readonly DoctorRow[] {
     label: 'OpenCode 请求头',
     level: input.header.writesUserConfig
       ? 'fail'
-      : !input.header.overlayInstalled && input.header.status !== ''
+      : !input.header.native && !input.header.overlayInstalled && input.header.status !== ''
         ? 'warn'
         : 'ok',
     detail: input.header.writesUserConfig
       ? '❗检测到它仍在写用户配置（0.22.0 起应改为运行期覆盖）'
-      : `${input.header.overlayInstalled ? '运行期覆盖已挂上' : input.header.hasLoader ? '覆盖没挂上' : '没有 loader 服务，挂不上'}；旧写入清理=${input.header.migrated ? '已完成' : '未完成'}${input.header.status === '' ? '；当前未启用' : `；${input.header.status}`}`,
+      // 0.25.0：宿主自己会发这个头时，正确答案是"这一栏什么都不做" —— 说清证据，
+      // 免得用户以为插件坏了（状态行同时会写同一句话）。
+      : input.header.native
+        ? `宿主已原生支持（${input.header.nativeEvidence}）：按每段对话的真实 session id 自动发送，这一栏不需要、也不会注入`
+        : `${input.header.overlayInstalled ? '运行期覆盖已挂上' : input.header.hasLoader ? '覆盖没挂上' : '没有 loader 服务，挂不上'}；旧写入清理=${input.header.migrated ? '已完成' : '未完成'}${input.header.status === '' ? '；当前未启用' : `；${input.header.status}`}`,
   })
 
   rows.push({

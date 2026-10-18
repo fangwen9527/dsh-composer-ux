@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-composer-ux.input-experience",
   "name": "dsh-composer-ux",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "license": "MIT",
   "facets": {
     "host": {

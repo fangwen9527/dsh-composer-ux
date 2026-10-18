@@ -11,10 +11,27 @@
  *
  *   node test/host-header-mirror.mjs
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { build } from 'esbuild'
 import { apply } from '../lib/index.js'
+
+// 0.25.0 的探测判据是纯函数（看宿主 pi-ai 里有没有那个模块），所以把它也打成一份来单测
+// （与 holiday-sync / subagent-cost 同一套做法：纯逻辑走 `test/pure-entry.ts` 的出口）。
+mkdirSync(new URL('./.build/', import.meta.url), { recursive: true })
+await build({
+  entryPoints: ['test/pure-entry.ts'],
+  outfile: 'test/.build/header-mirror.mjs',
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: ['es2022'],
+  logLevel: 'warning',
+})
+const pure = await import(new URL('./.build/header-mirror.mjs', import.meta.url))
+/** 「强制指定探测结果」的环境变量名（两端共用，纯模块里定义）。 */
+const NATIVE_ENV = pure.NATIVE_SUPPORT_ENV
 
 // 把 $DSH_HOME 指到一个空目录：宿主半启动时会读一次「快捷指令」文件做一次迁移
 // （有非内置内容就把 quickEnabled 写进文档）。不隔离的话这里会去读**真实用户**的
@@ -427,6 +444,88 @@ const sentHeaders = (app, route) => app.overlay(app.state[LLM]).providers[route]
 
   const cleanup = plain(schema({}))
   check('迁移标记默认不写（未设置 ⇒ 迁移会跑一次）', cleanup.headerCleanupVersion === undefined)
+}
+
+// ── 19. 0.25.0：宿主自己会发这个头时，一律不注入 ──────────────────────────────
+{
+  console.log('19. 宿主原生支持（pi-ai 自带 opencode-headers）⇒ 不注入、状态说清、开关也没用')
+  // 强制开关（两端共用的环境变量名）：这条用例不依赖本机装了哪版 pi-ai —— 探测逻辑本身
+  // 在第 20 节用假目录单测。
+  process.env[NATIVE_ENV] = '1'
+  try {
+    const app = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
+    check('❗原生支持时**一个头都不注入**（补固定值只会顶掉真实 session id）',
+      sentHeaders(app, 'opencode-go') === undefined && sentHeaders(app, 'ds') === undefined,
+      JSON.stringify(sentHeaders(app, 'opencode-go')))
+    check('❗也不生成 UUID（生成的值本来也不会被用到）',
+      app.state[NAMESPACE].headerValue === '', JSON.stringify(app.state[NAMESPACE].headerValue))
+    check('不记"已注入"的账（记账留着会与状态行自相矛盾）',
+      app.state[NAMESPACE].headerAppliedName === '' && app.state[NAMESPACE].headerAppliedValue === '')
+    check('状态行以「宿主已原生支持」开头，并说清是按每段对话的真实 id 发',
+      app.state[NAMESPACE].headerStatus.startsWith('宿主已原生支持')
+      && app.state[NAMESPACE].headerStatus.includes('真实 session id'),
+      app.state[NAMESPACE].headerStatus)
+    check('用户配置依旧零写入', app.calls.every(call => call.ns === NAMESPACE),
+      JSON.stringify(app.calls.map(call => call.ns)))
+
+    // 关掉开关也一样说"原生支持"（这不是没生效，是不需要）—— 客户端据此换卡片文案。
+    app.state[NAMESPACE].headerEnabled = false
+    await app.touch(NAMESPACE)
+    check('关掉开关后状态仍然是「宿主已原生支持」（不是"未启用"那种像故障的话）',
+      app.state[NAMESPACE].headerStatus.startsWith('宿主已原生支持'),
+      app.state[NAMESPACE].headerStatus)
+  } finally {
+    delete process.env[NATIVE_ENV]
+  }
+
+  // 反面：没有强制、本机也探不到宿主（测试进程就是这种）⇒ 旧行为照旧注入。
+  const legacy = await boot({ [NAMESPACE]: baseOwn({ headerEnabled: true }), [LLM]: baseLlm() })
+  check('探不到宿主（旧环境）⇒ 仍然按原样注入（失败方向是多做一次旧行为，不是让旧宿主静默失效）',
+    typeof sentHeaders(legacy, 'opencode-go')?.['x-opencode-session'] === 'string',
+    JSON.stringify(sentHeaders(legacy, 'opencode-go')))
+  check('旧环境的状态行仍是"运行期注入 …"',
+    legacy.state[NAMESPACE].headerStatus.startsWith('运行期注入'),
+    legacy.state[NAMESPACE].headerStatus)
+}
+
+// ── 20. 探测判据：看 pi-ai 里有没有那个模块文件，版本号只进证据 ────────────────
+{
+  console.log('20. 探测判据（纯函数 + 假目录）')
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-header-detect-'))
+
+  /** 造一个假 pi-ai 安装：有/没有 opencode-headers.js。 */
+  const fakePiAi = (version, withModule) => {
+    const root = join(tmp, `pi-ai-${version}-${withModule ? 'native' : 'plain'}`)
+    mkdirSync(join(root, 'dist', 'providers'), { recursive: true })
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-ai', version }))
+    if (withModule) writeFileSync(join(root, 'dist', 'providers', 'opencode-headers.js'), 'export {}\n')
+    return root
+  }
+  const nativeRoot = fakePiAi('1.1.0', true)
+  const plainRoot = fakePiAi('0.87.1', false)
+
+  check('版本比较：1.0.2 ≥ 1.0.2 / 1.1.0 ≥ 1.0.2 / 0.87.1 < 1.0.2',
+    pure.versionAtLeast('1.0.2', '1.0.2') && pure.versionAtLeast('1.1.0', '1.0.2')
+    && !pure.versionAtLeast('0.87.1', '1.0.2'))
+  check('版本比较按数字比，不按字符串（1.10.0 > 1.9.9）', pure.versionAtLeast('1.10.0', '1.9.9'))
+
+  const seenNative = pure.detectNativeSessionHeader({}, [nativeRoot])
+  check('目录里有 opencode-headers.js ⇒ native，证据里带 pi-ai 版本',
+    seenNative.support === 'native' && seenNative.evidence.includes('1.1.0'),
+    JSON.stringify(seenNative))
+  const seenPlain = pure.detectNativeSessionHeader({}, [plainRoot])
+  check('目录里没有那个模块 ⇒ legacy（版本再新也不算）',
+    seenPlain.support === 'legacy' && seenPlain.evidence === '', JSON.stringify(seenPlain))
+  check('目录都不存在 ⇒ legacy（按旧宿主处理）',
+    pure.detectNativeSessionHeader({}, [join(tmp, 'nope')]).support === 'legacy')
+  check('环境变量强制 ' + NATIVE_ENV + '=1 ⇒ native（不依赖文件布局）',
+    pure.detectNativeSessionHeader({ [NATIVE_ENV]: '1' }, [plainRoot]).support === 'native')
+  check('环境变量强制 =0 ⇒ legacy（即便目录里真有模块）',
+    pure.detectNativeSessionHeader({ [NATIVE_ENV]: '0' }, [nativeRoot]).support === 'legacy')
+  check('环境变量只认 1/true/0/false，别的值不当强制',
+    pure.detectNativeSessionHeader({ [NATIVE_ENV]: 'yes' }, [plainRoot]).support === 'legacy')
+  check('状态前缀常量与宿主半写出来的那句话是同一个（客户端靠它认"不需要"）',
+    pure.NATIVE_STATUS_PREFIX === '宿主已原生支持' && seenNative.support === 'native')
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

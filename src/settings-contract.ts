@@ -961,9 +961,13 @@ export function appendBatchForSend(book: QuickPromptBook, blank: boolean): reado
 // ── OpenCode 请求头 ─────────────────────────────────────────────────────────
 //
 // OpenCode 的接口要求客户端每次请求都带一个稳定的会话 ID 请求头
-// （官方 Go 文档「可以在哪里使用？」第 3 条）。DSH 的 Models 设置页明确不提供
-// 请求头编辑器，所以本插件把这一项写进 llm-pi-ai 的 provider profile.headers ——
-// 那是 DSH 里唯一受支持的出网请求头入口（会在 pi-ai 侧最后合并，下一次请求生效）。
+// （官方 Go 文档「可以在哪里使用？」第 3 条）。
+//
+// 0.25.0 起这条链的定位变了：**它只是给旧宿主补缺口的兼容层**。`@earendil-works/pi-ai`
+// 从 1.0.2 起自带 `dist/providers/opencode-headers.js`（`opencode` / `opencode-go` 两个 provider
+// 都被包过），用它自己拿到的**每段对话真实 session id** 发这个头；本插件注入的是**固定值**，
+// 而且 pi-ai「已有同名头就不覆盖」⇒ 开着这一栏反而会顶掉真实 id。
+// 所以宿主半先探测（见 `src/opencode-header.ts`）：宿主自己会发，就一律不注入。
 
 /** 请求头栏目字段名。 */
 export const HEADER_ENABLED_FIELD = 'headerEnabled'
@@ -978,6 +982,15 @@ export const HEADER_APPLIED_VALUE_FIELD = 'headerAppliedValue'
 
 /** 宿主半写入的执行结果；设置页只读展示。 */
 export const HEADER_STATUS_FIELD = 'headerStatus'
+
+/**
+ * 「宿主已原生支持」状态行前缀（0.25.0，两端共用）。
+ *
+ * 宿主自己的 pi-ai 会按**每段对话的真实 session id** 发 `x-opencode-session`，所以这一栏
+ * 什么也不做才是对的。客户端靠这个前缀认出"这不是没生效、而是不需要"，从而把卡片文案
+ * 换成"本宿主已原生支持，这一栏只给旧宿主用"，而不是显示一句像故障话的状态。
+ */
+export const NATIVE_STATUS_PREFIX = '宿主已原生支持'
 
 /**
  * 迁移标记（0.22.0）：`internal/config` 运行期覆盖到位后，把 0.21.x 及以前**真的写进**

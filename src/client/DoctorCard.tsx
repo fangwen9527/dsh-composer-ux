@@ -83,7 +83,7 @@ export function DoctorCard(): React.ReactElement {
       <p style={description}>
         把插件各处状态摊平成一张表：设置字段是否都在宿主 schema 里（不在的话开关拨不动）、
         八栏开关、终端替换、请求头运行期覆盖、快捷指令本、通知凭据、解释层档位、运行环境。
-        这些都是**只读**检查，不会改动任何东西。
+        这些都是<strong>只读</strong>检查，不会改动任何东西。
       </p>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0' }}>
         <button

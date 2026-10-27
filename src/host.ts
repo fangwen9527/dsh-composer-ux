@@ -46,6 +46,7 @@ import {
   splitSlashCommand,
   STATS_ENABLED_FIELD,
   USAGE_API_PATH,
+  QUOTA_API_PATH,
   SYNC_API_PATH,
   BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
   PRICE_AUTO_SYNC_FIELD, SYNCED_PRICES_FIELD, parseHolidayYears,
@@ -72,6 +73,10 @@ import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
 import { nativeSessionHeader, resetNativeSessionHeaderCache } from './opencode-header.ts'
+import {
+  SUBSCRIPTION_PLANS, degradeQuota, planOf, parseQuotaPayload, quotaCostOf,
+  type PlanQuotaSnapshot, type QuotaCost, type SubscriptionPlan,
+} from './subscription-plans.ts'
 import {
   addBuckets, createUsageCache, zeroBuckets,
   type SessionUsageFold, type SubagentChildRef, type UsageTier,
@@ -772,6 +777,130 @@ function markVolatile(schema: Schema): Schema {
  */
 const priceCache: { loaded: boolean; providers: ProviderPriceTable | undefined } = { loaded: false, providers: undefined }
 
+/**
+ * 订阅套餐的额度快照缓存（0.26.0）。
+ *
+ * 为什么缓存：金额胶囊每 600ms 就可能问一次 `/composer-ux/usage`，而额度接口是**官方网络的
+ * 一次往返**（实测 100–300ms）。60 秒的 TTL 足以让控制台那几个百分比与界面保持一致，又不会
+ * 把官方接口打成轮询。
+ *
+ * 失败也缓存（沿用上一份 `windows`，`status` 说清原因）：接口偶发 5xx 时，界面不该从
+ * "周 3%" 忽然变成"一片空白"。
+ */
+const PLAN_QUOTA_TTL_MS = 60_000
+const planQuotaCache = new Map<string, PlanQuotaSnapshot>()
+/** 正在飞的套餐 id（同一个套餐同时只允许一次请求）。 */
+const planQuotaInflight = new Set<string>()
+
+/** 额度接口允许我们取 key 的引用名（按顺序试；与用户实际配置的 provider 命名对齐）。 */
+const PLAN_QUOTA_KEY_REFS = ['OPENCODE_GO_API_KEY', 'GO_API_KEY', 'OPENCODE_API_KEY'] as const
+
+/**
+ * 取一个订阅套餐的额度窗口（带缓存与失败降级）。
+ *
+ * @param ctx - 插件上下文（只用来 `get('credentials')` 解析 API Key）。
+ * @param plan - 套餐定义（含额度接口的 origin 与路径）。
+ * @param now - 当前时刻（测试可注入）。
+ * @param fetcher - 网络实现（测试可注入；默认全局 `fetch`）。
+ * @returns 额度快照；**永不抛错**（失败写进 `status` / `reason`）。
+ */
+async function fetchPlanQuota(
+  ctx: { get: (name: string) => unknown },
+  plan: SubscriptionPlan,
+  now: number = Date.now(),
+  fetcher: typeof fetch = fetch,
+): Promise<PlanQuotaSnapshot> {
+  // 同一个套餐同时只允许一次在飞：胶囊 600ms 一个请求，不能让它们排队打官方接口。
+  if (planQuotaInflight.has(plan.id)) return peekPlanQuota(plan, now)
+  planQuotaInflight.add(plan.id)
+  const cached = planQuotaCache.get(plan.id)
+  const keep = (status: 'not-configured' | 'unavailable' | 'invalid', reason: string): PlanQuotaSnapshot =>
+    degradeQuota(plan, cached, status, reason)
+  // 先拿 key：没有 key 就不用发请求（也不该记成"接口挂了"）。
+  const credentials = ctx.get('credentials') as
+    { resolve?: (name: string) => Promise<{ readonly value?: unknown } | undefined> } | undefined
+  let key = ''
+  if (typeof credentials?.resolve === 'function') {
+    for (const ref of PLAN_QUOTA_KEY_REFS) {
+      try {
+        const resolved = await credentials.resolve(ref)
+        const value = typeof resolved?.value === 'string' ? resolved.value.trim() : ''
+        if (value !== '') {
+          key = value
+          break
+        }
+      } catch {
+        /* 这个引用解析不了就试下一个 */
+      }
+    }
+  }
+  if (key === '') {
+    const snapshot = keep('not-configured', `没找到 ${plan.displayName} 的 API Key（试过 ${PLAN_QUOTA_KEY_REFS.join(' / ')}）`)
+    planQuotaCache.set(plan.id, snapshot)
+    planQuotaInflight.delete(plan.id)
+    return snapshot
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, 8000)
+  try {
+    const response = await fetcher(`${plan.quotaOrigin}${plan.quotaPath}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${key}`, accept: 'application/json' },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const snapshot = keep('unavailable', `额度接口返回 HTTP ${response.status}`)
+      planQuotaCache.set(plan.id, snapshot)
+      return snapshot
+    }
+    const body: unknown = await response.json()
+    const windows = parseQuotaPayload(body)
+    const snapshot: PlanQuotaSnapshot = windows.length === 0
+      ? { provider: plan.id, displayName: plan.displayName, status: 'invalid', windows, fetchedAt: now, reason: '额度接口的响应里没有可读的窗口（形状变了？）' }
+      : { provider: plan.id, displayName: plan.displayName, status: 'ok', windows, fetchedAt: now, reason: '' }
+    planQuotaCache.set(plan.id, snapshot)
+    return snapshot
+  } catch (error: unknown) {
+    const reason = error instanceof Error && error.name === 'AbortError'
+      ? '额度接口超时（8 秒）'
+      : `额度接口请求失败：${error instanceof Error ? error.message : String(error)}`
+    const snapshot = keep('unavailable', reason)
+    planQuotaCache.set(plan.id, snapshot)
+    return snapshot
+  } finally {
+    clearTimeout(timer)
+    planQuotaInflight.delete(plan.id)
+  }
+}
+
+/**
+ * 同步读一份额度快照（**不会**发请求）：有缓存给缓存，没有给 `pending`。
+ *
+ * 路由只调这个函数 —— 取额度是后台的事（见 {@link fetchPlanQuota}）。这样金额胶囊永远不会
+ * 因为官方额度接口慢而卡住（用户可能在国内网络下，8 秒超时对 600ms 轮询是灾难）。
+ */
+function peekPlanQuota(plan: SubscriptionPlan, now: number = Date.now()): PlanQuotaSnapshot {
+  const cached = planQuotaCache.get(plan.id)
+  if (cached !== undefined && now - cached.fetchedAt < PLAN_QUOTA_TTL_MS) return cached
+  return {
+    provider: plan.id,
+    displayName: plan.displayName,
+    status: cached === undefined ? 'pending' : cached.status,
+    windows: cached?.windows ?? [],
+    fetchedAt: cached?.fetchedAt ?? 0,
+    reason: cached === undefined ? '正在取额度…' : cached.reason,
+  }
+}
+
+/** 后台刷新（不 await）：结果写进缓存，下次轮询就能读到。 */
+function refreshPlanQuota(ctx: { get: (name: string) => unknown }, plan: SubscriptionPlan): void {
+  const cached = planQuotaCache.get(plan.id)
+  if (cached !== undefined && Date.now() - cached.fetchedAt < PLAN_QUOTA_TTL_MS) return
+  void fetchPlanQuota(ctx, plan).catch(() => {
+    /* fetchPlanQuota 自己不抛；这里只是兜底，绝不能让未处理的 rejection 冒到宿主 */
+  })
+}
+
 /** 取第三方价目（首次问磁盘，之后走缓存；读不到就是 `undefined` —— 界面显示"未定价"）。 */
 async function ensureProviderPrices(): Promise<ProviderPriceTable | undefined> {
   if (priceCache.loaded) return priceCache.providers
@@ -874,6 +1003,10 @@ export function apply(ctx: Context, config?: unknown): void {
   // 0.25.0：每次挂载重新探测宿主能力。进程不变，但同一进程里可能换环境变量、换宿主布局
   // （测试也要能在一次进程里把「原生 / 旧宿主」两条路都跑到）。
   resetNativeSessionHeaderCache()
+  // 额度缓存的键是"套餐 id"，跨挂载复用没有意义（换宿主 / 换 key 后就该重取）；
+  // 清掉也让测试能在同一个进程里把 ok / 失败两条分支都跑到。
+  planQuotaCache.clear()
+  planQuotaInflight.clear()
   /** 把「读口」包成终端子系统期望的形状：只替换 `get`，`mutate` 原样转发。 */
   const readView = (
     service: unknown,
@@ -2036,6 +2169,15 @@ export function apply(ctx: Context, config?: unknown): void {
           providers: moneyRules.providers,
         })
         const parts = costPartsOf(costBucketsOf(item.usage), resolved.prices)
+        // 0.26.0：订阅通道（OpenCode Go 这类"月费 + 额度"）另外算一份**额度消耗**。
+        // 它与上面的 `cost`（按刊例价折算）是两个口径：前者是"你实际被扣掉的额度"，
+        // 后者是"这些 token 按官方价折算值多少钱"。用户 2026-10-27 选定两套并存、
+        // 胶囊默认看前者（见 src/subscription-plans.ts 文件头）。
+        const quota = quotaCostOf(item.provider, item.model, item.peak, {
+          miss: item.usage.inputTokens,
+          hit: item.usage.cacheReadTokens,
+          out: item.usage.outputTokens,
+        })
         return {
           ...item,
           cost: parts.total,
@@ -2049,6 +2191,8 @@ export function apply(ctx: Context, config?: unknown): void {
           unpriced: resolved.unpriced,
           /** 单价来自**内置快照**（没点过同步时的兜底）：界面会如实标明。 */
           priceBuiltin: resolved.builtin,
+          /** 订阅通道的额度消耗（USD）；不是订阅通道、或该模型不在价目表里时缺失。 */
+          ...(quota === undefined ? {} : { quota }),
         }
       })
       const cost = routes.reduce(
@@ -2060,7 +2204,33 @@ export function apply(ctx: Context, config?: unknown): void {
         }),
         { miss: 0, hit: 0, out: 0, total: 0 },
       )
-      return { routes, cost, unpriced: routes.filter(item => item.unpriced).length }
+      // 额度合计按**模型**分组：同一个模型可能跨峰谷两条 route，额度上限是"每模型每月"，
+      // 所以百分比必须把两条 route 加在一起再除，否则会算成"每档各占 x%"。
+      const quotaModels = new Map<string, { usd: number; monthlyLimitUsd?: number }>()
+      let quotaUsd = 0
+      for (const route of routes) {
+        const quota = (route as { quota?: QuotaCost }).quota
+        if (quota === undefined) continue
+        quotaUsd += quota.usd
+        const row = quotaModels.get(quota.modelKey) ?? {
+          usd: 0,
+          ...(quota.monthlyLimitUsd === undefined ? {} : { monthlyLimitUsd: quota.monthlyLimitUsd }),
+        }
+        row.usd += quota.usd
+        quotaModels.set(quota.modelKey, row)
+      }
+      const quota = {
+        usd: quotaUsd,
+        models: [...quotaModels].map(([model, row]) => ({
+          model,
+          usd: row.usd,
+          ...(row.monthlyLimitUsd === undefined ? {} : { monthlyLimitUsd: row.monthlyLimitUsd }),
+          ...(row.monthlyLimitUsd === undefined || row.monthlyLimitUsd <= 0
+            ? {}
+            : { percentOfLimit: row.usd / row.monthlyLimitUsd * 100 }),
+        })),
+      }
+      return { routes, cost, unpriced: routes.filter(item => item.unpriced).length, quota }
     }
 
     /** 子代理递归的天花板（0.24.0）：金额胶囊每 600ms 就可能问一次，不能无界递归。 */
@@ -2279,6 +2449,28 @@ export function apply(ctx: Context, config?: unknown): void {
         const subCost = { miss: 0, hit: 0, out: 0, total: 0 }
         let subUnpriced = 0
         let subLive = 0
+        // 0.26.0：子代理同一个套餐口径的额度消耗也要并进来（否则"本会话额度"少算了子代理那份）。
+        const quotaModels = new Map<string, { usd: number; monthlyLimitUsd?: number }>()
+        for (const row of selfPriced.quota.models) {
+          quotaModels.set(row.model, {
+            usd: row.usd,
+            ...(row.monthlyLimitUsd === undefined ? {} : { monthlyLimitUsd: row.monthlyLimitUsd }),
+          })
+        }
+        let quotaUsd = selfPriced.quota.usd
+        const mergeQuota = (priced: ReturnType<typeof priceFold>): void => {
+          quotaUsd += priced.quota.usd
+          for (const row of priced.quota.models) {
+            const merged = quotaModels.get(row.model) ?? {
+              usd: 0,
+              ...(row.monthlyLimitUsd === undefined ? {} : { monthlyLimitUsd: row.monthlyLimitUsd }),
+            }
+            merged.usd += row.usd
+            quotaModels.set(row.model, merged)
+          }
+        }
+        /** 本会话（或子代理）用到过的订阅套餐 provider；没用到就是 undefined。 */
+        let planProvider = selfPriced.routes.find(route => planOf(route.provider) !== undefined)?.provider
         for (const row of children.rows) {
           subTotal = addBuckets(subTotal, row.fold.total)
           subPeak = addBuckets(subPeak, row.fold.tiers.peak)
@@ -2289,7 +2481,26 @@ export function apply(ctx: Context, config?: unknown): void {
           subCost.out += priced.cost.out
           subCost.total += priced.cost.total
           subUnpriced += priced.unpriced
+          mergeQuota(priced)
+          planProvider ??= priced.routes.find(route => planOf(route.provider) !== undefined)?.provider
           if (liveSeqs.has(row.sessionId)) subLive += 1
+        }
+        // 订阅套餐的额度窗口（5 小时 / 周 / 月）：只在真的用到订阅通道时才去问官方接口 ——
+        // 纯按量付费的会话不该为这件事多付一次网络往返。失败不抛，如实回 unavailable。
+        // 额度窗口：**只读缓存**（没有就回 pending），取数在后台跑 —— 见 peekPlanQuota 的注释。
+        const planDetail = planProvider === undefined ? undefined : planOf(planProvider)
+        if (planDetail !== undefined) refreshPlanQuota(usageCtx, planDetail)
+        const plan = planDetail === undefined ? undefined : peekPlanQuota(planDetail)
+        const quota = {
+          usd: quotaUsd,
+          models: [...quotaModels].map(([model, row]) => ({
+            model,
+            usd: row.usd,
+            ...(row.monthlyLimitUsd === undefined ? {} : { monthlyLimitUsd: row.monthlyLimitUsd }),
+            ...(row.monthlyLimitUsd === undefined || row.monthlyLimitUsd <= 0
+              ? {}
+              : { percentOfLimit: row.usd / row.monthlyLimitUsd * 100 }),
+          })),
         }
 
         sendJson(res, 200, {
@@ -2304,6 +2515,16 @@ export function apply(ctx: Context, config?: unknown): void {
           tiers: fold.tiers,
           routes: selfPriced.routes,
           cost: selfPriced.cost,
+          /**
+           * **订阅通道的额度口径（0.26.0）**。`cost` 是"按刊例价折算值多少钱"，这里是
+           * "你实际被扣掉多少套餐额度"——两个口径并存，胶囊默认显示后者（用户 2026-10-27 选定）。
+           *
+           * `usd` 是本会话（含子代理）的额度消耗；`models` 按模型分组，`percentOfLimit` 是
+           * **占该模型月度额度上限**的比例（上限来自官方价目表；官方没公布就没有这个字段）。
+           * `plan` 是额度窗口本身（5 小时 / 周 / 月），取不到时 `status` 会说清为什么。
+           */
+          quota,
+          ...(plan === undefined ? {} : { plan }),
           /**
            * **子代理**（0.24.0）：本会话派出去的全部子代理会话（含孙代理）的合计。
            *
@@ -2342,6 +2563,38 @@ export function apply(ctx: Context, config?: unknown): void {
       path: USAGE_API_PATH,
       handler: handle as never,
     }), 'composer-ux: usage route')
+
+    // ── 订阅套餐的额度窗口（0.26.0）────────────────────────────────────────────
+    //
+    // 只在设置页「金额」卡里展示（胶囊的 `plan` 字段复用同一份缓存）。与会话无关，所以
+    // **单独一条路由**：会话用量每 600ms 一变、额度 60 秒才变一次，合在一条里会让每次
+    // 会话轮询都去摸官方接口。同样**不阻塞**：立刻回缓存（没有就 pending），后台刷新。
+    const handleQuota = (
+      req: { method?: string },
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void },
+    ): void => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'GET') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET' })
+        return
+      }
+      // 额度是账号级数据（能看出这个套餐用了多少），与用量路由同一道关卡。
+      if (rejectUntrustedRequest(usageCtx as never, req, res)) return
+      const plans = SUBSCRIPTION_PLANS.map(plan => ({
+        ...peekPlanQuota(plan),
+        monthlyFeeUsd: plan.monthlyFeeUsd,
+        // 引用名给界面看（"没配 key 时该配哪一个"），不含任何密钥内容。
+        keyRefs: PLAN_QUOTA_KEY_REFS,
+      }))
+      for (const plan of SUBSCRIPTION_PLANS) refreshPlanQuota(usageCtx, plan)
+      sendJson(res, 200, { ok: true, plans })
+    }
+
+    usageCtx.effect(() => usageCtx.webServer.register({
+      kind: 'exact',
+      path: QUOTA_API_PATH,
+      handler: handleQuota as never,
+    }), 'composer-ux: quota route')
   })
 
   // ── 金额：官方价同步 + 第三方价目（models.dev）（0.10.0）────────────────────

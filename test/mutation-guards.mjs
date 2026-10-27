@@ -142,11 +142,9 @@ const cases = [
   {
     name: 'R 标题行下又重复一遍当前档位的 hint（说明变成两份）',
     file: 'src/client/SettingsSection.tsx',
-    from: '            <div style={rowTitle}>菜单来源</div>\n          </div>',
-    to: '            <div style={rowTitle}>菜单来源</div>\n'
-      + '            <div style={rowDesc}>'
-      + '{MENU_MODES.find(item => item.id === settings.menuMode)?.hint ?? \'\'}'
-      + '</div>\n          </div>',
+    from: '        <Row title="菜单来源" first stacked>',
+    to: '        <Row title="菜单来源" first stacked'
+      + ' hint={MENU_MODES.find(item => item.id === settings.menuMode)?.hint ?? \'\'}>',
     test: 'test/client-registration.mjs',
     expect: '不再重复当前档位的 hint',
   },
@@ -620,7 +618,7 @@ const cases = [
   {
     name: 'BV 用量路由不再问官方信任关卡（任何能访问该端口的人都能读会话用量）',
     file: 'src/host.ts',
-    from: '      if (rejectUntrustedRequest(usageCtx as never, req, res)) return',
+    from: '      // 官方信任关卡（见 rejectUntrustedRequest）：会话用量也是数据，同样不许裸奔。\n      if (rejectUntrustedRequest(usageCtx as never, req, res)) return',
     to: '      if (false && rejectUntrustedRequest(usageCtx as never, req, res)) return',
     test: 'test/quick-commands.mjs',
     expect: '/composer-ux/usage 也走官方信任关卡',
@@ -1753,7 +1751,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.25.0\",",
+    from: "\"version\": \"0.26.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1848,6 +1846,55 @@ const cases = [
     to: "  if (false) return { support: 'native', evidence: '环境变量强制' }",
     test: "test/host-header-mirror.mjs",
     expect: "⇒ native（不依赖文件布局）",
+  },
+  // ── 0.26.0：订阅通道的额度口径（把"扣额度"错算成别的数）────────────────────────
+  {
+    name: "SJ 订阅额度忽略峰谷（DeepSeek 高峰价翻倍 ⇒ 额度少算一半）",
+    file: "src/subscription-plans.ts",
+    from: "  const rate = peak && priced.peak !== undefined ? priced.peak : priced.offPeak",
+    to: "  const rate = priced.offPeak",
+    test: "test/subscription-billing.mjs",
+    expect: "峰时正好翻倍",
+  },
+  {
+    name: "SK 模型别名不映射（deepseek-chat 这类旧名认成「未收录」，额度直接消失）",
+    file: "src/subscription-plans.ts",
+    from: "  const priced = alias === undefined ? plan.models[key] : plan.models[alias]",
+    to: "  const priced = plan.models[key]",
+    test: "test/subscription-billing.mjs",
+    expect: "旧名 deepseek-chat 按 V4.1 Flash 计价",
+  },
+  {
+    name: "SL 月度百分比用固定上限（V4 Pro 的 $15 被当成 $80，占比小 5 倍）",
+    file: "src/subscription-plans.ts",
+    from: "    ...(limit === undefined || limit <= 0 ? {} : { percentOfLimit: usd / limit * 100 }),",
+    to: "    ...(limit === undefined || limit <= 0 ? {} : { percentOfLimit: usd / 80 * 100 }),",
+    test: "test/subscription-billing.mjs",
+    expect: "V4 Pro 的月度百分比按它自己的 $15 算",
+  },
+  {
+    name: "SM 额度合并时后写覆盖（同模型跨峰谷只留最后一档）",
+    file: "src/host.ts",
+    from: "            merged.usd += row.usd",
+    to: "            merged.usd = row.usd",
+    test: "test/subscription-billing.mjs",
+    expect: "额度按模型分组",
+  },
+  {
+    name: "SN 额度窗口只在首次取（缓存过期后永不刷新，控制台的百分比会一直停在旧值）",
+    file: "src/host.ts",
+    from: "        if (planDetail !== undefined) refreshPlanQuota(usageCtx, planDetail)",
+    to: "        if (false) refreshPlanQuota(usageCtx, planDetail)",
+    test: "test/subscription-billing.mjs",
+    expect: "第二次拿到真实窗口",
+  },
+  {
+    name: "SO 额度接口失败时把已有窗口清空（界面从「周 3%」忽然变空白）",
+    file: "src/subscription-plans.ts",
+    from: "    windows: previous?.windows ?? [],",
+    to: "    windows: [],",
+    test: "test/subscription-billing.mjs",
+    expect: "额度接口失败保留上一次的窗口",
   },
 
 ]

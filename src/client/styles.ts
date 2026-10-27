@@ -35,8 +35,8 @@ export const row: CSSProperties = {
   justifyContent: 'space-between',
   gap: 12,
   minHeight: 40,
-  padding: '7px 0',
-  borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+  padding: '10px 0',
+  borderTop: '1px solid var(--dsw-alias-border-l2)',
 }
 
 /** 行内标签区。 */
@@ -48,15 +48,15 @@ export const rowText: CSSProperties = {
 /** 行标题。 */
 export const rowTitle: CSSProperties = {
   color: 'var(--dsw-alias-label-primary)',
-  fontSize: 13,
-  lineHeight: 1.4,
+  fontSize: 12.5,
+  lineHeight: 1.45,
 }
 
 /** 行说明。 */
 export const rowDesc: CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary)',
-  fontSize: 11,
-  lineHeight: 1.4,
+  fontSize: 11.5,
+  lineHeight: 1.55,
   marginTop: 2,
 }
 

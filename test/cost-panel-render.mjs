@@ -363,6 +363,76 @@ console.log('1.2 子代理的费用并进来（0.24.0）')
     legacy.includes('本会话费用（按每笔用量发生的时间计价）'))
 }
 
+console.log('1.3 订阅额度（0.26.0）：胶囊改看"实付"，浮层两套口径并排')
+{
+  /**
+   * 用户 2026-10-27 的口径：OpenCode Go 是"$10/月 + 额度"，单次调用不扣钱、扣额度。
+   * 所以胶囊主数字要换成**额度消耗（美元）**并带 `订阅内` 小标，浮层里同时给
+   * "按刊例价折算" 的 ¥ —— 两个数各是什么，必须同屏说清（不然用户以为单位错了）。
+   */
+  const QUOTA_FIXTURE = {
+    ...FIXTURE,
+    quota: {
+      usd: 0.3012,
+      models: [{ model: 'deepseek-v4.1-flash', usd: 0.3012, monthlyLimitUsd: 80, percentOfLimit: 0.3765 }],
+    },
+    plan: {
+      provider: 'opencode-go',
+      displayName: 'OpenCode Go',
+      status: 'ok',
+      fetchedAt: 1793110730311,
+      reason: '',
+      windows: [
+        { id: 'rolling', percent: 0, resetsAt: '2026-10-27T17:35:17.000Z' },
+        { id: 'weekly', percent: 3, resetsAt: '2026-11-02T00:00:00.000Z' },
+        { id: 'monthly', percent: 54, resetsAt: '2026-11-08T10:25:37.000Z' },
+      ],
+    },
+  }
+  const html = render(QUOTA_FIXTURE)
+  const text = visible(html)
+  check('胶囊主数字 = 本会话额度消耗（$0.301），不是 ¥ 折算价',
+    text.startsWith('$0.301'), text.slice(0, 60))
+  check('胶囊上带「订阅内」小标（否则 ¥ 变 $ 会让人以为单位错了）',
+    text.includes('订阅内'), text.slice(0, 60))
+  check('胶囊 title 说清这是额度消耗、含子代理',
+    html.includes('本会话额度消耗（订阅内，按套餐单价计，含子代理）'))
+  check('浮层标题也改成「本会话额度消耗」',
+    text.includes('本会话额度消耗 $0.301'), text.slice(0, 80))
+  check('❗两套口径同屏：额度（$）与刊例价折算（¥）都写出来，并说明各是什么',
+    text.includes('按刊例价折算 ¥4.08') && text.includes('两套口径并存'),
+    (text.match(/订阅内 · 按刊例价折算[^（]*/) ?? [''])[0])
+  check('按模型列出额度消耗与"占月额度 x%"',
+    text.includes('其中 deepseek-v4.1-flash $0.301 · 占月额度 0.38%'),
+    (text.match(/其中 deepseek[^ ]* [^ ]* · [^%]*%/) ?? [''])[0])
+  check('额度窗口三段（5h / 本周 / 本月）与控制台同一个口径',
+    text.includes('额度窗口 5 小时 0% · 本周 3% · 本月 54%'),
+    (text.match(/额度窗口[^ ]* [^ ]* [^ ]* [^ ]* [^ ]*/) ?? [''])[0])
+  check('浮层里没有 markdown 记号', !text.includes('**'))
+
+  // 额度接口还没回来：先显示"—"，不影响额度金额本身。
+  const pending = visible(render({
+    ...QUOTA_FIXTURE,
+    plan: { ...QUOTA_FIXTURE.plan, status: 'pending', windows: [], reason: '正在取额度…' },
+  }))
+  check('额度窗口 pending：提示"正在取"，但不影响上面的额度消耗数字',
+    pending.includes('额度窗口正在取') && pending.includes('$0.301'))
+
+  // 失败：如实说原因（不静默）。
+  const failed = visible(render({
+    ...QUOTA_FIXTURE,
+    plan: { ...QUOTA_FIXTURE.plan, status: 'unavailable', windows: [], reason: '额度接口返回 HTTP 500' },
+  }))
+  check('额度接口失败：把原因写在脸上（不静默、不显示假的 0%）',
+    failed.includes('额度窗口取不到：额度接口返回 HTTP 500'),
+    (failed.match(/额度窗口取不到：[^。]*/) ?? [''])[0])
+
+  // 纯按量付费的会话：没有 quota 字段 ⇒ 完全回到旧口径（§1 的断言已覆盖，这里做反向确认）。
+  const legacy = visible(render(FIXTURE))
+  check('按量付费会话：胶囊仍是 ¥ 金额、没有「订阅内」',
+    legacy.startsWith('¥') && !legacy.includes('订阅内'))
+}
+
 console.log('2. 宿主数据还没到手 / 认不出价时：不许显示 ¥0.00')
 {
   const html = render(undefined, {}, { lastUsed: { provider: 'my-relay', model: 'unknown-model-x' } })

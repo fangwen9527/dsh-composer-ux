@@ -42,9 +42,10 @@ import {
 } from '../pricing.ts'
 import {
   BALANCE_ENABLED_FIELD, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
-  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD,
+  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, QUOTA_API_PATH,
   type ComposerUxSettings, type SettingsField,
 } from '../settings-contract.ts'
+import { QUOTA_WINDOW_LABEL } from '../subscription-plans.ts'
 import { PROVIDER_PRICES_SNAPSHOT_AT } from '../provider-prices.ts'
 import { useBalance, usePriceSync } from './money-admin.ts'
 import { hintError, hintInfo, pill, row, rowDesc, rowText, rowTitle, textInput } from './styles.ts'
@@ -105,6 +106,120 @@ function stampText(value: unknown): string {
 }
 
 /** 卡片内容区。 */
+/** 一个套餐的额度视图（宿主半 `/composer-ux/quota` 的响应项，另加月费与凭据引用名）。 */
+interface PlanQuotaView {
+  readonly provider?: string
+  readonly displayName?: string
+  readonly status?: 'ok' | 'pending' | 'not-configured' | 'unavailable' | 'invalid'
+  readonly windows?: readonly {
+    readonly id?: 'rolling' | 'weekly' | 'monthly'
+    readonly percent?: number
+    readonly resetsAt?: string
+  }[]
+  readonly reason?: string
+  readonly fetchedAt?: number
+  readonly monthlyFeeUsd?: number
+  readonly keyRefs?: readonly string[]
+}
+
+/** 距重置还有多久（给人看的一句话；解析不出就空串）。 */
+function resetText(iso: string | undefined): string {
+  if (typeof iso !== 'string' || iso === '') return ''
+  const at = Date.parse(iso)
+  if (!Number.isFinite(at)) return ''
+  const ms = at - Date.now()
+  if (ms <= 0) return ' · 即将重置'
+  const hours = Math.floor(ms / 3600_000)
+  if (hours < 1) return ` · ${Math.max(1, Math.round(ms / 60_000))} 分钟后重置`
+  if (hours < 48) return ` · ${hours} 小时后重置`
+  return ` · ${Math.round(hours / 24)} 天后重置`
+}
+
+/**
+ * 订阅套餐的额度窗口（0.26.0）。
+ *
+ * 为什么单独一条路由 + 60 秒轮询：额度与会话无关，变更是按分钟级的；而会话用量是 600ms 级的。
+ * 合在一起会让"用量每涨一点就去摸一次官方接口"（见 `settings-contract.ts` 的 QUOTA_API_PATH）。
+ *
+ * 失败**不编数**：拿不到就显示原因（没配 key / 接口 500 / 形状变了），不画一个 0% 的进度条。
+ *
+ * @returns `plans`（每个套餐一条）与 `error`（整条路由都取不到时的原因）。
+ */
+function usePlanQuota(): { readonly plans: readonly PlanQuotaView[]; readonly error: string } {
+  const [state, setState] = React.useState<{ plans: readonly PlanQuotaView[]; error: string }>({ plans: [], error: '' })
+  React.useEffect(() => {
+    let alive = true
+    const load = (): void => {
+      void fetch(QUOTA_API_PATH, { headers: { accept: 'application/json' } })
+        .then(response => response.json() as Promise<{ ok?: boolean; plans?: readonly PlanQuotaView[]; error?: string }>)
+        .then(next => {
+          if (!alive) return
+          setState({
+            plans: Array.isArray(next.plans) ? next.plans : [],
+            error: next.ok === true ? '' : (typeof next.error === 'string' ? next.error : '取不到额度窗口'),
+          })
+        })
+        .catch(() => {
+          if (alive) setState(current => ({ plans: current.plans, error: '取不到额度窗口（网络或宿主不可达）' }))
+        })
+    }
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+  return state
+}
+
+/** 一个套餐的额度进度条（5 小时 / 周 / 月）。 */
+function QuotaBars(props: { readonly plan: PlanQuotaView }): React.ReactElement | null {
+  const windows = props.plan.windows ?? []
+  if (windows.length === 0) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+      {windows.map(window => {
+        const percent = typeof window.percent === 'number' && Number.isFinite(window.percent)
+          ? Math.min(100, Math.max(0, window.percent))
+          : 0
+        const id = window.id ?? 'weekly'
+        const hot = percent >= 90
+        return (
+          <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 52, flex: 'none', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }}>
+              {QUOTA_WINDOW_LABEL[id]}
+            </span>
+            <span style={{
+              flex: 1,
+              height: 6,
+              borderRadius: 3,
+              background: 'var(--dsw-alias-border-l2)',
+              overflow: 'hidden',
+            }}>
+              <span style={{
+                display: 'block',
+                width: `${String(percent)}%`,
+                height: '100%',
+                borderRadius: 3,
+                background: hot ? 'var(--dsw-alias-label-error, #d33)' : 'var(--dsw-alias-brand-primary)',
+              }} />
+            </span>
+            <span style={{
+              width: 130,
+              flex: 'none',
+              textAlign: 'right',
+              fontSize: 12,
+              fontVariantNumeric: 'tabular-nums',
+              color: hot ? 'var(--dsw-alias-label-error, #d33)' : 'var(--dsw-alias-label-secondary)',
+            }}>{`${percent.toFixed(0)}%${resetText(window.resetsAt)}`}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function CostCardBody(props: {
   readonly settings: ComposerUxSettings
   readonly setField: (field: SettingsField, value: unknown) => void
@@ -291,9 +406,62 @@ export function CostCardBody(props: {
    * 而分叉的后果是"设置页说 27 天、峰谷提醒却按 10 天算"，用户完全无法解释。
    */
   const holidayInfo = effectiveHolidays(settings.peakHolidays, synced?.holidays)
+  /** 订阅套餐的额度窗口（0.26.0）：与"按刊例价折算"是两套口径，见下方说明。 */
+  const quota = usePlanQuota()
 
   return (
     <div>
+      {/*
+        订阅额度（0.26.0）放最前面：用户 2026-10-27 的口径是"默认看实付"（OpenCode Go 这类
+        套餐单次调用不扣钱、只扣额度），所以这张卡的第一块应该回答"我的额度还剩多少"。
+        下面的"单价"是另一套口径（按刊例价折算值多少钱），两者用途不同、不冲突。
+      */}
+      {quota.plans.length > 0 || quota.error !== ''
+        ? (
+          <div style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            border: '0.5px solid var(--dsw-alias-border-l2)',
+            borderRadius: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <strong style={{ fontSize: 12.5 }}>订阅额度</strong>
+              <span style={{ fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' }}>
+                {quota.error !== '' ? quota.error : '每 60 秒刷新'}
+              </span>
+            </div>
+            {quota.plans.map(plan => {
+              const status = plan.status ?? 'pending'
+              const fee = typeof plan.monthlyFeeUsd === 'number' && plan.monthlyFeeUsd > 0
+                ? ` · $${String(plan.monthlyFeeUsd)}/月`
+                : ''
+              return (
+                <div key={plan.provider ?? plan.displayName ?? 'plan'} style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>
+                    {plan.displayName ?? plan.provider ?? '订阅套餐'}{fee}
+                    {status === 'pending' ? ' · 正在取额度…' : ''}
+                  </div>
+                  {status === 'ok' ? <QuotaBars plan={plan} /> : null}
+                  {status !== 'ok' && status !== 'pending'
+                    ? (
+                      <p style={{ ...hintInfo, marginTop: 6 }}>
+                        {status === 'not-configured'
+                          ? `没找到这把 key：在凭据里配上 ${(plan.keyRefs ?? []).join(' 或 ')}（与模型路由里 apiKeyEnv 的写法一致）就能看到额度。`
+                          : `额度窗口取不到：${plan.reason === undefined || plan.reason === '' ? status : plan.reason}`}
+                      </p>
+                    )
+                    : null}
+                </div>
+              )
+            })}
+            <p style={{ ...hintInfo, marginTop: 8 }}>
+              订阅通道（OpenCode Go 这类「月费 + 额度」）<strong>单次调用不扣钱、扣额度</strong>：金额胶囊上显示的
+              那个 $ 就是本会话吃掉的额度（含子代理）；下面「单价」那张表是另一套口径
+              —— 这些 token 按官方刊例价折算值多少钱，两者不冲突、也不要相加。
+            </p>
+          </div>
+        )
+        : null}
       <p style={hintInfo}>
         这里改的<strong>只是本插件显示的费用估算</strong>：不动 DSH 的计费，也不改模型请求。
         <strong>留空＝沿用官方价</strong>（输入框里的灰字就是官方价），填了才算覆盖。

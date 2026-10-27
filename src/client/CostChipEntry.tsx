@@ -101,6 +101,9 @@ import {
 } from '../pricing.ts'
 import type { ComposerUxSettings } from '../settings-contract.ts'
 import { UNKNOWN_ROUTE, agreesWithProjection, type UsageBuckets } from '../usage-fold.ts'
+// 订阅套餐的额度口径（0.26.0）：这个模块**零 import**（只有类型与纯函数），所以客户端可以直接用
+// 同一份 `formatUsd` / 窗口标签 —— 两端各写一份格式化，迟早会出现"胶囊 $0.30、浮层 $0.3"。
+import { QUOTA_WINDOW_LABEL, formatUsd } from '../subscription-plans.ts'
 import { billedInputTokens, cacheHitText } from './stats-line.ts'
 import { usePeakAlert } from './peak-alert.ts'
 import { PROVIDER_PRICES_SNAPSHOT_AT } from '../provider-prices.ts'
@@ -417,7 +420,16 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
    * 那会让人以为"这个模型不要钱"。显示"未定价"并说清怎么补价（0.10.0 新增）。
    */
   const viewUnpriced = !useBreakdown && estimate.unpriced
-  const headline = viewUnpriced ? '未定价' : formatMoney(view.total)
+  // ── 订阅额度（0.26.0）：胶囊主数字改用它 ──────────────────────────────────
+  // 用户 2026-10-27 选的口径：**默认看实付**。OpenCode Go 这类套餐单次调用不扣钱、扣额度，
+  // 所以"本会话花了 ¥91"既不是他付的钱、也不是额度消耗。这里优先显示 `quota.usd`
+  // （按套餐单价算出的额度消耗，含子代理），旁边加 `订阅内` 小标；按量付费的会话或老宿主
+  // 没有这个字段，退回原来的刊例价折算。
+  const quotaUsd = useBreakdown ? num(data?.quota?.usd) : 0
+  const hasQuota = quotaUsd > 0
+  const planInfo = data?.plan
+  const planWindows = Array.isArray(planInfo?.windows) ? planInfo.windows : []
+  const headline = hasQuota ? formatUsd(quotaUsd) : (viewUnpriced ? '未定价' : formatMoney(view.total))
   const expanded = hover || open
 
   // 两档生效单价（用户覆盖价 > 刊例价）：面板里显式列出来，改价之后一眼能核对。
@@ -435,9 +447,12 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
         aria-expanded={open}
         title={(useBreakdown
           // 有子代理时那个数字里不止本会话：说清"含子代理"，免得用户以为本会话真花了这么多。
-          ? sub !== undefined
-            ? '本会话费用（含子代理，按每笔用量发生的时间计价）'
-            : '本会话费用（按每笔用量发生的时间计价）'
+          ? hasQuota
+            // 订阅通道：这个数字是**额度消耗**（美元），不是钱包里的钱 —— 标题必须说清。
+            ? '本会话额度消耗（订阅内，按套餐单价计，含子代理）'
+            : sub !== undefined
+              ? '本会话费用（含子代理，按每笔用量发生的时间计价）'
+              : '本会话费用（按每笔用量发生的时间计价）'
           : '本会话费用（估算）') + ` · ${peakText}`}
         onClick={toggle}
         onMouseEnter={() => setHover(true)}
@@ -467,7 +482,23 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
           whiteSpace: 'nowrap',
           cursor: 'pointer',
         }}
-      >{headline}</button>
+      >{headline}
+        {hasQuota
+          // 一颗 9px 的小标：告诉用户"这个 $ 不是你充的钱，是套餐额度"。
+          // 不加它的话，¥ 变 $ 会让人以为算错了单位。
+          ? (
+            <span style={{
+              fontSize: 9,
+              lineHeight: '12px',
+              padding: '0 4px',
+              borderRadius: 6,
+              border: '0.5px solid var(--dsw-alias-border-l2)',
+              color: 'var(--dsw-alias-label-tertiary)',
+              fontVariantNumeric: 'normal',
+            }}>订阅内</span>
+          )
+          : null}
+      </button>
       {open && anchor !== null ? createPortal(
         <div
           data-composer-ux-cost-panel=""
@@ -506,9 +537,13 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             color: 'var(--dsw-alias-label-primary)',
             fontWeight: 500,
           }}>
-            <span>本会话费用</span>
+            <span>{hasQuota ? '本会话额度消耗' : '本会话费用'}</span>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{headline}</span>
           </div>
+          {hasQuota
+            // 两套口径必须在同一屏同时可见，否则用户永远不知道"胶囊上的 $ 和下面的 ¥"是什么关系。
+            ? note(`订阅内 · 按刊例价折算 ${formatMoney(view.total)}（两套口径并存：上面是实际被扣的套餐额度，这里是这些 token 按官方价折算值多少钱）`, '__quota_head__')
+            : null}
           <div style={{ marginBottom: 10, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }} />
           <div style={{
             display: 'grid',
@@ -516,6 +551,36 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             gap: '6px 16px',
             margin: 0,
           }}>
+            {hasQuota
+              ? (
+                <>
+                  {detail('额度消耗（含子代理）', formatUsd(quotaUsd), '__quota__')}
+                  {(data?.quota?.models ?? []).map(row => detail(
+                    `其中 ${row.model === undefined || row.model === '' ? '未知模型' : row.model}`,
+                    `${formatUsd(num(row.usd))}${row.percentOfLimit === undefined
+                      ? ''
+                      : ` · 占月额度 ${num(row.percentOfLimit).toFixed(2)}%`}`,
+                    `__quota_${row.model ?? ''}`,
+                  ))}
+                  {planWindows.length > 0
+                    ? detail(
+                      '额度窗口',
+                      planWindows
+                        .map(window => `${window.id === undefined ? '' : QUOTA_WINDOW_LABEL[window.id]} ${num(window.percent).toFixed(0)}%`)
+                        .filter(text => text !== '')
+                        .join(' · '),
+                      '__quota_windows__',
+                    )
+                    : null}
+                  {planInfo?.status === 'pending'
+                    ? note('额度窗口正在取（官方接口第一次返回前先显示"—"；不影响上面的额度消耗）', '__quota_pending__')
+                    : null}
+                  {planInfo !== undefined && planInfo.status !== undefined && planInfo.status !== 'ok' && planInfo.status !== 'pending'
+                    ? note(`额度窗口取不到：${planInfo.reason === undefined || planInfo.reason === '' ? planInfo.status : planInfo.reason}`, '__quota_gap__')
+                    : null}
+                </>
+              )
+              : null}
             {useBreakdown ? (
               <>
                 {routeRows.map(route => detail(

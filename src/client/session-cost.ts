@@ -127,12 +127,63 @@ export interface SessionCostResponse {
    */
   readonly subagents?: SessionCostSubagents
   /**
+   * 订阅通道的**额度**口径（0.26.0）：本会话（含子代理）吃掉了多少套餐额度（美元）。
+   *
+   * 与 `cost`（按刊例价折算的人民币）**是两套口径**，别相加、也别互相覆盖：
+   * `cost` 回答"这些 token 值多少钱"，`quota` 回答"你实际被扣掉多少额度"。
+   * 用户 2026-10-27 选定：胶囊默认显示后者（带 `订阅内` 标），展开再看折算金额。
+   */
+  readonly quota?: SessionCostQuota
+  /** 额度窗口（5 小时 / 周 / 月）；只在用到订阅通道时才回。 */
+  readonly plan?: SessionCostPlan
+  /**
    * 宿主半当前生效的节假日表（北京日期）。
    *
    * 客户端算"下一次峰谷切换"用**同一份**规则：各拿一份表就会出现"胶囊说还有 3 分钟进峰、
    * 面板说不是"这种无法解释的分歧。宿主没回（老版本/取数失败）时退回设置里的或内置那份。
    */
   readonly holidays?: readonly string[]
+}
+
+/** 一个模型在本会话里消耗的额度（0.26.0）。 */
+export interface SessionCostQuotaModel {
+  /** 价目表里的模型键（已归一，例如 `deepseek-v4.1-flash`）。 */
+  readonly model?: string
+  /** 消耗的额度（美元）。 */
+  readonly usd?: number
+  /** 该模型的月度额度上限（美元）；官方没公布时缺失。 */
+  readonly monthlyLimitUsd?: number
+  /** 占该模型月度上限的百分比（0–100）；没有上限时缺失。 */
+  readonly percentOfLimit?: number
+}
+
+/** 本会话（含子代理）的额度合计（0.26.0）。 */
+export interface SessionCostQuota {
+  readonly usd?: number
+  readonly models?: readonly SessionCostQuotaModel[]
+}
+
+/** 一段额度窗口（0.26.0）。`percent` 是**已用**百分比。 */
+export interface SessionCostQuotaWindow {
+  readonly id?: 'rolling' | 'weekly' | 'monthly'
+  readonly percent?: number
+  readonly resetsAt?: string
+}
+
+/** 订阅套餐的额度快照（0.26.0）。 */
+export interface SessionCostPlan {
+  readonly provider?: string
+  readonly displayName?: string
+  /**
+   * `ok` = 拿到了；`pending` = 第一次取、后台还在请求（界面显示"正在取额度…"）；
+   * `not-configured` = 没配 key；`unavailable` = 接口失败；`invalid` = 响应形状不对。
+   */
+  readonly status?: 'ok' | 'pending' | 'not-configured' | 'unavailable' | 'invalid'
+  readonly windows?: readonly SessionCostQuotaWindow[]
+  /** 取到时刻（毫秒；失败时是上次成功的时刻）。 */
+  readonly fetchedAt?: number
+  /** 失败原因（给人看的一句话）。 */
+  readonly reason?: string
 }
 
 /** 取数结果：`data` 一定对应当前 `sessionId`（会话切换期间的旧响应不会被交出来）。 */

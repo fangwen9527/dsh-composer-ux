@@ -251,6 +251,18 @@ export {
   NATIVE_SUPPORT_ENV, PI_AI_NATIVE_SINCE, detectNativeSessionHeader, versionAtLeast, versionParts,
 } from '../src/opencode-header.ts'
 /**
+ * 订阅通道的额度计费（0.26.0）。
+ *
+ * 三条都必须能单独钉住：**模型名归一到价目表**（归错就是按错单价算额度）、
+ * **同模型跨峰谷要合起来算月度百分比**（拆开算会得出假数）、
+ * **额度接口失败不许把已有窗口清空**（界面会从"周 3%"忽然变空白）。
+ */
+export {
+  OPENCODE_GO_PLAN, QUOTA_WINDOW_LABEL, SUBSCRIPTION_PLANS, canonicalModelKey, canonicalProvider, degradeQuota,
+  formatUsd, parseQuotaPayload, planOf, quotaCostOf,
+} from '../src/subscription-plans.ts'
+export { QUOTA_API_PATH } from '../src/settings-contract.ts'
+/**
  * 样式令牌的配对纪律（0.12.0 截图验收抓到白底白字后补）：把样式对象本身出口出来，
  * 让测试**直接断言令牌名**，而不是去匹配源码文本 —— 令牌写错是"看着像对、实际上瞎"的一类
  * bug，只有对象级断言才挡得住。

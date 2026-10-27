@@ -22,8 +22,8 @@ export function AutostartCard(props: { readonly view: AutostartView }): React.Re
         在桌面应用里打开就注册桌面应用。两个运行时各用自己那一条启动项，互不覆盖。
         <br />
         <span style={{ opacity: 0.75 }}>
-          只写 `HKEY_CURRENT_USER\...\Run`（当前用户，**不需要管理员**）；关掉开关就是删掉自己那一条。
-          状态以**系统里实际有没有**为准 —— 你在注册表里手动删了，这里就显示关。
+          只写 `HKEY_CURRENT_USER\...\Run`（当前用户，<strong>不需要管理员</strong>）；关掉开关就是删掉自己那一条。
+          状态以<strong>系统里实际有没有</strong>为准 —— 你在注册表里手动删了，这里就显示关。
         </span>
       </p>
 

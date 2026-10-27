@@ -55,6 +55,16 @@ export const RESTART_API_PATH = '/composer-ux/restart'
 export const USAGE_API_PATH = '/composer-ux/usage'
 
 /**
+ * 订阅套餐的额度窗口（0.26.0）：`GET /composer-ux/quota`。
+ *
+ * 与 {@link USAGE_API_PATH} 分成两条路由，因为**取数时机**不同：
+ *   · `usage` 是"某个会话花了多少"，每 600ms 可能问一次，且胶囊必须立刻有答案；
+ *   · `quota` 是"这个套餐的 5 小时 / 周 / 月额度用了多少"，与会话无关、60 秒才变一次。
+ * 合在一条里会让每次会话轮询都去摸额度接口（哪怕只是本会话用量在涨）。
+ */
+export const QUOTA_API_PATH = '/composer-ux/quota'
+
+/**
  * 模型清单（0.14.1）：只读，给「优化选项」卡片的模型下拉用。
  *
  * 为什么要宿主中转：客户端拿不到 `llm` 服务，而「有哪些 provider、每个 provider 有哪些模型」

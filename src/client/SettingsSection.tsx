@@ -31,7 +31,7 @@ import {
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
   insertModeOf, newQuickPromptId, newSessionId, optimizerPromptFieldOf,
-  type ComposerUxSettings, type MenuField, type OptimizerTier, type QuickPrompt,
+  type ComposerUxSettings, type MenuField, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
   RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
 } from '../settings-contract.ts'
@@ -58,9 +58,11 @@ import {
   evaluateRecordedKey, displayChord, type ChordEvent,
 } from './chords.ts'
 import {
-  description, hintError, hintInfo, kbd, pill, pillActive, row, rowDesc, rowText, rowTitle,
-  textInput,
+  hintError, hintInfo, kbd, pill, pillActive, rowDesc, textInput,
 } from './styles.ts'
+import {
+  Card, CardChevron, CardTitle, GroupLabel, Row, Segmented,
+} from './ui-kit.tsx'
 
 /** 设置页注入面。 */
 export interface SettingsSectionInjected {
@@ -119,31 +121,21 @@ export type SettingsSectionProps = SettingsSectionOwnerProps & {
   actions: SettingsSectionInjected['actions']
 }
 
-/** 展开区内的导语。 */
-const bodyLead: CSSProperties = { ...description, margin: '12px 0' }
-
-/** 折叠箭头（内联 SVG，展开时靠父级 class 旋转 180°）。 */
-function Chevron() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path
-        d="M3.25 5.5L7 9.25L10.75 5.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
 /**
  * 可折叠栏目：标题行左侧是展开按钮（整块可点），右侧是**这一栏的开关**与从属控件；
  * 默认折叠且不记忆展开状态（每次打开设置页都回到折叠）。
+ *
+ * 外观（描边 / 圆角 / 底色 / hover / 未启用虚线）全部来自 ui-kit 的 Card。
+ * 标题行仍留在这个文件里拼：它必须是"展开按钮 + 控件区"两个**兄弟**节点 ——
+ * 在 <button> 里再塞开关，点开关会连卡片一起展开，而且按钮套按钮是无效 HTML。
+ * 这条结构同时被 test/client-registration.mjs 钉着（源码里要有 `</button>` 紧跟
+ * `dsh-ux-cardControls` 这一段），所以 Card 只收 head、不替调用方决定标题行怎么拆。
  */
 function FoldCard(props: {
   name: string
   summary: string
+  /** 标题行里 `?` 的悬停说明：写这一栏"管什么、不管什么"，别重复概览那句话。 */
+  hint?: string
   /** 这一栏的开关（六栏都有）。关掉时概览前会加「未启用 · 」，卡片描边变虚线。 */
   toggle?: { readonly checked: boolean; readonly onChange: (next: boolean) => void; readonly disabled?: boolean }
   /** 标题行右侧、开关左边的从属控件（三档 / 小开关）。 */
@@ -153,47 +145,41 @@ function FoldCard(props: {
   const [open, setOpen] = useState(false)
   const off = props.toggle !== undefined && props.toggle.checked === false
   return (
-    <section className={[
-      'dsh-ux-card',
-      open ? 'dsh-ux-cardOpen' : '',
-      off ? 'dsh-ux-cardOff' : '',
-    ].filter(part => part !== '').join(' ')}>
-      {/*
-        标题行分成两块：左边整块是"展开"按钮（整行可点，键盘可达），右边是从属控件 + 本栏开关。
-        不能在 <button> 里塞按钮（HTML 不允许、点击也会冒泡成"展开"），所以拆成兄弟节点。
-      */}
-      <div className="dsh-ux-cardHeaderRow">
-        <button
-          type="button"
-          className="dsh-ux-cardHeader"
-          aria-expanded={open}
-          onClick={() => { setOpen(current => !current) }}
-        >
-          <span className="dsh-ux-cardHeadText">
-            <span className="dsh-ux-cardName">{props.name}</span>
-            <span className="dsh-ux-cardDescription">
-              {off ? `未启用 · ${props.summary}` : props.summary}
-            </span>
-          </span>
-          <span className={open ? 'dsh-ux-cardChevron dsh-ux-cardChevronOpen' : 'dsh-ux-cardChevron'}>
-            <Chevron />
-          </span>
-        </button>
-        <span className="dsh-ux-cardControls">
-          {props.controls}
-          {props.toggle !== undefined && (
-            <Switch
-              small
-              label={`${props.name}：启用这一栏`}
-              checked={props.toggle.checked}
-              disabled={props.toggle.disabled === true}
-              onChange={props.toggle.onChange}
+    <Card
+      open={open}
+      off={off}
+      head={(
+        <div className="dsh-ux-cardHeaderRow">
+          <button
+            type="button"
+            className="dsh-ux-cardHeader"
+            aria-expanded={open}
+            onClick={() => { setOpen(current => !current) }}
+          >
+            <CardTitle
+              name={props.name}
+              hint={props.hint}
+              summary={off ? `未启用 · ${props.summary}` : props.summary}
             />
-          )}
-        </span>
-      </div>
+            <CardChevron open={open} />
+          </button>
+          <span className="dsh-ux-cardControls">
+            {props.controls}
+            {props.toggle !== undefined && (
+              <Switch
+                small
+                label={`${props.name}：启用这一栏`}
+                checked={props.toggle.checked}
+                disabled={props.toggle.disabled === true}
+                onChange={props.toggle.onChange}
+              />
+            )}
+          </span>
+        </div>
+      )}
+    >
       {open && <div className="dsh-ux-cardBody">{props.children}</div>}
-    </section>
+    </Card>
   )
 }
 
@@ -249,48 +235,40 @@ function KeyRow(props: {
     return () => { window.removeEventListener('keydown', onKeyDown, true) }
   }, [recording, conflict, onChange])
 
-  const base = first === true ? { ...row, borderTop: 'none' } : row
-
   return (
-    <div style={{ ...base, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-      <div style={rowText}>
-        <div style={rowTitle}>{title}</div>
-        <div style={rowDesc}>{desc}</div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={kbd}>{displayChord(value)}</span>
-        {!recording && presets.map(preset => (
-          <button
-            key={preset}
-            type="button"
-            style={value === preset ? pillActive : pill}
-            onClick={() => { setError(null); onChange(preset) }}
-          >
-            {displayChord(preset)}
-          </button>
-        ))}
-        {!recording && value !== '' && (
-          <button type="button" style={pill} onClick={() => { setError(null); onChange('') }}>
-            清除
-          </button>
-        )}
+    <Row title={title} desc={desc} first={first} stacked>
+      <span style={kbd}>{displayChord(value)}</span>
+      {!recording && presets.map(preset => (
         <button
+          key={preset}
           type="button"
-          style={recording ? pillActive : pill}
-          onClick={() => { setRecording(true); setError(null) }}
+          style={value === preset ? pillActive : pill}
+          onClick={() => { setError(null); onChange(preset) }}
         >
-          {recording ? '请按下新组合键…' : '自定义…'}
+          {displayChord(preset)}
         </button>
-        {recording && (
-          <button type="button" style={pill} onClick={() => { setRecording(false); setError(null) }}>
-            Esc 取消
-          </button>
-        )}
-        {error !== null && (
-          <span style={{ color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 }}>{error}</span>
-        )}
-      </div>
-    </div>
+      ))}
+      {!recording && value !== '' && (
+        <button type="button" style={pill} onClick={() => { setError(null); onChange('') }}>
+          清除
+        </button>
+      )}
+      <button
+        type="button"
+        style={recording ? pillActive : pill}
+        onClick={() => { setRecording(true); setError(null) }}
+      >
+        {recording ? '请按下新组合键…' : '自定义…'}
+      </button>
+      {recording && (
+        <button type="button" style={pill} onClick={() => { setRecording(false); setError(null) }}>
+          Esc 取消
+        </button>
+      )}
+      {error !== null && (
+        <span style={{ color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 }}>{error}</span>
+      )}
+    </Row>
   )
 }
 
@@ -380,16 +358,12 @@ function ToggleRow(props: {
 }) {
   const { label, desc, checked, onChange, action, first } = props
   return (
-    <div style={first === true ? { ...row, borderTop: 'none' } : row}>
-      <div style={rowText}>
-        <div style={rowTitle}>{label}</div>
-        {desc !== undefined && desc !== '' && <div style={rowDesc}>{desc}</div>}
-      </div>
+    <Row title={label} desc={desc} first={first}>
       {action !== undefined && (
         <button type="button" style={pill} onClick={action.onClick}>{action.label}</button>
       )}
       <Switch label={label} checked={checked} onChange={onChange} />
-    </div>
+    </Row>
   )
 }
 
@@ -420,15 +394,9 @@ function TextFieldRow(props: {
     onChange(draft.trim())
   }
 
-  const base = first === true ? { ...row, borderTop: 'none' } : row
-
   return (
-    <div style={{ ...base, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-      <div style={rowText}>
-        <div style={rowTitle}>{title}</div>
-        <div style={rowDesc}>{desc}</div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <Row title={title} desc={desc} first={first} stacked>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
         <input
           type="text"
           value={draft}
@@ -452,7 +420,7 @@ function TextFieldRow(props: {
           <button type="button" style={pill} onClick={action.onClick}>{action.label}</button>
         )}
       </div>
-    </div>
+    </Row>
   )
 }
 
@@ -711,20 +679,19 @@ function DefaultTerminalBody(props: {
   return (
     <>
       {!hideMode && (
-      <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-        <div style={rowText}>
-          <div style={rowTitle}>终端工具</div>
-          <div style={rowDesc}>
-            {TERMINAL_MODES.find(item => item.id === settings.terminalMode)?.hint ?? ''}
-          </div>
-        </div>
-        <PillChoice
+      <Row
+        title="终端工具"
+        desc={TERMINAL_MODES.find(item => item.id === settings.terminalMode)?.hint ?? ''}
+        first
+        stacked
+      >
+        <Segmented
           items={TERMINAL_MODES}
           value={settings.terminalMode}
           onChange={mode => { setField(TERMINAL_MODE_FIELD, mode) }}
           ariaLabel="终端工具"
         />
-      </div>
+      </Row>
       )}
 
       {settings.terminalMode !== 'pwsh' && (<>
@@ -989,14 +956,16 @@ function NotifyCard({ settings, setField }: {
   return (
     <FoldCard
       name="微信通知"
+      hint="一次事件只发一条：不轮询、不重试、不回执。发送失败只在这一页的状态行里说，不会补发。"
       summary={on ? `已开 · ${channel === 'pushplus' ? 'PushPlus' : '企业微信机器人'} · 只能通知，不能回` : '只能通知，不能回'}
       toggle={{ checked: on, onChange: next => { setField(NOTIFY_ENABLED_FIELD, next) } }}
     >
-      <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
+      <p className="dsh-ux-lead">
         <strong>只能通知，不能回。</strong>需要你回应 / 完成 / 出错时推一条到你手机；要处理仍回 DSH 界面点。
         <br />
         <span style={{ opacity: 0.75 }}>如果你同时装了 dsh-notify-plugin（个人微信直连那条），同一类事件只开一边 —— 两边都开就会收到两条。这一条是给"不想再装一个插件"的人留的退路。</span>
-      </div>
+      </p>
+      <GroupLabel>推送渠道</GroupLabel>
       <ToggleRow label="用 PushPlus（到你关注的公众号）" desc="pushplus.plus 用微信登录拿 token，填在下面。"
         checked={channel === 'pushplus'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'pushplus') }} first />
       <TextFieldRow title="PushPlus token"
@@ -1009,8 +978,9 @@ function NotifyCard({ settings, setField }: {
         desc={settings.notifyWecomWebhook === '' ? '还没填' : `当前：${maskSecret(settings.notifyWecomWebhook)}`}
         value={settings.notifyWecomWebhook} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" maxLength={500}
         onChange={next => { setField(NOTIFY_WECOM_FIELD, next) }} />
+      <GroupLabel>推送时机</GroupLabel>
       <ToggleRow label="需要你回应时通知" desc="等审批、等你回答问题时推一条。" checked={kinds['needs-input']}
-        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, 'needs-input': next }) }} />
+        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, 'needs-input': next }) }} first />
       <ToggleRow label="任务完成时通知" desc="一轮跑完（运行中→空闲）推一条。" checked={kinds.done}
         onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, done: next }) }} />
       <ToggleRow label="任务出错时通知" desc="某步或某轮报错时推一条。" checked={kinds.error}
@@ -1038,9 +1008,10 @@ function DirectoryPickCard() {
   return (
     <FoldCard
       name="工作区目录选择"
+      hint="恢复点写在 src/client.tsx：接管那两个槽位的那一段被硬编码为不安装，修好共存之后从那里接回来。"
       summary="已停用 · 与官方目录流程共存时会回滚工作区状态（现在用官方应用内浏览对话框）"
     >
-      <div style={{ margin: '10px 0', fontSize: 12, lineHeight: 1.6, opacity: 0.85 }}>
+      <p className="dsh-ux-lead">
         <strong>暂时停用</strong>：打开它时，插件会接管官方那两个目录流程槽位，真机上表现为
         <strong>选完工作区几秒后又退回「选择一个工作区开始」</strong>（工作区其实已经建好，
         只是界面状态被顶回去）。不接管就正常，所以现在默认不接管。
@@ -1050,7 +1021,7 @@ function DirectoryPickCard() {
           （它自己的 README 写着「不枚举盘符根 —— 跨盘依赖浏览器 UI 的路径输入入口」），
           所以换盘要手输；这一项就是把它换成系统文件夹框。等修好共存那一步再恢复。
         </span>
-      </div>
+      </p>
     </FoldCard>
   )
 }
@@ -1184,7 +1155,9 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
     ? '宿主已原生支持（不需要）'
     : settings.headerEnabled
       ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
-      : '未启用'
+      // 关掉时 `FoldCard` 会在概览前加「未启用 · 」，这里不能再写一遍
+      // （否则渲染成「未启用 · 未启用」——和 0.24.0 给微信通知修过的是同一类 bug）。
+      : '旧宿主才需要，这一栏现在不起作用'
   const quickCounts = bookCounts(book)
   const quickSummary = `${quickCounts.categories} 个分类 · ${quickCounts.prompts} 条`
     + ` · 每次 ${quickCounts.always} · 仅首次 ${quickCounts.first}`
@@ -1231,9 +1204,10 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
   })()
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      {/* 顶部常显区：中文名 + 内嵌英文包名的一行描述 + 总开关。 */}
-      <section className="dsh-ux-card">
+    <div className="dsh-ux-settings" style={{ padding: '4px 2px' }}>
+      {/* 顶部常显区：中文名 + 内嵌英文包名的一行描述 + 总开关。
+          它不折叠（没有展开态），所以只用卡片外观、不走 FoldCard 那一套受控状态。 */}
+      <section className="dsh-ux-card dsh-ux-cardTop">
         <div className="dsh-ux-cardHeaderStatic">
           <span className="dsh-ux-cardHeadText">
             <h2 className="dsh-ux-cardName">输入体验</h2>
@@ -1292,12 +1266,17 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         <NotifyCard settings={settings} setField={actions.setField} />
         <DirectoryPickCard />
         {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
-        <FoldCard name="自检" summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）">
+        <FoldCard
+          name="自检"
+          hint="只读取、不改任何设置；表里的每一行都能在源码里找到对应位置。"
+          summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）"
+        >
           <DoctorCard />
         </FoldCard>
         {/* 0.23.0 自启动：开关的 checked 用**宿主读回来的注册表事实**，不是本地意图。 */}
         <FoldCard
           name="自启动"
+          hint="以注册表为准：这里显示的是宿主当前读到的状态，不是上次点了什么。两个运行时各写各的启动项，互不覆盖。"
           summary={autostart.state?.supported === false
             ? '仅 Windows 支持（登录时自动拉起当前这个运行时）'
             : autostartEnabled ? '开启中 · 登录 Windows 时自动拉起当前这个运行时' : '登录时自动拉起当前这个运行时'}
@@ -1345,13 +1324,14 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
       {settings.enabled && (<>
       <FoldCard
         name="键位"
+        hint="只管输入框里的发送与换行。未绑定的 Enter 系按键不会触发发送或换行；中文输入法组合期间不受影响。"
         summary={keySummary}
         toggle={{
           checked: sections.keys,
           onChange: next => { actions.setField(KEYS_ENABLED_FIELD, next) },
         }}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           支持常用预设，也可以点击「自定义…」后直接按下任意组合键录制（Esc 取消，Backspace 清除）。
           未绑定的 Enter 系按键不会触发发送或换行；Ctrl+Enter / ⌘+Enter 未被绑定时保留原「加速提交」行为；
           中文输入法组合期间不受影响。
@@ -1393,26 +1373,24 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
       */}
       <FoldCard
         name="右键菜单"
+        hint="只影响右键弹出的菜单。官方档下本插件完全不介入，别的插件与浏览器自己的右键处理原样生效。"
         summary={menuSummary}
         toggle={{
           checked: sections.menu,
           onChange: next => { actions.setField(MENU_ENABLED_FIELD, next) },
         }}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           右键点击输入框时弹出哪一种菜单。只影响右键，不影响键位与其它功能。
         </p>
-        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-          <div style={rowText}>
-            <div style={rowTitle}>菜单来源</div>
-          </div>
-          <PillChoice
+        <Row title="菜单来源" first stacked>
+          <Segmented
             items={MENU_MODES}
             value={settings.menuMode}
             onChange={mode => { actions.setField(MENU_MODE_FIELD, mode) }}
             ariaLabel="右键菜单来源"
           />
-        </div>
+        </Row>
         {settings.menuMode === 'official' && (
           <p style={hintInfo}>
             <strong>官方</strong>：本插件完全不介入，DSH 与其它插件自己的右键处理原样生效
@@ -1447,12 +1425,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
               注意：chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
               或复制上面那串粘贴到地址栏。
             </p>
-            <div style={{ ...row, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-              <div style={rowText}>
-                <div style={rowTitle}>菜单条目</div>
-                <div style={rowDesc}>这 7 个开关决定自定义菜单里出现哪些条目，关掉的不显示。</div>
-              </div>
-            </div>
+            <Row title="菜单条目" desc="这 7 个开关决定自定义菜单里出现哪些条目，关掉的不显示。" stacked />
             {MENU_ITEMS.map((item, index) => (
               <ToggleRow
                 key={item.field}
@@ -1478,13 +1451,14 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
 
       <FoldCard
         name="快捷指令"
+        hint="这里管清单内容与附加规则；输入框工具行里那个按钮只是入口。附加规则按列表顺序拼接，输入框里不提前显示。"
         summary={quickSummary}
         toggle={{
           checked: sections.quick,
           onChange: next => { actions.setField(QUICK_ENABLED_FIELD, next) },
         }}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           输入框工具行里那个「快捷指令」按钮点开就是这张清单：点条目把内容插入输入框。
           每条右侧的三选一决定<strong>发送时怎么附加</strong>：
           「关」= 只插入不附加；「每次」= 每次发送都附加到消息<strong>末尾</strong>；
@@ -1496,27 +1470,19 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           宿主逐条做字面比对，对不上就丢掉那一条并在状态行里记账 ——
           所以"替你发明一条你没说过的需求"在结构上做不到。下面可以改每一档用的提示词。
         </p>
-        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-          <div style={rowText}>
-            <div style={rowTitle}>优化强度</div>
-            <div style={rowDesc}>
-              {OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.hint ?? ''}
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {OPTIMIZER_TIERS.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                title={item.hint}
-                style={settings.optimizerTier === item.id ? pillActive : pill}
-                onClick={() => { actions.setField(OPTIMIZER_TIER_FIELD, item.id as OptimizerTier) }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <Row
+          title="优化强度"
+          desc={OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.hint ?? ''}
+          first
+          stacked
+        >
+          <Segmented
+            items={OPTIMIZER_TIERS}
+            value={settings.optimizerTier}
+            onChange={tier => { actions.setField(OPTIMIZER_TIER_FIELD, tier) }}
+            ariaLabel="优化强度"
+          />
+        </Row>
         <ToggleRow
           label="携带会话上下文"
           desc="优化时把当前会话最近的往来（各 4 条、共约 1600 字）一并交给模型，用来消歧义 —— 比如“它那个也改一下”里的“它”指谁。关掉就只按草稿本身优化。上下文只发给你自己配置的那条模型路由；它只用于理解，不能当引文依据。"
@@ -1549,25 +1515,26 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           value={settings[optimizerPromptFieldOf(settings.optimizerTier) as keyof ComposerUxSettings] as string}
           onChange={next => { actions.setField(optimizerPromptFieldOf(settings.optimizerTier) as SettingsField, next) }}
         />
-        <div style={{ ...row, borderTop: 'none', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-          <div style={rowText}>
-            <div style={rowTitle}>快捷指令清单</div>
-            <div style={rowDesc}>
-              分类在这里管理（面板里只做切换）；内置 9 条可以直接用，改完记得点「保存修改」。
-            </div>
+        <Row
+          title="快捷指令清单"
+          desc="分类在这里管理（面板里只做切换）；内置 9 条可以直接用，改完记得点「保存修改」。"
+          stacked
+        >
+          <div style={{ width: '100%' }}>
+            <QuickPromptsEditor
+              book={book}
+              status={bookStatus}
+              onSave={next => { actions.saveBook(next) }}
+              onReload={() => { actions.reloadBook() }}
+              onReset={() => { actions.resetBook() }}
+            />
           </div>
-          <QuickPromptsEditor
-            book={book}
-            status={bookStatus}
-            onSave={next => { actions.saveBook(next) }}
-            onReload={() => { actions.reloadBook() }}
-            onReset={() => { actions.resetBook() }}
-          />
-        </div>
+        </Row>
       </FoldCard>
 
       <FoldCard
         name="设置面板"
+        hint="只管这个设置面板的大小与边缘缩放。导航列的滚动由 DSH 官方负责，本插件不介入。"
         summary={panelSummary}
         toggle={{
           checked: sections.panel,
@@ -1582,7 +1549,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           />
         )}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           导航列的滚动由 DSH 官方的设置页自己负责，本插件不再介入。
           开启「边缘调整大小」后，把鼠标移到设置面板的边或角上（出现高亮或光标变化）拖动即可改变面板大小，
           尺寸会记住，下次打开保持。（这个开关在标题行上。）
@@ -1621,6 +1588,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
 
       <FoldCard
         name="OpenCode 请求头"
+        hint="只补进 llm-pi-ai 里已存在的 opencode 系路由，不会凭空新建 provider；总开关关闭时补的头会自动撤销。"
         summary={headerSummary}
         // 这一栏没有新键：原来的「附加请求头」本来就是"这一栏要不要生效"，直接当卡级开关。
         toggle={{
@@ -1646,7 +1614,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           ⚠️ 请使用自定义的 OpenCode API 地址，不要用 DSH 自带的 API 地址配置：
           用自带的配置无法上传图片，一旦发送图片就会报错。
         </p>
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           OpenCode 的接口要求客户端每次请求都带上一个稳定的会话 ID 请求头（官方 Go 文档
           「可以在哪里使用？」第 3 条：为每段对话在 x-opencode-session 中发送会话 ID，
           以便其优化路由与提示词缓存）。旧版 DSH 不发这个头，所以这一栏把它补进
@@ -1687,6 +1655,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
 
       <FoldCard
         name="默认终端"
+        hint="只在 Windows 上接管。换档会立刻重新下发给正在跑的会话，但会话历史里可能还留着旧工具名。"
         summary={terminalSummary}
         toggle={{
           checked: sections.terminal,
@@ -1703,7 +1672,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           />
         )}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           Windows 上 DSH 给模型的终端工具是 PowerShell，而模型对 bash 语法的把握明显更好。这一栏把终端
           换成 Git Bash：模型看到的工具就叫 bash、PowerShell 那个工具会从它的工具列表里消失，
           命令里的路径与引号按 bash 规则写。本机不需要装 Git for Windows 到默认目录——探测会先找
@@ -1721,13 +1690,14 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
       */}
       <FoldCard
         name="统计行"
+        hint="只改输入框下面那一行文字的小数位数（连它的无障碍名字一起改）；每轮用量弹窗保持官方原样。"
         summary={statsSummary}
         toggle={{
           checked: sections.stats,
           onChange: next => { actions.setField(STATS_ENABLED_FIELD, next) },
         }}
       >
-        <p style={bodyLead}>
+        <p className="dsh-ux-lead">
           输入框下方那行用量统计里的「缓存命中 xx%」。官方平时给整数（「缓存命中 12%」），
           只在「整数四舍五入会把没满说成满」时才自动多给几位（「99.95%」）。
           打开后常态给 {HIT_DIGITS} 位小数（「缓存命中 12.346%」），并<strong>沿用官方那条
@@ -1746,7 +1716,11 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
         要做的事只有一件 —— 让"按模型改峰/谷单价"有个地方填。做法/坑见 client/CostCard.tsx
         的文件头（留空＝官方价、非法文本不静默清空、写设置合并 + 回声识别）。
       */}
-      <FoldCard name="金额" summary={costSummary}>
+      <FoldCard
+        name="金额"
+        hint="只影响本插件显示的费用估算，不改账单；留空＝沿用官方价。峰谷按每笔用量发生时刻的档结算。"
+        summary={costSummary}
+      >
         <CostCardBody settings={settings} setField={actions.setField} clearField={actions.clearField} />
       </FoldCard>
       </>)}

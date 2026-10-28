@@ -18,7 +18,7 @@ export {
   QUICK_CATEGORY_NAME_MAX, QUICK_PROMPTS_API_PATH, INSERT_MODES, MENU_MODES,
   OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_PROMPT_MAX, optimizerPromptFieldOf,
   alwaysQuickPrompts, appendBatchForSend, bookToFile, defaultQuickBook, firstOnlyQuickPrompts,
-  flattenQuickPrompts, insertModeOf, menuModeFrom, newQuickCategoryId, sanitizeBook,
+  flattenQuickPrompts, insertModeOf, newQuickCategoryId, sanitizeBook,
 } from '../src/settings-contract.ts'
 /**
  * 发送路径的三个函数一起出口：`appendBatchForSend`（决定这一批有谁）+ `publishInputBridge`
@@ -238,18 +238,8 @@ export {
 } from '../src/usage-fold.ts'
 /** 「按 route 分列」接口路径（宿主半注册、客户端半调用）。 */
 export {
-  NATIVE_STATUS_PREFIX, PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
+  PRICE_AUTO_SYNC_FIELD, PRICE_OVERRIDES_FIELD, SYNC_API_PATH, SYNCED_PRICES_FIELD, USAGE_API_PATH,
 } from '../src/settings-contract.ts'
-/**
- * 「OpenCode 请求头」的宿主能力探测（0.25.0）。
- *
- * 判据是**宿主 pi-ai 里有没有 `dist/providers/opencode-headers.js`**（能力就是那个模块），
- * 版本号只用来写给人看的证据。这条逻辑必须能单测，因为它的两个方向都有代价：
- * 误判成"原生支持"会让旧宿主静默失效；误判成"旧宿主"会顶掉真实 session id。
- */
-export {
-  NATIVE_SUPPORT_ENV, PI_AI_NATIVE_SINCE, detectNativeSessionHeader, versionAtLeast, versionParts,
-} from '../src/opencode-header.ts'
 /**
  * 订阅通道的额度计费（0.26.0）。
  *

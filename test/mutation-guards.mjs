@@ -71,7 +71,7 @@ const cases = [
     from: '  const signal = SECTION_SIGNALS[field]\n  return signal === undefined ? false : signal(source)',
     to: '  return true',
     test: 'test/quick-commands.mjs',
-    expect: '全新安装（空文档）→ 五栏全关',
+    expect: '全新安装（空文档）→ 各栏全关',
   },
   {
     name: 'J 判据丢掉"键出现过"那一半（缺省值和"碰过"混为一谈）',
@@ -79,7 +79,7 @@ const cases = [
     from: '  return value !== undefined && value !== untouched',
     to: '  return value !== untouched',
     test: 'test/quick-commands.mjs',
-    expect: '全新安装（空文档）→ 五栏全关',
+    expect: '全新安装（空文档）→ 各栏全关',
   },
   {
     name: 'K 宿主半终端策略不再看栏开关（关掉也照样接管）',
@@ -114,74 +114,8 @@ const cases = [
     expect: '书本有非内置内容 → 写回 quickEnabled: true',
   },
   // ── 右键菜单卡：三档说明互斥 + 那 7 项搬回卡内 ─────────────────────────────
-  {
-    name: 'O 那 7 个条目开关不再由「自定义」档门控（三档都显示）',
-    file: 'src/client/SettingsSection.tsx',
-    from: "        {settings.menuMode === 'custom' && (",
-    to: '        {true && (',
-    test: 'test/client-registration.mjs',
-    expect: '在「自定义」分支里',
-  },
-  {
-    name: 'P 三档说明不再互斥（点哪档都三段全铺开）',
-    file: 'src/client/SettingsSection.tsx',
-    from: "        {settings.menuMode === 'official' && (",
-    to: '        {true && (',
-    test: 'test/client-registration.mjs',
-    expect: '点哪档只显示哪档',
-  },
-  {
-    name: 'Q strip 那条死掉的路又接回来（标题行第二个入口复活）',
-    file: 'src/client/SettingsSection.tsx',
-    from: '      {open && <div className="dsh-ux-cardBody">{props.children}</div>}',
-    to: '      {false && <div className="dsh-ux-cardStrip" />}\n'
-      + '      {open && <div className="dsh-ux-cardBody">{props.children}</div>}',
-    test: 'test/client-registration.mjs',
-    expect: 'strip 那一套',
-  },
-  {
-    name: 'R 标题行下又重复一遍当前档位的 hint（说明变成两份）',
-    file: 'src/client/SettingsSection.tsx',
-    from: '        <Row title="菜单来源" first stacked>',
-    to: '        <Row title="菜单来源" first stacked'
-      + ' hint={MENU_MODES.find(item => item.id === settings.menuMode)?.hint ?? \'\'}>',
-    test: 'test/client-registration.mjs',
-    expect: '不再重复当前档位的 hint',
-  },
-  {
-    name: 'S 那 7 个条目开关整段删掉（自定义档里再也改不了条目）',
-    file: 'src/client/SettingsSection.tsx',
-    from: '            {MENU_ITEMS.map((item, index) => (',
-    to: '            {false && [].map((item, index) => (',
-    test: 'test/client-registration.mjs',
-    expect: '在「自定义」分支里',
-  },
   // ── 真渲染那一层（`test/settings-render.mjs`）：源码字符串还在、只是渲染不出来 ──────
   // T/U/V 这三条是**只有渲染层能抓到**的：源码里条件与那 7 行都原样在，搜字符串的护栏照样绿。
-  {
-    name: 'T 那 7 行渲染被短路掉（源码里还在，页面上没有）',
-    file: 'src/client/SettingsSection.tsx',
-    from: '            {MENU_ITEMS.map((item, index) => (',
-    to: '            {false && MENU_ITEMS.map((item, index) => (',
-    test: 'test/settings-render.mjs',
-    expect: '自定义：7 行都在',
-  },
-  {
-    name: 'U 浏览器档的说明被短路掉（那一档看不到任何说明）',
-    file: 'src/client/SettingsSection.tsx',
-    from: "        {settings.menuMode === 'browser' && (",
-    to: '        {false && (',
-    test: 'test/settings-render.mjs',
-    expect: '浏览器：只有浏览器那段',
-  },
-  {
-    name: 'V 三档说明全铺开（把自定义那段的互斥条件去掉）',
-    file: 'src/client/SettingsSection.tsx',
-    from: "        {settings.menuMode === 'custom' && (",
-    to: '        {true && (',
-    test: 'test/settings-render.mjs',
-    expect: '一行条目开关都没有',
-  },
   // ── 0.1.7 适配（0.6.0）后的新护栏 ────────────────────────────────────────
   // 这一组针对的失败模式是"插件整块不挂载"：静态 inject 绑错代、或某一代的服务
   // 认领被删掉，表现都只是"界面里少了一块"，构建期完全看不出来。
@@ -227,14 +161,6 @@ const cases = [
     to: '  if (typeof withMethod.volatile === \'function\') return node',
     test: 'test/host-settings-generations.mjs',
     expect: '每个字段都带 volatile 标记',
-  },
-  {
-    name: 'AA Config 读不出来时不再退回 describe（自己的行被判成"没有值"）',
-    file: 'src/host.ts',
-    from: '        if (own !== undefined) return own',
-    to: '        return own',
-    test: 'test/host-settings-generations.mjs',
-    expect: '自己那一行从 describe 读得到',
   },
   // ── 接管前的自检探针（2026-09-25 新增）─────────────────────────────────────
   {
@@ -901,16 +827,6 @@ const cases = [
     expect: '用到的字段常量都 import/定义过',
   },
   {
-    // Node 20（CI 的矩阵版本）没有全局 navigator；去掉这句守卫，三个平台的测试步骤会一起崩
-    // —— 0.12.0 首次跑三平台 CI 时就是这样，本地 Node 24 反而看不见。
-    name: 'DF 预读剪贴板不再判 navigator 是否存在（Node 20 上右键直接 ReferenceError）',
-    file: 'src/client/interceptors.ts',
-    from: "  if (typeof navigator === 'undefined') return\n  const readText = (navigator as Navigator",
-    to: '  const readText = (navigator as Navigator',
-    test: 'test/client-registration.mjs',
-    expect: '预读剪贴板前先判 navigator 存在',
-  },
-  {
     // 0.12.0 截图验收抓到的那条：主按钮的填色与前景必须是配对令牌。
     // 这条变异把它退回到"深色主题下白底白字"的写法，2.0f 的对象级断言必须变红。
     name: 'DG 主按钮前景退回不存在的令牌名（深色主题下白底黑字变白字）',
@@ -1394,161 +1310,6 @@ const cases = [
   },
 
   {
-    name: "FP 审批不再透传（返回 undefined 而不还 next() 的结果）—— 动了红线",
-    file: "src/notify-hooks.ts",
-    from: "    return next === undefined ? undefined : next()\n  })\n\n  // ② 等回答：同样透传。",
-    to: "    return undefined\n  })\n\n  // ② 等回答：同样透传。",
-    test: "test/notify-hooks.mjs",
-    expect: "❗审批：原样返回 next() 的结果（不干预决策）",
-  },
-  {
-    name: "FQ 去掉 30 秒防刷屏（同一类事件会连续刷手机）",
-    file: "src/notify-send.ts",
-    from: "  if (notifySuppressed(io.lastSent, event, now)) {",
-    to: "  if (false) {",
-    test: "test/notify-send.mjs",
-    expect: "30 秒内同类 ⇒ 压掉，且说清是防刷屏",
-  },
-  {
-    name: "FR 凭据不打码（token 会原样出现在提示里）—— 动了红线",
-    file: "src/notify.ts",
-    from: "  if (value.length < 8) return '****'\n  return `${value.slice(0, 4)}…${value.slice(-2)}`",
-    to: "  return value",
-    test: "test/wechat-notify.mjs",
-    expect: "打码只留头 4 尾 2",
-  },
-
-  {
-    name: "FS 远端也注册（没有 preload 桥时照样抢占槽位）—— 手机上会变成「点了没反应」",
-    file: "src/client/directory-flow.ts",
-    from: "  const bridge = nativePickBridge(scope)\n  if (bridge === undefined) return undefined",
-    to: "  const bridge = nativePickBridge(scope)\n  if (false) return undefined",
-    test: "test/directory-flow.mjs",
-    expect: "没有桥 → 返回 undefined（一个槽位都不装）",
-  },
-  {
-    name: "FT 影子优先级写成 0（与官方同优先级 ⇒ 安装期抛 already has a registration）",
-    file: "src/client/directory-flow.ts",
-    from: "priority: NATIVE_SHADOW_PRIORITY }, component)",
-    to: "priority: 0 }, component)",
-    test: "test/directory-flow.mjs",
-    expect: "两条都带 shadow 优先级",
-  },
-  {
-    name: "FU 去掉「已上膛」守卫（保持 open=true 时每次重渲染都再弹一次框）",
-    file: "src/client/directory-flow.ts",
-    from: "      if (armed) return\n      armed = true",
-    to: "      armed = true",
-    test: "test/directory-flow.mjs",
-    expect: "保持 true 不再弹（busy 采纳期间重渲染）",
-  },
-  {
-    name: "FV open 落回时不上膛（第二次点「选择工作区目录」不再弹框）",
-    file: "src/client/directory-flow.ts",
-    from: "      if (!open) {\n        armed = false\n        return\n      }",
-    to: "      if (!open) {\n        return\n      }",
-    test: "test/directory-flow.mjs",
-    expect: "再次请求 → 弹第二次",
-  },
-  {
-    name: "FW 取消被当成选中（用户点了取消却加了个工作区）",
-    file: "src/client/directory-flow.ts",
-    from: "        path => { settle(path === null ? { kind: 'cancel' } : { kind: 'picked', path }) },",
-    to: "        path => { settle({ kind: 'picked', path }) },",
-    test: "test/directory-flow.mjs",
-    expect: "null → cancel",
-  },
-  {
-    name: "FX 卸载后迟到的结果照样回报（HMR 换掉占用者会凭空加一个工作区）",
-    file: "src/client/directory-flow.ts",
-    from: "    if (options.isAlive !== undefined && !options.isAlive()) return\n    options.report(outcome)",
-    to: "    options.report(outcome)",
-    test: "test/directory-flow.mjs",
-    expect: "死实例的结果被丢弃",
-  },
-  {
-    name: "FY 失败只说 String(reason)（丢掉 Error.message，界面提示变成 Error: xxx）",
-    file: "src/client/directory-flow.ts",
-    from: "message: reason instanceof Error ? reason.message : String(reason)",
-    to: "message: String(reason)",
-    test: "test/directory-flow.mjs",
-    expect: "Error → error 且取 message",
-  },
-
-  {
-    name: "GZ 开关控制器不再幂等（每次同步都装一遍 ⇒ 同优先级重复注册当场抛错）",
-    file: "src/client/directory-flow.ts",
-    from: "        if (installed === undefined) installed = installDirectoryFlow(options.slots, options.scope, options.component)",
-    to: "        installed = installDirectoryFlow(options.slots, options.scope, options.component)",
-    test: "test/directory-flow.mjs",
-    expect: "重复同步不会装第二遍（幂等）",
-  },
-  {
-    name: "HA 关掉开关时不卸载（影子接管留在槽位上，界面再也回不到官方对话框）",
-    file: "src/client/directory-flow.ts",
-    from: "        return\n      }\n      dispose()\n    },",
-    to: "        return\n      }\n    },",
-    test: "test/directory-flow.mjs",
-    expect: "关掉：把已装的卸载掉",
-  },
-  {
-    name: "HB 「工作区目录选择」默认值改成开（接管官方槽位这件事就不打招呼了）",
-    file: "src/settings-contract.ts",
-    from: "  directoryPickEnabled: false,",
-    to: "  directoryPickEnabled: true,",
-    test: "test/client-registration.mjs",
-    expect: "字段仍留在契约里且默认关",
-  },
-  {
-    name: "HC 净化不再读这个字段（用户拨了开关、重启就丢）",
-    file: "src/settings-contract.ts",
-    from: "    directoryPickEnabled: asBool(DIRECTORY_PICK_ENABLED_FIELD),\n",
-    to: "",
-    test: "test/client-registration.mjs",
-    expect: "净化仍会读它",
-  },
-  {
-    name: "HD 停用后又被接回去（真机会回滚工作区状态）",
-    file: "src/client.tsx",
-    from: "    flow.sync(false)",
-    to: "    flow.sync(true)",
-    test: "test/client-registration.mjs",
-    expect: "❗接管被硬编码为不安装",
-  },
-  {
-    name: "HE 设置页不渲染这张卡（开关无处可拨）",
-    file: "src/client/SettingsSection.tsx",
-    from: "        <DirectoryPickCard />\n",
-    to: "",
-    test: "test/settings-render.mjs",
-    expect: "这张卡还在",
-  },
-  {
-    name: "HG 宿主 schema 漏掉目录选择字段（写设置会被 settings.mutate 抛 not volatile ⇒ 开关拨不动）",
-    file: "src/host.ts",
-    from: "    [DIRECTORY_PICK_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.directoryPickEnabled),\n",
-    to: "",
-    test: "test/client-registration.mjs",
-    expect: "工作区目录选择开关（DIRECTORY_PICK_ENABLED_FIELD）在 schema 里",
-  },
-  {
-    name: "HH 宿主 schema 再漏掉通知总开关（0.17.0 的真实事故复发）",
-    file: "src/host.ts",
-    from: "    [NOTIFY_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.notifyEnabled),\n",
-    to: "",
-    test: "test/client-registration.mjs",
-    expect: "微信通知总开关（NOTIFY_ENABLED_FIELD）在 schema 里",
-  },
-
-  {
-    name: "HI 设置页又把顶层 `setField` 传给卡片（真机 2026-10-10 的 TypeError 复发）",
-    file: "src/client/SettingsSection.tsx",
-    from: "        <NotifyCard settings={settings} setField={actions.setField} />",
-    to: "        <NotifyCard settings={settings} setField={setField} />",
-    test: "test/client-registration.mjs",
-    expect: "设置页每一处 `setField={…}` 都传 `actions.setField`",
-  },
-  {
     name: "HJ 组件 props 类型又把开放索引类型并回来（tsc 再也拦不住臆造的 props 名）",
     file: "src/client/SettingsSection.tsx",
     from: "export type SettingsSectionProps = SettingsSectionOwnerProps & {",
@@ -1571,14 +1332,6 @@ const cases = [
     to: "        await (async (write: () => Promise<void>) => { await write() })(\n          () => service.mutate(NAMESPACE, [{ op: 'set', path: [QUICK_ENABLED_FIELD], value: true }]),",
     test: "test/client-registration.mjs",
     expect: "「快捷指令」迁移那次写走 retryWrite",
-  },
-  {
-    name: "HM 「微信通知」概览又把「未启用」写进正文（FoldCard 会再前缀一次 ⇒ 显示两遍）",
-    file: "src/client/SettingsSection.tsx",
-    from: ": '只能通知，不能回'}",
-    to: ": '未启用 · 只能通知，不能回'}",
-    test: "test/settings-render.mjs",
-    expect: "「微信通知」概览没有被 FoldCard 前缀两次",
   },
   {
     name: "HN 「设置面板」概览不再兜底（干净 profile 上又显示 undefined×undefined）",
@@ -1655,8 +1408,8 @@ const cases = [
   {
     name: "IK 重启确认条被挪回卡片之后（用户抱怨的那个位置）",
     file: "src/client/SettingsSection.tsx",
-    from: "        <RestartBanner restart={restart} />\n        <NotifyCard",
-    to: "        <NotifyCard",
+    from: "        <RestartBanner restart={restart} />\n        {/* 0.22.0 自检",
+    to: "        {/* 0.22.0 自检",
     test: "test/client-registration.mjs",
     expect: "❗确认条挂在抬头正下方",
   },
@@ -1717,22 +1470,6 @@ const cases = [
     expect: "未知键 ⇒ 拒绝",
   },
   {
-    name: "HZ 请求头覆盖不再往配置里补头（运行期注入失效）",
-    file: "src/host.ts",
-    from: "  const row = objectOf(raw)\n  const providers = row === undefined ? undefined : objectOf(row.providers)\n  if (row === undefined || providers === undefined) return raw",
-    to: "  return raw\n  const row = objectOf(raw)\n  const providers = row === undefined ? undefined : objectOf(row.providers)\n  if (row === undefined || providers === undefined) return raw",
-    test: "test/host-header-mirror.mjs",
-    expect: "运行期覆盖把头发给了 opencode-go",
-  },
-  {
-    name: "IA 旧写入清理不再跑（0.21.x 残留永久留在用户配置里）",
-    file: "src/host.ts",
-    from: "  if (headerCleanup !== undefined) {",
-    to: "  if (false) {",
-    test: "test/host-header-mirror.mjs",
-    expect: "我们写过的那条被清掉",
-  },
-  {
     name: "IB 自检漏字段检测失效（schema 漏字段又变成静默事故）",
     file: "src/doctor.ts",
     from: "  return input.fieldConstants.filter(name => !keys.has(name)).slice().sort()",
@@ -1751,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.27.0\",",
+    from: "\"version\": \"0.28.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1762,7 +1499,7 @@ const cases = [
     from: "      path: DOCTOR_API_PATH,",
     to: "      path: '/composer-ux/doctor2',",
     test: "test/quick-commands.mjs",
-    expect: "注册了十二条 exact 路由",
+    expect: "注册了十一条 exact 路由",
   },
   {
     name: "HO retryWrite 不再重试（第一次撞锁就放弃）",
@@ -1823,31 +1560,6 @@ const cases = [
     expect: "用户自己 fork 出来的会话**没被**算进子代理",
   },
   // ── 0.25.0：宿主原生支持时不再注入（不然固定 UUID 会顶掉真实 session id）──────────
-  {
-    name: "SG 宿主原生支持时仍然注入（固定 UUID 顶掉每段对话的真实 session id）",
-    file: "src/host.ts",
-    from: "          if (nativeSessionHeader().support === 'native') return raw",
-    to: "          if (false) return raw",
-    test: "test/host-header-mirror.mjs",
-    expect: "值已经存在时也**不注入**",
-  },
-  {
-    name: "SH 探测判据不看模块文件（裁过包的旧宿主被误判成原生支持 ⇒ 静默失效）",
-    file: "src/opencode-header.ts",
-    from: "    if (!existsSync(join(piAiRoot, 'dist', 'providers', 'opencode-headers.js'))) return undefined",
-    to: "    if (!existsSync(join(piAiRoot, 'dist'))) return undefined",
-    test: "test/host-header-mirror.mjs",
-    expect: "版本够新但没有模块",
-  },
-  {
-    name: "SI 强制开关被忽略（探不到布局的用户没有退路）",
-    file: "src/opencode-header.ts",
-    from: "  if (forced === '1' || forced === 'true') return { support: 'native', evidence: '环境变量强制' }",
-    to: "  if (false) return { support: 'native', evidence: '环境变量强制' }",
-    test: "test/host-header-mirror.mjs",
-    expect: "⇒ native（不依赖文件布局）",
-  },
-  // ── 0.26.0：订阅通道的额度口径（把"扣额度"错算成别的数）────────────────────────
   {
     name: "SJ 订阅额度忽略峰谷（DeepSeek 高峰价翻倍 ⇒ 额度少算一半）",
     file: "src/subscription-plans.ts",

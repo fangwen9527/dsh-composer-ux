@@ -14,10 +14,8 @@ import { DoctorCard } from './DoctorCard.tsx'
 import { AutostartCard } from './AutostartCard.tsx'
 import { useAutostart } from './autostart.ts'
 import {
-  DEFAULT_CATEGORY_NAME, DEFAULT_HEADER_NAME, ENABLED_FIELD, HEADER_ENABLED_FIELD,
-  HEADER_NAME_FIELD, HEADER_NAME_MAX, HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  NATIVE_STATUS_PREFIX,
-  MENU_ITEMS, MENU_MODES, MENU_MODE_FIELD, NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD,
+  DEFAULT_CATEGORY_NAME, ENABLED_FIELD,
+  NEWLINE_PRESETS, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD,
   OPTIMIZER_CONTEXT_FIELD,
   OPTIMIZER_LEDGER_FIELD,
   OPTIMIZER_TIERS, OPTIMIZER_TIER_FIELD,
@@ -25,13 +23,11 @@ import {
   PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, QUICK_CATEGORY_MAX,
   QUICK_CATEGORY_NAME_MAX, QUICK_LABEL_MAX,
   QUICK_PROMPT_MAX, QUICK_TEXT_MAX, REPO_URL, RESTART_API_PATH, SEND_PRESETS, SITE_URL,
-  NOTIFY_CHANNEL_FIELD, NOTIFY_ENABLED_FIELD, NOTIFY_KINDS_FIELD, NOTIFY_PUSHPLUS_FIELD,
-  NOTIFY_TEST_API_PATH, NOTIFY_WECOM_FIELD,
-  KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+  KEYS_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD, STATS_ENABLED_FIELD,
   activeSections,
   insertModeOf, newQuickPromptId, newSessionId, optimizerPromptFieldOf,
-  type ComposerUxSettings, type MenuField, type QuickPrompt,
+  type ComposerUxSettings, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
   RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
 } from '../settings-contract.ts'
@@ -927,106 +923,6 @@ function useRestart(): RestartController {
 
 /** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
 /** 凭据打码（与宿主 redactSecret 同规则）。设置页可能被投屏或截图，token 不能被看全。 */
-function maskSecret(value: string): string {
-  if (value === '') return ''
-  return value.length < 8 ? '****' : `${value.slice(0, 4)}…${value.slice(-2)}`
-}
-
-/** 微信通知卡（0.17.0，单向：只推不收）。 */
-function NotifyCard({ settings, setField }: {
-  readonly settings: ComposerUxSettings
-  readonly setField: (field: SettingsField, value: unknown) => void
-}) {
-  const on = settings.notifyEnabled
-  const channel = settings.notifyChannel
-  const kinds = settings.notifyKinds
-  const [busy, setBusy] = useState(false)
-  const [note, setNote] = useState('')
-  const send = (): void => {
-    setBusy(true); setNote('')
-    void fetch(NOTIFY_TEST_API_PATH, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', [RESTART_CSRF_HEADER]: RESTART_CSRF_VALUE },
-      body: '{}',
-    })
-      .then(async r => await r.json() as { ok?: boolean, reason?: string })
-      .then(v => { setNote(v.ok === true ? '已发出 —— 去微信看一眼（这里不写“已验证”，只有你能确认）' : `没发出去：${v.reason ?? '未知原因'}`) })
-      .catch((e: unknown) => { setNote(`请求失败：${e instanceof Error ? e.message : String(e)}`) })
-      .finally(() => { setBusy(false) })
-  }
-  return (
-    <FoldCard
-      name="微信通知"
-      hint="一次事件只发一条：不轮询、不重试、不回执。发送失败只在这一页的状态行里说，不会补发。"
-      summary={on ? `已开 · ${channel === 'pushplus' ? 'PushPlus' : '企业微信机器人'} · 只能通知，不能回` : '只能通知，不能回'}
-      toggle={{ checked: on, onChange: next => { setField(NOTIFY_ENABLED_FIELD, next) } }}
-    >
-      <p className="dsh-ux-lead">
-        <strong>只能通知，不能回。</strong>需要你回应 / 完成 / 出错时推一条到你手机；要处理仍回 DSH 界面点。
-        <br />
-        <span style={{ opacity: 0.75 }}>如果你同时装了 dsh-notify-plugin（个人微信直连那条），同一类事件只开一边 —— 两边都开就会收到两条。这一条是给"不想再装一个插件"的人留的退路。</span>
-      </p>
-      <GroupLabel>推送渠道</GroupLabel>
-      <ToggleRow label="用 PushPlus（到你关注的公众号）" desc="pushplus.plus 用微信登录拿 token，填在下面。"
-        checked={channel === 'pushplus'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'pushplus') }} first />
-      <TextFieldRow title="PushPlus token"
-        desc={settings.notifyPushplusToken === '' ? '还没填（填了才能推送）' : `当前：${maskSecret(settings.notifyPushplusToken)}（要看全文请重新粘贴）`}
-        value={settings.notifyPushplusToken} placeholder="粘贴 token" maxLength={200}
-        onChange={next => { setField(NOTIFY_PUSHPLUS_FIELD, next) }} />
-      <ToggleRow label="用企业微信群机器人" desc="只有你的企业微信群里加个机器人，把 webhook 填下面。"
-        checked={channel === 'wecom'} onChange={() => { setField(NOTIFY_CHANNEL_FIELD, 'wecom') }} />
-      <TextFieldRow title="企业微信 webhook"
-        desc={settings.notifyWecomWebhook === '' ? '还没填' : `当前：${maskSecret(settings.notifyWecomWebhook)}`}
-        value={settings.notifyWecomWebhook} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" maxLength={500}
-        onChange={next => { setField(NOTIFY_WECOM_FIELD, next) }} />
-      <GroupLabel>推送时机</GroupLabel>
-      <ToggleRow label="需要你回应时通知" desc="等审批、等你回答问题时推一条。" checked={kinds['needs-input']}
-        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, 'needs-input': next }) }} first />
-      <ToggleRow label="任务完成时通知" desc="一轮跑完（运行中→空闲）推一条。" checked={kinds.done}
-        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, done: next }) }} />
-      <ToggleRow label="任务出错时通知" desc="某步或某轮报错时推一条。" checked={kinds.error}
-        onChange={next => { setField(NOTIFY_KINDS_FIELD, { ...kinds, error: next }) }} />
-      <ToggleRow label="测试推送" desc={note === '' ? '点右边按钮，立刻发一条到你微信验证配置。' : note} checked={false}
-        onChange={() => { /* 真动作在右边按钮 */ }} action={{ label: busy ? '发送中…' : '发送测试', onClick: send }} />
-    </FoldCard>
-  )
-}
-
-/**
- * 「工作区目录选择」（0.19.0 加开关；**0.23.3 起停用**，保留说明与恢复点）。
- *
- * 停用原因（2026-10-16 真机 + 用户拍板）：这一栏的做法是**接管官方那两个目录流程槽位**
- * （在官方占用者仍然活着时，用比它更低的优先级插进同一格）。真机上表现为：在桌面应用里
- * 选完工作区，输入框芯片先正常变成 Downloads，**几秒后自己退回「选择一个工作区开始」**；
- * 把这一栏关掉（=不接管、回到官方 browse）就完全正常。本插件那份占用者与官方 native 占用者
- * 逐行等价（都只弹一次框、只报一次结果），差异只剩"与官方占用者共存"这件事本身 ——
- * 而那正是官方从不使用的方式。在弄清回滚来自哪一步之前，宁可停用。
- *
- * 所以这张卡**不给开关**：不给一个"看起来能开、其实不生效"的控件。接管本身在
- * src/client.tsx 里被硬编码为不安装（恢复点写在那儿的注释里）。
- */
-function DirectoryPickCard() {
-  return (
-    <FoldCard
-      name="工作区目录选择"
-      hint="恢复点写在 src/client.tsx：接管那两个槽位的那一段被硬编码为不安装，修好共存之后从那里接回来。"
-      summary="已停用 · 与官方目录流程共存时会回滚工作区状态（现在用官方应用内浏览对话框）"
-    >
-      <p className="dsh-ux-lead">
-        <strong>暂时停用</strong>：打开它时，插件会接管官方那两个目录流程槽位，真机上表现为
-        <strong>选完工作区几秒后又退回「选择一个工作区开始」</strong>（工作区其实已经建好，
-        只是界面状态被顶回去）。不接管就正常，所以现在默认不接管。
-        <br />
-        <span style={{ opacity: 0.75 }}>
-          它本来要解决的问题还在：官方那个应用内对话框在 Windows 上祖先链止于盘符根
-          （它自己的 README 写着「不枚举盘符根 —— 跨盘依赖浏览器 UI 的路径输入入口」），
-          所以换盘要手输；这一项就是把它换成系统文件夹框。等修好共存那一步再恢复。
-        </span>
-      </p>
-    </FoldCard>
-  )
-}
-
 /** 抬头右端那枚按钮（在 GitHub 链接左边）。 */
 function RestartButton({ restart }: { readonly restart: RestartController }) {
   const busy = restart.stage === 'restarting' || restart.stage === 'asking'
@@ -1134,42 +1030,19 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
     ? `「${displayChord(conflict)}」已被另一侧占用，请先为另一侧选择其它按键。`
     : null
 
-  const menuEnabled = MENU_ITEMS.filter(item => settings[item.field]).length
   const keySummary = `发送 ${displayChord(settings.sendKey)} · 换行 ${displayChord(settings.newlineKey)}`
-  // 三档各自的摘要：一眼看出右键会弹哪一种菜单，以及自定义档当前开了几项。
-  const menuSummary = settings.menuMode === 'official'
-    ? '当前：官方不介入'
-    : settings.menuMode === 'browser'
-      ? '当前：浏览器菜单（粘贴免授权）'
-      : `当前：自定义菜单 · ${menuEnabled} / ${MENU_ITEMS.length} 项开启`
   // 尺寸没存过时（全新 profile 就是这种）不能把 `undefined×undefined` 摆出来 ——
   // 2026-10-10 在 0.2.1-alpha.2 的干净 profile 上真机看到过。这时如实说"用官方默认"。
   const panelSize = typeof settings.panelWidth === 'number' && typeof settings.panelHeight === 'number'
     ? `${settings.panelWidth}×${settings.panelHeight}`
     : '尺寸用官方默认'
   const panelSummary = `边缘缩放 ${settings.panelResize ? '开' : '关'} · ${panelSize}`
-  // 请求头栏目的概览直接复用宿主半写回来的执行结果（'宿主已原生支持…' / '运行期注入 …' 这类）。
-  // 0.25.0：宿主自己会发这个头时，正确状态是"不需要"而不是"没生效"——概览优先说这件事，
-  // 哪怕用户把开关关着（关着正好，本来就不用开）。
-  const headerNative = settings.headerStatus.startsWith(NATIVE_STATUS_PREFIX)
   /** 左侧「全局面板」的折叠状态（插件自有存储，见 nav-fold-store.ts）。 */
   const navFold = useNavFold()
-  const headerSummary = headerNative
-    ? '宿主已原生支持（不需要）'
-    : settings.headerEnabled
-      ? (settings.headerStatus === '' ? '已启用' : settings.headerStatus)
-      // 关掉时 `FoldCard` 会在概览前加「未启用 · 」，这里不能再写一遍
-      // （否则渲染成「未启用 · 未启用」——和 0.24.0 给微信通知修过的是同一类 bug）。
-      : '旧宿主才需要，这一栏现在不起作用'
   const quickCounts = bookCounts(book)
   const quickSummary = `${quickCounts.categories} 个分类 · ${quickCounts.prompts} 条`
     + ` · 每次 ${quickCounts.always} · 仅首次 ${quickCounts.first}`
     + ` · 优化档位 ${OPTIMIZER_TIERS.find(item => item.id === settings.optimizerTier)?.label ?? '高级'}`
-  const headerStatusText = headerNative
-    ? settings.headerStatus
-    : settings.headerEnabled
-      ? (settings.headerStatus === '' ? '等待首次写入…' : settings.headerStatus)
-      : '未启用（打开上方开关即写入）'
   // 终端卡片的概览：直接复用宿主半写回来的状态（'已生效：…' / '没找到可用的 bash' 这类）。
   // 「这一栏没启用」优先于宿主半的状态 —— 没开的时候状态行写的是"未启用"，但那句话在概览里
   // 不如「未启用」四个字直白（FoldCard 会再加一次前缀，所以这里只给被关掉时的档位描述）。
@@ -1215,7 +1088,7 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           <span className="dsh-ux-cardHeadText">
             <h2 className="dsh-ux-cardName">输入体验</h2>
             <p className="dsh-ux-cardDescription">
-              dsh-composer-ux · 主聊天输入框的键位、右键菜单与设置面板；设置即时生效并持久保存。
+              dsh-composer-ux · 主聊天输入框的键位、快捷指令与设置面板；设置即时生效并持久保存。
             </p>
           </span>
           {/*
@@ -1266,13 +1139,11 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           想把它挪回卡片后面的话，先看 test/client-registration.mjs 里那条顺序断言。
         */}
         <RestartBanner restart={restart} />
-        <NotifyCard settings={settings} setField={actions.setField} />
-        <DirectoryPickCard />
         {/* 0.22.0 自检：纯只读检查，所以这张卡没有开关。 */}
         <FoldCard
           name="自检"
           hint="只读取、不改任何设置；表里的每一行都能在源码里找到对应位置。"
-          summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 请求头 / 通知 / 环境）"
+          summary="把插件各处状态摊成一张表（字段 / 开关 / 终端 / 快捷指令 / 环境）"
         >
           <DoctorCard />
         </FoldCard>
@@ -1366,90 +1237,6 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             恢复默认
           </button>
         </div>
-      </FoldCard>
-
-      {/*
-        三档说明与那 7 个条目开关**都在卡内**，且按当前档位只显示相关的那部分
-        （用户要求：点官方看官方的、点浏览器看浏览器的、点自定义看自定义的）。
-        0.5.0 先做的是「7 项开关搬到标题行的『7 项 ▼』条」，用户看过真实界面后改回卡内：
-        那 7 项本来就只对「自定义」档有意义，摆在标题行等于在任何档位都能改一堆当时不生效的东西。
-      */}
-      <FoldCard
-        name="右键菜单"
-        hint="只影响右键弹出的菜单。官方档下本插件完全不介入，别的插件与浏览器自己的右键处理原样生效。"
-        summary={menuSummary}
-        toggle={{
-          checked: sections.menu,
-          onChange: next => { actions.setField(MENU_ENABLED_FIELD, next) },
-        }}
-      >
-        <p className="dsh-ux-lead">
-          右键点击输入框时弹出哪一种菜单。只影响右键，不影响键位与其它功能。
-        </p>
-        <Row title="菜单来源" first stacked>
-          <Segmented
-            items={MENU_MODES}
-            value={settings.menuMode}
-            onChange={mode => { actions.setField(MENU_MODE_FIELD, mode) }}
-            ariaLabel="右键菜单来源"
-          />
-        </Row>
-        {settings.menuMode === 'official' && (
-          <p style={hintInfo}>
-            <strong>官方</strong>：本插件完全不介入，DSH 与其它插件自己的右键处理原样生效
-            （DSH 官方输入框本身没有右键菜单，所以通常看到的就是浏览器的菜单）。
-          </p>
-        )}
-        {settings.menuMode === 'browser' && (
-          <p style={hintInfo}>
-            <strong>浏览器</strong>：固定用浏览器自带的菜单（样子随浏览器而变），并在本插件这一层
-            挡住其它插件的菜单；好处是粘贴免授权、零配置。
-          </p>
-        )}
-        {settings.menuMode === 'custom' && (
-          <>
-            <p style={hintInfo}>
-              <strong>自定义</strong>：用本插件固定样式的菜单（未选中文本时「剪切 / 复制 / 删除」置灰）。
-              这一档的「粘贴」要读剪贴板，浏览器会先要一次授权——三家浏览器的处理不一样：
-            </p>
-            <p style={hintInfo}>
-              · Chrome / Edge（谷歌 / 微软浏览器）：弹出后点「允许」即可，之后会记住这个站点、不再问。
-              要改或撤销授权：点地址栏最左边的网站图标 → 网站设置（Edge 叫「此站点的权限」）→ 剪贴板；
-              也可以直接在地址栏输入 chrome://settings/content/clipboard（Edge 输入
-              edge://settings/content/clipboard）。
-            </p>
-            <p style={hintInfo}>
-              · Firefox：不允许网页静默读剪贴板——你点本插件的「粘贴」后，它会先弹一个只有「粘贴(P)」
-              一项的小窗（约 1 秒后才可点），点它才完成这次粘贴。这是 Firefox 的安全机制，插件关不掉
-              （实测：about:config 里的剪贴板首选项对它无效）。不想多这一步就直接按 Ctrl+V，
-              或把上面的「菜单来源」换成「浏览器 / 官方」档——那两档用的是浏览器自己的粘贴。
-            </p>
-            <p style={hintInfo}>
-              注意：chrome://、edge:// 这些地址浏览器不允许做成网页里的链接，只能手输，
-              或复制上面那串粘贴到地址栏。
-            </p>
-            <Row title="菜单条目" desc="这 7 个开关决定自定义菜单里出现哪些条目，关掉的不显示。" stacked />
-            {MENU_ITEMS.map((item, index) => (
-              <ToggleRow
-                key={item.field}
-                first={index === 0}
-                label={item.label}
-                desc={item.shortcut !== '' ? `快捷键 ${item.shortcut}` : ''}
-                checked={settings[item.field]}
-                onChange={next => { actions.setField(item.field as MenuField, next) }}
-              />
-            ))}
-            <div style={{ padding: '8px 0 2px' }}>
-              <button
-                type="button"
-                style={pill}
-                onClick={() => { for (const item of MENU_ITEMS) actions.setField(item.field as MenuField, true) }}
-              >
-                全部开启
-              </button>
-            </div>
-          </>
-        )}
       </FoldCard>
 
       <FoldCard
@@ -1622,73 +1409,6 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             onChange={next => { void saveNavFold({ collapsed: next }) }}
           />
         </Row>
-      </FoldCard>
-
-      <FoldCard
-        name="OpenCode 请求头"
-        hint="只补进 llm-pi-ai 里已存在的 opencode 系路由，不会凭空新建 provider；总开关关闭时补的头会自动撤销。"
-        summary={headerSummary}
-        // 这一栏没有新键：原来的「附加请求头」本来就是"这一栏要不要生效"，直接当卡级开关。
-        toggle={{
-          checked: sections.header,
-          onChange: next => { actions.setField(HEADER_ENABLED_FIELD, next) },
-        }}
-      >
-        {/* 0.25.0：宿主自己会发这个头时，这张卡只是"旧宿主的兼容层"——把结论放最前面，
-            免得用户以为开关没生效是坏了。文案与自检卡、状态行说同一件事。 */}
-        {headerNative
-          ? (
-            <p style={hintInfo}>
-              本宿主已原生支持：pi-ai 会按每段对话的真实 session id 发送 {DEFAULT_HEADER_NAME}
-              （它同时也是 OpenCode 用来优化路由与提示词缓存的那一维）。所以这一栏现在什么都不做——
-              打开开关也不会注入（注入的是固定值，反而会顶掉真实 id）。只有旧宿主（pi-ai 1.0.2 之前、
-              没有 opencode-headers 模块）才需要打开它。
-            </p>
-          )
-          : null}
-        {/* 用户实测踩过的坑，放区块最前面：这一栏是为了 OpenCode 的 API 地址服务的，
-            用 DSH 自带的地址配置发图片会报错。 */}
-        <p style={hintError}>
-          ⚠️ 请使用自定义的 OpenCode API 地址，不要用 DSH 自带的 API 地址配置：
-          用自带的配置无法上传图片，一旦发送图片就会报错。
-        </p>
-        <p className="dsh-ux-lead">
-          OpenCode 的接口要求客户端每次请求都带上一个稳定的会话 ID 请求头（官方 Go 文档
-          「可以在哪里使用？」第 3 条：为每段对话在 x-opencode-session 中发送会话 ID，
-          以便其优化路由与提示词缓存）。旧版 DSH 不发这个头，所以这一栏把它补进
-          llm-pi-ai 的 provider 配置——下一次模型请求就生效，不用重启，也不用手工改 settings.yaml。
-          只对 llm-pi-ai 里「已存在」的 opencode 系路由生效，不会凭空新建 provider；
-          总开关关闭或本栏目停用时，补的头会自动撤销。
-        </p>
-        <TextFieldRow
-          title="头名"
-          desc={`默认 ${DEFAULT_HEADER_NAME}（OpenCode 官方要求的那一个）`}
-          value={settings.headerName}
-          placeholder={DEFAULT_HEADER_NAME}
-          maxLength={HEADER_NAME_MAX}
-          onChange={next => { actions.setField(HEADER_NAME_FIELD, next) }}
-        />
-        <TextFieldRow
-          title="值"
-          desc="旧宿主专用：所有对话共用这一个值；留空时首次启用会自动生成一个 UUID（宿主已原生支持时不会用到它）"
-          value={settings.headerValue}
-          placeholder="留空 = 自动生成"
-          maxLength={HEADER_VALUE_MAX}
-          onChange={next => { actions.setField(HEADER_VALUE_FIELD, next) }}
-          action={{
-            label: '重新生成',
-            onClick: () => { actions.setField(HEADER_VALUE_FIELD, newSessionId()) },
-          }}
-        />
-        <TextFieldRow
-          title="作用路由"
-          desc="逗号或空格分隔；留空 = 自动匹配 OpenCode 路由（名字以 opencode 开头，或 baseURL 指向 opencode.ai）"
-          value={settings.headerRoutes}
-          placeholder="留空 = 自动（opencode* 或 opencode.ai 端点）"
-          maxLength={HEADER_VALUE_MAX}
-          onChange={next => { actions.setField(HEADER_ROUTES_FIELD, next) }}
-        />
-        <p style={hintInfo}>状态：{headerStatusText}</p>
       </FoldCard>
 
       <FoldCard

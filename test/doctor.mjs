@@ -41,15 +41,13 @@ const pure = await import(`data:text/javascript;base64,${Buffer.from(bundled.out
 const healthy = () => ({
   version: '0.22.0',
   enabled: true,
-  sections: { 键位: true, 微信通知: false },
-  fieldConstants: ['enabled', 'notifyEnabled'],
-  schemaKeys: ['enabled', 'notifyEnabled'],
+  sections: { 键位: true, 快捷指令: false },
+  fieldConstants: ['enabled', 'quickEnabled'],
+  schemaKeys: ['enabled', 'quickEnabled'],
   terminal: { platform: 'win32', rowInstalled: true, bashPath: 'C:/Program Files/Git/bin/bash.exe', status: '', mode: 'workspace-write', hasSandbox: true },
   // 0.22.0 适配 alpha.4：持久终端三件套的版本核对（不匹配 ⇒ 宿主会静默禁用那一行）。
   persistentTerminals: { servicePresent: true, toolVersion: '0.2.1-alpha.4', peerRequired: '0.2.1-alpha.4', peerInstalled: '0.2.1-alpha.4', mismatch: false },
-  header: { overlayInstalled: true, hasLoader: true, migrated: true, status: '运行期注入 opencode-go（只在本插件运行时生效，不改你的配置）', writesUserConfig: false },
   quick: { file: 'C:/x/quick-prompts.json', readable: true, custom: true, error: '' },
-  notify: { enabled: true, channel: 'pushplus', credentialSet: true },
   optimize: { tier: 'standard', readTools: true, bashOn: true, bashGate: '按会话权限判定' },
   runtime: { node: 'v24.16.0', dshVersion: '' },
 })
@@ -70,7 +68,7 @@ console.log('2. 报告行：级别与必填字段')
     rows.every(row => typeof row.id === 'string' && row.id !== '' && typeof row.label === 'string' && row.label !== '' && typeof row.detail === 'string'))
   check('健康输入里没有 fail/warn', rows.every(row => row.level === 'ok' || row.level === 'info'),
     JSON.stringify(rows.filter(row => row.level === 'fail' || row.level === 'warn').map(row => row.id)))
-  check('表里覆盖了关键几项', ['settings.schema', 'terminal', 'terminals.persistent', 'header', 'quick', 'notify', 'optimize', 'runtime'].every(id => rows.some(row => row.id === id)),
+  check('表里覆盖了关键几项', ['settings.schema', 'terminal', 'terminals.persistent', 'quick', 'optimize', 'runtime'].every(id => rows.some(row => row.id === id)),
     JSON.stringify(rows.map(row => row.id)))
 }
 
@@ -80,17 +78,6 @@ console.log('3. 报告行：坏消息必须红/黄')
   const gapRow = schemaGap.find(row => row.id === 'settings.schema')
   check('❗有字段没进 schema ⇒ fail（这就是"开关拨不动"的根因）',
     gapRow.level === 'fail' && gapRow.detail.includes('ghostField'), JSON.stringify(gapRow))
-
-  const wrote = pure.buildDoctorReport({ ...healthy(), header: { ...healthy().header, writesUserConfig: true } })
-  check('❗检测到仍写用户配置 ⇒ fail',
-    wrote.find(row => row.id === 'header').level === 'fail')
-
-  const noOverlay = pure.buildDoctorReport({
-    ...healthy(),
-    header: { ...healthy().header, overlayInstalled: false, status: '没找到 loader 服务，运行期覆盖挂不上，未注入' },
-  })
-  check('覆盖没挂上但功能开着 ⇒ warn',
-    noOverlay.find(row => row.id === 'header').level === 'warn')
 
   const noTerminal = pure.buildDoctorReport({ ...healthy(), terminal: { ...healthy().terminal, rowInstalled: false } })
   check('终端行没装 ⇒ warn', noTerminal.find(row => row.id === 'terminal').level === 'warn')
@@ -122,13 +109,6 @@ console.log('3. 报告行：坏消息必须红/黄')
 
   const unreadable = pure.buildDoctorReport({ ...healthy(), quick: { ...healthy().quick, readable: false, error: 'corrupt' } })
   check('快捷指令本读不到 ⇒ fail', unreadable.find(row => row.id === 'quick').level === 'fail')
-
-  const noCred = pure.buildDoctorReport({ ...healthy(), notify: { enabled: true, channel: 'pushplus', credentialSet: false } })
-  check('通知开着但没凭据 ⇒ fail（开关开着却发不出去）',
-    noCred.find(row => row.id === 'notify').level === 'fail')
-
-  const notifyOff = pure.buildDoctorReport({ ...healthy(), notify: { enabled: false, channel: '', credentialSet: false } })
-  check('通知没开 ⇒ 只是 info（不是问题）', notifyOff.find(row => row.id === 'notify').level === 'info')
 
   const otherOs = pure.buildDoctorReport({ ...healthy(), terminal: { ...healthy().terminal, platform: 'linux' } })
   check('非 Windows ⇒ 只是 info（不接管终端是设计）', otherOs.find(row => row.id === 'terminal').level === 'info')

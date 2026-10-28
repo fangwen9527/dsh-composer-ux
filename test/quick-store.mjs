@@ -419,21 +419,6 @@ console.log('9. 原子写的实现形状')
     'client.tsx 与 SettingsSection.tsx 里不应再出现 QUICK_PROMPTS_FIELD（只有宿主半的迁移种子读它）',
   )
   check(
-    '「OpenCode 请求头」区块顶部用警告样式写着「用自定义 API 地址、别用 DSH 自带的」',
-    // 这是用户实测踩过的坑（自带地址配置发图片会报错），必须留在区块最前面。
-    // 标题行改成多行属性写法之后，名字不再紧跟 `<FoldCard `，所以放宽到 200 字符内出现名字。
-    /<FoldCard[\s\S]{0,200}?name="OpenCode 请求头"[\s\S]{0,900}?<p style=\{hintError\}>[\s\S]{0,300}?不要用 DSH 自带的 API 地址配置[\s\S]{0,300}?一旦发送图片就会报错/.test(sectionSrc),
-    'SettingsSection 的 OpenCode 请求头区块应有一段 hintError 样式的地址警告',
-  )
-  check(
-    '自定义档的粘贴授权说明写清了 Chrome / Edge 与 Firefox 各自的办法',
-    // Chrome / Edge：站点授权 + 两个设置页地址；Firefox：它自己弹的「粘贴(P)」小窗 + 改用 Ctrl+V。
-    /Chrome \/ Edge[\s\S]{0,600}?chrome:\/\/settings\/content\/clipboard/.test(sectionSrc)
-    && sectionSrc.includes('edge://settings/content/clipboard')
-    && /Firefox[\s\S]{0,400}?粘贴\(P\)[\s\S]{0,300}?Ctrl\+V/.test(sectionSrc),
-    'SettingsSection 里应写清 Chrome/Edge（含设置页地址）与 Firefox（粘贴(P) 小窗 + Ctrl+V）',
-  )
-  check(
     '界面、运行时提示与 README 都不再出现那类剪贴板首选项名',
     // 回归点：曾经在界面、README 与运行时提示里教用户「把 about:config 里那个首选项设为 1」，
     // 用户在 Firefox 上实测——弹窗照旧。两者（我们写错的、以及真能关掉弹窗但会让任何网站

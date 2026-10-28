@@ -187,12 +187,10 @@ console.log('2. 0.1.6 形状（有 get / register）')
     app.error === null || app.error === undefined ? '' : String(app.error))
   check('调用了 register(composer-ux, Config)', app.registered.length === 1 && app.registered[0].ns === NAMESPACE,
     JSON.stringify(app.registered.map(entry => entry.ns)))
-  // 0.22.0 起这里**不再写用户配置**：能读出自己那一行、把状态写回自己那一行就够了。
-  check('0.1.6 形状：读到自己那一行，且不写用户配置',
-    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
-    && app.state[LLM].providers['opencode-go'].headers === undefined
-    && app.calls.every(call => call.ns === NAMESPACE),
-    JSON.stringify({ status: app.state[NAMESPACE].headerStatus, ns: app.calls.map(call => call.ns) }))
+  // 0.28.0 起这个插件**不写用户配置**：只要读得到自己那一行、写也只写自己那一行就够了。
+  check('0.1.6 形状：读到自己那一行，且只写自己的命名空间',
+    app.calls.every(call => call.ns === NAMESPACE),
+    JSON.stringify({ ns: app.calls.map(call => call.ns) }))
 }
 
 // ── 3. 0.1.7 形状：没有 get、没有 register ──────────────────────────────────
@@ -202,22 +200,21 @@ console.log('3. 0.1.7 形状（只有 describe / mutate）')
   check('0.1.7 形状下 apply 不抛（register 已被官方删除）', app.error === undefined || app.error === null,
     app.error === null || app.error === undefined ? '' : String(app.error))
   check('没有 register 也不抛（register 已被官方删除）', app.registered.length === 0)
-  check('0.1.7 形状：自己那一行从 describe 读得到（不写用户配置）',
-    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
-    && app.state[LLM].providers['opencode-go'].headers === undefined,
-    JSON.stringify({ status: app.state[NAMESPACE].headerStatus }))
-  check('渲染了记账字段（写回的是我们自己的命名空间）',
-    app.calls.some(call => call.ns === NAMESPACE), JSON.stringify(app.calls.map(call => call.ns)))
+  check('0.1.7 形状：apply 跑通（describe / mutate 都在）',
+    app.error === undefined || app.error === null,
+    app.error === null || app.error === undefined ? '' : String(app.error))
+  check('写回（如果有）只写我们自己的命名空间',
+    app.calls.every(call => call.ns === NAMESPACE), JSON.stringify(app.calls.map(call => call.ns)))
 }
 
 // ── 4. 0.1.7 形状 + 自己的行只存在于 Config ─────────────────────────────────
 console.log('4. 0.1.7 形状，自己的行只从 Config 读')
 {
   const app = await boot('modern', { [LLM]: baseLlm() }, baseOwn(), 'config')
-  check('Config 分支也能读出自己那一行（状态按它算出来 ⇒ 说明读到了）',
-    app.state[NAMESPACE].headerStatus.startsWith('运行期注入')
-    && app.state[LLM].providers['opencode-go'].headers === undefined,
-    JSON.stringify({ status: app.state[NAMESPACE].headerStatus }))
+  // 0.28.0 起这个插件不再写任何设置（请求头镜像已删）：这一节只验"从 Config 读自己的行不抛"。
+  check('Config 分支：apply 跑通，且只写自己的命名空间',
+    (app.error ?? null) === null && app.calls.every(call => call.ns === NAMESPACE),
+    JSON.stringify({ error: app.error === undefined ? null : String(app.error), ns: app.calls.map(call => call.ns) }))
 }
 
 // ── 5. 设置服务整个缺席：不抛 ───────────────────────────────────────────────

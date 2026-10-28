@@ -17,11 +17,10 @@ opt-in through two layers of switches, and nothing here touches your conversatio
    item it cannot trace. Results land in a **result box** (0.12.0): items stream in one by one as they pass
    verification, the finished prompt is **editable**, and an explicit **“Insert into input”** button decides
    when — and whether — it replaces what you typed.
-5. **`x-opencode-session` header injection** so OpenCode (Go) routes work inside DSH.
-6. **Default terminal switch (Windows)** — replaces the model's PowerShell tool with **Git Bash**.
-7. **Official persistent terminal tools** (`terminal_open/read/send/signal/close/list`).
-8. **Stats line upgrade** — renders DSH's built-in cache-hit percentage with **three decimals**.
-9. **Cost capsule** — per-session cost from DeepSeek's list price, with per-model peak/off-peak prices you can
+5. **Default terminal switch (Windows)** — replaces the model's PowerShell tool with **Git Bash**.
+6. **Official persistent terminal tools** (`terminal_open/read/send/signal/close/list`).
+7. **Stats line upgrade** — renders DSH's built-in cache-hit percentage with **three decimals**.
+8. **Cost capsule** — per-session cost from DeepSeek's list price, with per-model peak/off-peak prices you can
    override, **Chinese public holidays fetched automatically**, an account-balance reader, and one-click price
    sync (official page + models.dev).
 10. **One-click “restart DSH”** in the settings-card header.
@@ -149,13 +148,9 @@ edited in settings; the JSON output contract is always appended and cannot be ov
 
 ### Everything else
 
-- **Context menu**: three modes — official (do not interfere), browser default, or the plugin's own menu with
-  seven items; clipboard read permission is explained in the card.
 - **Quick commands**: categories, cross-category moves, per-item insert mode, and a JSON file you can back up
   or edit by hand (`$DSH_HOME/quick-prompts.json`, atomic writes with a lock file; a corrupt file is quarantined
   rather than silently replaced by an empty list).
-- **OpenCode header**: writes `providers.<route>.headers` in the `llm-pi-ai` profile — the only supported
-  outbound-header entry point in DSH — so it takes effect on the next request without a restart.
 - **Default terminal (Windows)**: git-anchored discovery, WSL excluded, per-session tool-surface trim, with the
   official sandbox/approval/timeout semantics preserved.
 - **Restart DSH**: two-step confirmation, detached helper process, waits for the port to be released, hidden

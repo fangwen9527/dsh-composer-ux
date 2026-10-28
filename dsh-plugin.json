@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-composer-ux.input-experience",
   "name": "dsh-composer-ux",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "license": "MIT",
   "facets": {
     "host": {
@@ -40,7 +40,7 @@
       {
         "icon": "./icon.png",
         "title": "dsh-composer-ux",
-        "description": "输入体验增强：键位、右键菜单、快捷指令、提示词优化、通知、统计与成本、目录选择、终端策略、自启动（九栏，逐栏开关）"
+        "description": "输入体验增强：键位、快捷指令、提示词优化、统计与成本、终端策略、自启动（逐栏开关）"
       }
     ],
     "x-prompt-sections": [

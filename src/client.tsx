@@ -1,20 +1,17 @@
 /**
- * Browser half：注册设置页（settings.section）、右键菜单与设置面板拖拽
- * 手柄（shell.overlay），并安装输入框拦截器（键位 + 右键菜单）与面板
- * 滚动样式。
+ * Browser half：注册设置页（settings.section）与设置面板拖拽手柄（shell.overlay），
+ * 并安装输入框拦截器（键位 + 快捷指令附加）。
  */
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
-  DEFAULT_SETTINGS, ENABLED_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD,
-  HEADER_ROUTES_FIELD, HEADER_VALUE_FIELD, KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD,
-  MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE,
+  DEFAULT_SETTINGS, ENABLED_FIELD, KEYS_ENABLED_FIELD, NAMESPACE,
   NEWLINE_KEY_FIELD, OPTIMIZER_TIER_FIELD, PANEL_ENABLED_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD, QUICK_ENABLED_FIELD, SEND_KEY_FIELD, TERMINAL_ENABLED_FIELD,
   STATS_ENABLED_FIELD, PRICE_OVERRIDES_FIELD,
   PEAK_HOLIDAYS_FIELD, PEAK_ALERT_FIELD, BALANCE_ENABLED_FIELD, PRICE_AUTO_SYNC_FIELD,
   activeSections, sanitizeSettings, splitSlashCommand,
   alwaysQuickPrompts, appendBatchForSend, defaultQuickBook,
-  type ComposerUxSettings, type InsertMode, type MenuState, type OptimizerTier, type QuickPrompt,
+  type ComposerUxSettings, type InsertMode, type OptimizerTier, type QuickPrompt,
   type QuickPromptBook, type SettingsField,
 } from './settings-contract.ts'
 // 终端字段的常量住在终端契约里（settings-contract 只是把它们并进设置契约）。
@@ -24,11 +21,10 @@ import {
   withCategoryRemoved, withCategoryRenamed, withInsertMode, withPromptAdded, withPromptMoved,
   withPromptMovedToCategory, withPromptPatched, withPromptRemoved,
 } from './client/prompt-book.ts'
-import { installInterceptors, runMenuAction } from './client/interceptors.ts'
+import { installInterceptors } from './client/interceptors.ts'
 import { installPanelResizeStyle } from './client/panel.ts'
 import { installSettingsCardStyle } from './client/settings-style.ts'
 import { installQuickButtonStyle } from './client/quick-style.ts'
-import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
 import { NavFoldHost } from './client/NavFoldHost.tsx'
 import { loadNavFold } from './client/nav-fold-store.ts'
@@ -47,8 +43,6 @@ import {
   dockReducer, dockSummary, insertDecision, type OptimizeDockState,
 } from './client/optimize-dock.ts'
 import { clearDockStateOnHost, loadDockState, saveDockState } from './client/optimize-state.ts'
-import { createDirectoryFlowController } from './client/directory-flow.ts'
-import { DirectoryFlowEntry } from './client/DirectoryFlowEntry.tsx'
 
 export const name = 'composer-ux'
 /**
@@ -91,7 +85,6 @@ export function apply(ctx: any): void {
   const slots = ctx.slots
 
   const live = createSnapshotStore<ComposerUxSettings>({ ...DEFAULT_SETTINGS })
-  const menu = createSnapshotStore<MenuState | null>(null)
   const panel = createSnapshotStore<QuickPanelAnchor | null>(null)
   const optimizing = createSnapshotStore<boolean>(false)
   /** 这次优化的起始时刻（0 = 没在跑）：面板与工具行按钮的秒表读数都由它算。 */
@@ -383,24 +376,19 @@ export function apply(ctx: any): void {
   }
 
   const resetAll = (): void => {
-    // 注意：宿主半的记账字段（HOST_OWNED_FIELDS）故意不在名单里——清掉它们会让
-    // 已经写入 llm-pi-ai 的请求头失去记账，从而永远撤销不掉。
+    // 注意：宿主半自己维护的字段（HOST_OWNED_FIELDS）故意不在名单里——它们不是"用户偏好"。
     // 快捷指令也不在名单里：它的真相已经搬到 quick-prompts.json（见 bookActions.resetBook），
     // 而设置文档里那份 0.2.x 的旧值是**迁移的种子**，故意留着不清——万一回滚到旧版还能看到。
     void scope.mutate(
       [
-        ENABLED_FIELD, SEND_KEY_FIELD, NEWLINE_KEY_FIELD, ...MENU_FIELDS,
-        MENU_MODE_FIELD,
-        // 旧的布尔字段也一并清掉：它只是迁移线索，留着会把「恢复默认」后的档位又拉回旧值。
-        MENU_NATIVE_FIELD,
+        ENABLED_FIELD, SEND_KEY_FIELD, NEWLINE_KEY_FIELD,
         PANEL_RESIZE_FIELD, PANEL_WIDTH_FIELD, PANEL_HEIGHT_FIELD,
-        HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_VALUE_FIELD, HEADER_ROUTES_FIELD,
         OPTIMIZER_TIER_FIELD,
         // 0.5.0 新增的用户配置：终端档位/路径（「恢复默认」也该把它们恢复）。
         TERMINAL_MODE_FIELD, TERMINAL_BASH_PATH_FIELD,
-        // 五栏开关也清掉：清掉 = 回到"从没碰过这一栏"⇒ 全关（新装默认的样子）。
-        // 若不清，恢复默认之后六栏还会保持之前打开的状态，与"默认关"的语义不符。
-        KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+        // 各栏开关也清掉：清掉 = 回到"从没碰过这一栏"⇒ 全关（新装默认的样子）。
+        // 若不清，恢复默认之后还会保持之前打开的状态，与"默认关"的语义不符。
+        KEYS_ENABLED_FIELD, QUICK_ENABLED_FIELD,
         PANEL_ENABLED_FIELD, TERMINAL_ENABLED_FIELD,
         // 「统计行」（0.7.0）清掉 = 回到 schema 默认 = 开。这一栏的默认本身就是"开"，
         // 所以"恢复默认"看到的仍是开着的——与上面五栏（清掉即关）方向相反，但各自都对：
@@ -701,24 +689,6 @@ export function apply(ctx: any): void {
     }),
   }, SettingsSection))
 
-  // 右键菜单浮层（shell.overlay 是 root 级 list 槽；光标层本身点击穿透，菜单自营 pointer-events）。
-  slots.inject('shell.overlay', () => slots.register({
-    name: 'shell.overlay',
-    id: 'composer-ux-menu',
-    inject: () => ({
-      hooks: { menu, live },
-      actions: {
-        run: runMenuAction,
-        close: () => { menu.set(null) },
-        note: (message: string | undefined) => {
-          const current = menu.getSnapshot()
-          if (current === null) return
-          menu.set({ ...current, note: message })
-        },
-      },
-    }),
-  }, ContextMenuHost))
-
   // 设置面板边缘拖拽手柄。
   slots.inject('shell.overlay', () => slots.register({
     name: 'shell.overlay',
@@ -823,38 +793,6 @@ export function apply(ctx: any): void {
   // 设置页折叠卡片样式（常驻；只管设置页外观，与总开关无关）。
   ctx.effect(() => installSettingsCardStyle(), 'composer-ux: settings card style')
 
-  /**
-   * 工作区目录选择自适应（0.18.0 起，0.19.0 起由设置开关控制，默认**关**）。
-   *
-   * 桌面应用的 preload 注入了 `window.__DSH_DIRECTORY_PICKER__` ⇒ 在比官方界面更低的优先级
-   * （-1）上接管这两个目录流程槽位，弹**系统文件夹框**（任意盘符点选，不用手输路径）；手机 /
-   * 远端浏览器没有这个桥 ⇒ `installDirectoryFlow` 直接返回，一个槽位都不注册，官方应用内浏览
-   * 界面照旧渲染（远端体验零退化）。依据是槽位的 shadow 能力，不是改官方文件。
-   *
-   * 为什么跟 `live` 订阅而不是只看启动值：用户在设置页拨这个开关时不该被要求重启。
-   * 装卸的幂等与"关掉要能再打开"由 `createDirectoryFlowController`（有单测 + 变异守着）负责。
-   */
-  ctx.effect(() => {
-    /*
-      0.23.3 起**停用接管**（用户 2026-10-16 真机拍板）。
-
-      真机现象：在桌面应用里选完工作区，输入框芯片先正常变成 Downloads，**几秒后自己退回
-      「选择一个工作区开始」**（工作区其实已经建好，只是界面状态被顶回去）；把这一栏关掉
-      （=不接管，回到官方 browse）就完全正常。
-
-      为什么停：这层接管是在官方占用者（宿主绑内网地址时官方解析成 browse）仍然活着的时候，
-      用 -1 优先级插进同一格。本插件那份占用者与官方 native 占用者逐行等价（都只弹一次框、
-      只报一次结果），差异只剩"与官方占用者共存"这件事本身 —— 而那正是官方从不使用的方式。
-      在弄清回滚来自哪一步之前，宁可停用，也不用一个会改坏工作区状态的功能。
-
-      恢复点（要恢复时改这一行 + 把上面结论换掉 + 更新 test/client-registration.mjs 第 15 节）：
-        flow.sync(live.getSnapshot().directoryPickEnabled === true)
-    */
-    const flow = createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })
-    flow.sync(false)
-    return () => { flow.dispose() }
-  }, 'composer-ux: directory flow')
-
   // 「快捷指令」入口按钮样式表（与旁边官方「展开」按钮逐项对齐）。
   ctx.effect(() => installQuickButtonStyle(), 'composer-ux: quick button style')
 
@@ -868,9 +806,8 @@ export function apply(ctx: any): void {
   ctx.effect(() => {
     let dispose: (() => void) | null = null
     const syncInterceptors = (): void => {
-      const settings = live.getSnapshot()
-      const sections = activeSections(settings)
-      const wanted = sections.keys || sections.menu || sections.quick
+      const sections = activeSections(live.getSnapshot())
+      const wanted = sections.keys || sections.quick
       if (wanted && dispose === null) {
         dispose = installInterceptors({
           settings: () => live.getSnapshot(),
@@ -880,15 +817,11 @@ export function apply(ctx: any): void {
           promptsForSend: () => (activeSections(live.getSnapshot()).quick
             ? appendBatchForSend(book.getSnapshot(), currentBlankSession())
             : []),
-          setMenu: state => { menu.set(state) },
-          menuOpen: () => menu.getSnapshot() !== null,
         })
       } else if (!wanted) {
         dispose?.()
         dispose = null
       }
-      // 只要不是「自定义」档，就清掉可能还开着的自定义菜单（官方 / 浏览器两档都不该留下它）。
-      if (settings.menuMode !== 'custom' || !sections.menu) menu.set(null)
       // 快捷指令栏关掉时按钮本身也会消失（组件里按开关返回 null），
       // 浮层必须跟着一起收，否则会留下一个没有锚点的面板。
       if (!sections.quick) panel.set(null)

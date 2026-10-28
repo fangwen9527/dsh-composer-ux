@@ -166,29 +166,6 @@ console.log('1. 快捷指令的净化（防脏数据）')
     && pure.sanitizeSettings({ optimizerModel: 'm'.repeat(500) }).optimizerModel.length === pure.OPTIMIZER_MODEL_MAX)
 }
 {
-  // 0.5.0：右键菜单从布尔 menuNative 换成三档字符串 menuMode。
-  // 这里钉住迁移的每种情形——尤其「文档里根本没有这个键」与「明确关掉过旧开关」必须分开：
-  // 前者落到新默认档（官方不介入），后者要保持用户当初选的自定义菜单。
-  check('新字段合法 → 原样',
-    pure.sanitizeSettings({ menuMode: 'browser' }).menuMode === 'browser')
-  check('新字段优先于旧布尔（两者都在时听新字段）',
-    pure.sanitizeSettings({ menuMode: 'official', menuNative: true }).menuMode === 'official')
-  check('旧布尔 true → 浏览器档',
-    pure.sanitizeSettings({ menuNative: true }).menuMode === 'browser')
-  check('旧布尔 false（明确关过那个开关）→ 自定义档',
-    pure.sanitizeSettings({ menuNative: false }).menuMode === 'custom')
-  check('两个键都没有（从没设过）→ 新默认档「官方不介入」',
-    pure.sanitizeSettings({}).menuMode === 'official')
-  check('新字段是脏数据 → 落回旧布尔',
-    pure.sanitizeSettings({ menuMode: 'nonsense', menuNative: true }).menuMode === 'browser')
-  check('三档元数据齐全且顺序为 官方 / 浏览器 / 自定义',
-    pure.MENU_MODES.map(item => item.id).join(',') === 'official,browser,custom',
-    pure.MENU_MODES.map(item => item.id).join(','))
-  check('每档都有给用户看的一句话说明',
-    pure.MENU_MODES.every(item => typeof item.label === 'string' && item.label !== ''
-      && typeof item.hint === 'string' && item.hint.length > 10))
-}
-{
   // 0.5.0：「每一栏一个开关」，默认关；总开关默认开。
   //
   // 这一段是整个功能最要紧的护栏 —— 判据写错的方向有两种，而且都很难在界面上看出来：
@@ -196,12 +173,11 @@ console.log('1. 快捷指令的净化（防脏数据）')
   //  · 一律默认开 ⇒ 全新安装六栏全开，与"默认关"正好相反。
   // 所以两个方向都要钉住。
   const blank = pure.sanitizeSettings({})
-  check('全新安装（空文档）→ 五栏全关',
-    blank.keysEnabled === false && blank.menuEnabled === false && blank.quickEnabled === false
+  check('全新安装（空文档）→ 各栏全关',
+    blank.keysEnabled === false && blank.quickEnabled === false
     && blank.panelEnabled === false && blank.terminalEnabled === false,
-    JSON.stringify([blank.keysEnabled, blank.menuEnabled, blank.quickEnabled, blank.panelEnabled, blank.terminalEnabled]))
+    JSON.stringify([blank.keysEnabled, blank.quickEnabled, blank.panelEnabled, blank.terminalEnabled]))
   check('总开关默认开（它是总闸，不是"要不要用这一栏"）', blank.enabled === true)
-  check('OpenCode 那一栏沿用 headerEnabled，且默认关', blank.headerEnabled === false)
   // 上下文开关是"默认开"的那一类（与栏开关相反）：它不改任何既有行为，只是让优化多知道
   // 一点上文；所以默认开，且**关掉必须真的关掉**（0.12.0 踩过一次：布尔被 textOf 读成空串，
   // 于是"关"等于"没设置"，永远开着 —— 由 5d 那组用例逮住）。
@@ -213,7 +189,7 @@ console.log('1. 快捷指令的净化（防脏数据）')
     && pure.sanitizeSettings({ optimizerContext: 0 }).optimizerContext === true)
   check('DEFAULT_SETTINGS 与净化结果一致（两处不许分叉）',
     pure.DEFAULT_SETTINGS.enabled === true && pure.DEFAULT_SETTINGS.keysEnabled === false
-    && pure.DEFAULT_SETTINGS.menuEnabled === false && pure.DEFAULT_SETTINGS.quickEnabled === false
+    && pure.DEFAULT_SETTINGS.quickEnabled === false
     && pure.DEFAULT_SETTINGS.panelEnabled === false && pure.DEFAULT_SETTINGS.terminalEnabled === false)
 
   // 显式值永远优先（用户表过态就听他的），哪怕信号存在。
@@ -228,11 +204,6 @@ console.log('1. 快捷指令的净化（防脏数据）')
     && pure.sanitizeSettings({ newlineKey: 'Enter' }).keysEnabled === true)
   check('键位保持默认（Enter / Shift+Enter）→ 仍算没碰过',
     pure.sanitizeSettings({ sendKey: 'Enter', newlineKey: 'Shift+Enter' }).keysEnabled === false)
-  check('右键菜单选过浏览器/自定义档 → 开',
-    pure.sanitizeSettings({ menuMode: 'browser' }).menuEnabled === true
-    && pure.sanitizeSettings({ menuMode: 'custom' }).menuEnabled === true)
-  check('右键菜单就是"官方"档 → 算没碰过（官方＝不介入＝等价于关）',
-    pure.sanitizeSettings({ menuMode: 'official' }).menuEnabled === false)
   check('设置面板有尺寸记录 → 开',
     pure.sanitizeSettings({ panelWidth: 1007, panelHeight: 746 }).panelEnabled === true)
   check('设置面板全是默认值 → 关',
@@ -270,24 +241,21 @@ console.log('1. 快捷指令的净化（防脏数据）')
     panelWidth: 1007,
     panelHeight: 746,
     panelScroll: true,
-    menuMode: 'browser',
     terminalStatus: '已生效：D:/Git/bin/bash.exe（Git for Windows）',
     terminalEffective: 'bash',
     terminalMode: 'gitbash',
     terminalBashPath: 'D:/Git/bin/bash.exe',
   })
   const live = pure.activeSections(real)
-  check('真实文档迁移后：键位 / 右键菜单 / 设置面板 / OpenCode / 默认终端 全开',
-    live.keys && live.menu && live.panel && live.header && live.terminal,
+  check('真实文档迁移后：键位 / 设置面板 / 默认终端 全开',
+    live.keys && live.panel && live.terminal,
     JSON.stringify(live))
 
   // activeSections：总闸 + 栏开关，两处都要看
-  check('总开关关掉 → 七栏全不生效（哪怕栏开关是开的）',
-    Object.values(pure.activeSections({ ...pure.DEFAULT_SETTINGS, enabled: false, keysEnabled: true, headerEnabled: true }))
+  check('总开关关掉 → 各栏全不生效（哪怕栏开关是开的）',
+    Object.values(pure.activeSections({ ...pure.DEFAULT_SETTINGS, enabled: false, keysEnabled: true, quickEnabled: true }))
       .every(value => value === false))
   check('总开关开着 + 栏开 → 生效', pure.activeSections({ ...pure.DEFAULT_SETTINGS, keysEnabled: true }).keys === true)
-  check('activeSections 用本栏自己的 headerEnabled，没有第二个请求头开关',
-    pure.activeSections({ ...pure.DEFAULT_SETTINGS, headerEnabled: true }).header === true)
 
   // 0.7.0「统计行」：**新栏**，规则与上面五栏**相反** —— 默认开，且不走"碰过才开"那套迁移。
   // 这条区别必须钉住：后来的人照抄 sectionEnabledOf 就会把它默认成关，
@@ -1281,8 +1249,8 @@ const json = res => JSON.parse(res.captured.body)
     pure.MODELS_API_PATH, pure.DOCTOR_API_PATH, pure.AUTOSTART_API_PATH,
     pure.NAV_FOLD_API_PATH,
   ]
-  check('注册了十二条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单 + 自检 + 自启动）',
-    host.routes.length === 12
+  check('注册了十一条 exact 路由（优化 + 结果框状态 + 快捷指令存储 + 价目同步 + 余额 + 终端状态 + 重启 + 模型清单 + 自检 + 自启动 + 全局面板折叠）',
+    host.routes.length === 11
     && host.routes.every(route => route.kind === 'exact')
     && expectedPaths.every(path => typeof path === 'string' && host.routes.some(route => route.path === path)),
     JSON.stringify(host.routes.map(route => `${route.path}:${route.kind}`)))
@@ -2079,7 +2047,7 @@ console.log('6. settings schema（宿主半真实注册的那一个）')
     JSON.stringify([fresh.optimizerPromptLight, fresh.optimizerPromptStandard, fresh.optimizerPromptHeavy]))
   check('自定义提示词能透过 schema 原样回来',
     plain(schema({ optimizerPromptStandard: '我的任务段' })).optimizerPromptStandard === '我的任务段')
-  check('旧文档 → 原有字段仍齐', fresh.enabled === true && fresh.sendKey === 'Enter' && fresh.headerName === 'x-opencode-session')
+  check('旧文档 → 原有字段仍齐', fresh.enabled === true && fresh.sendKey === 'Enter' && fresh.newlineKey === 'Shift+Enter')
   check('内置条目结构正确', fresh.quickPrompts[0].id === 'builtin-1' && fresh.quickPrompts[0].always === false)
 
   const custom = plain(schema({ quickPrompts: [{ id: 'x', label: 'L', prompt: 'P', always: true }] }))

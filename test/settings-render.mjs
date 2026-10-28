@@ -177,11 +177,11 @@ function check(name, ok, detail = '') {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${detail === '' ? '' : ` — ${detail}`}`)
 }
 
-console.log('1. 设置页能真的渲染出来（八张卡都在）')
+console.log('1. 设置页能真的渲染出来（六张卡都在）')
 for (const [mode, source] of Object.entries(html)) {
-  const names = ['键位', '右键菜单', '快捷指令', '设置面板', 'OpenCode 请求头', '默认终端', '统计行', '金额']
+  const names = ['键位', '快捷指令', '设置面板', '默认终端', '统计行', '金额']
   const missing = names.filter(name => cardOf(source, name) === '')
-  check(`${mode}：八张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
+  check(`${mode}：六张卡都渲染出来了`, missing.length === 0, missing.join(' / '))
 }
 
 console.log('\n1.1 统计行卡：说清"不撒谎"与作用范围，且只有一个开关')
@@ -202,55 +202,6 @@ for (const [mode, source] of Object.entries(html)) {
     !body.includes('role="switch"') && !text.includes('加宽') && !text.includes('260px'), text)
   check(`${mode}：概览行给出位数`,
     head.includes('3 位小数'), head)
-}
-
-console.log('\n2. 右键菜单卡的标题行：只剩卡级开关，没有第二个入口')
-for (const [mode, source] of Object.entries(html)) {
-  const header = headerOf(cardOf(source, '右键菜单'))
-  const text = textOf(header)
-  check(`${mode}：没有「7 项 ▼」按钮，也没有它那套样式类`,
-    !header.includes('dsh-ux-stripButton') && !header.includes('dsh-ux-cardStrip')
-    && !text.includes('7 项 ▼') && !text.includes('▲'))
-  check(`${mode}：卡级开关在标题行`, header.includes('type="checkbox"') || header.includes('role="switch"'))
-  check(`${mode}：概览行仍在（只是一句话，不是控件）`, text.includes('当前：'), text)
-}
-
-console.log('\n3. 三档说明互斥：点哪档只显示哪档的正文')
-{
-  const text = {}
-  for (const [mode, source] of Object.entries(html)) text[mode] = textOf(bodyOf(cardOf(source, '右键菜单')))
-  check('官方：只有官方那段',
-    text.official.includes('本插件完全不介入')
-    && !text.official.includes('粘贴免授权、零配置')
-    && !text.official.includes('chrome://settings/content/clipboard'))
-  check('浏览器：只有浏览器那段',
-    text.browser.includes('粘贴免授权、零配置')
-    && !text.browser.includes('本插件完全不介入')
-    && !text.browser.includes('chrome://settings/content/clipboard'),
-    text.browser)
-  check('自定义：自定义那段 + Chrome/Edge 与 Firefox 的授权说明 + chrome:// 提示',
-    text.custom.includes('chrome://settings/content/clipboard')
-    && text.custom.includes('Firefox：不允许网页静默读剪贴板')
-    && text.custom.includes('about:config')
-    && !text.custom.includes('本插件完全不介入')
-    && !text.custom.includes('粘贴免授权、零配置'))
-  check('三档正文两两不同（互斥渲染确实生效）',
-    new Set([text.official, text.browser, text.custom]).size === 3)
-  check('标题行下没有重复当前档位的 hint（正文里只剩那一段）',
-    !text.browser.includes('固定使用浏览器自带的菜单'))
-}
-
-console.log('\n4. 那 7 个条目开关：只在「自定义」档出现')
-for (const [mode, source] of Object.entries(html)) {
-  const text = textOf(bodyOf(cardOf(source, '右键菜单')))
-  const hasRows = MENU_ROW_KEYS.every(key => text.includes(key))
-  if (mode === 'custom') {
-    check('自定义：7 行都在（标签 + 快捷键 + 全部开启）',
-      hasRows && MENU_LABELS.every(label => text.includes(label))
-      && text.includes('全部开启') && text.includes('菜单条目'))
-  } else {
-    check(`${mode}：一行条目开关都没有`, !hasRows && !text.includes('快捷键 Ctrl+') && !text.includes('菜单条目'))
-  }
 }
 
 console.log('\n5. 写入失败 / 未生效的说明条（0.6.1：点了没反应必须说得出话）')
@@ -509,33 +460,6 @@ console.log('\n7.4 「金额」卡：自动获取到节假日之后（0.11.0）'
       .some(tag => tag.includes('checked')))
 }
 
-console.log('\n9. 「工作区目录选择」卡（0.23.3：已停用，且**不给开关**）')
-{
-  /** 只切一张卡：从卡名切到该卡的 `</section>`（`cardOf` 会一路延到文末，断言"卡内"时不能用它）。 */
-  const cardOnly = (source, name) => {
-    const parts = source.split('<span class="dsh-ux-cardName">')
-    const index = parts.findIndex(part => part.startsWith(`${name}</span>`))
-    if (index === -1) return ''
-    const seg = parts[index]
-    const end = seg.indexOf('</section>')
-    return end === -1 ? seg : seg.slice(0, end)
-  }
-  const off = render('official')
-  const card = cardOnly(off, '工作区目录选择')
-  check('这张卡还在（要如实说明停用，而不是悄悄消失）', card !== '')
-  const head = textOf(headerOf(card))
-  check('概览写明已停用与原因（与官方目录流程共存时会回滚工作区状态）',
-    head.includes('已停用') && head.includes('回滚工作区状态'), head)
-  check('❗不给开关（不给一个看起来能开、其实不生效的控件）',
-    !card.includes('role="switch"'), head)
-  const text = textOf(bodyOf(card))
-  check('正文说清真机现象（选完几秒后又退回「选择一个工作区开始」）',
-    text.includes('几秒后又退回') && text.includes('选择一个工作区开始'), text.slice(0, 200))
-  check('正文说清工作区其实已经建好（不是没选上）', text.includes('其实已经建好'))
-  check('正文保留原始诉求与官方那条已知限制（不枚举盘符根）',
-    text.includes('系统文件夹框') && text.includes('不枚举盘符根'))
-}
-
 console.log('\n10. 真机在 0.2.1-alpha.2 干净 profile 上发现的两个渲染瑕疵（2026-10-10）')
 {
   const fresh = render('official')
@@ -556,13 +480,7 @@ console.log('\n10. 真机在 0.2.1-alpha.2 干净 profile 上发现的两个渲�
   // 折叠状态存在插件自己的小文件里（不再走宿主设置），所以这里只验默认那一档的文案。
   check('「现在收起」在默认（收成一条）下说明"下次打开沿用"',
     navText.includes('记住这个状态：下次打开 DSH 沿用'), navText.slice(0, 300))
-
-  const notifyHead = textOf(headerOf(cardOf(fresh, '微信通知')))
-  check('「微信通知」概览没有被 FoldCard 前缀两次（写成「未启用 · 未启用 · …」）',
-    !notifyHead.includes('未启用 · 未启用'), notifyHead)
-  check('「微信通知」概览仍说清"只能通知，不能回"', notifyHead.includes('只能通知，不能回'), notifyHead)
 }
-
 
 console.log('\n11. 自检卡（0.22.0）：纯只读检查，卡上没有开关')
 {

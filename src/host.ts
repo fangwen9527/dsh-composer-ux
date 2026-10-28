@@ -22,19 +22,14 @@ import { dirname, join, resolve } from 'node:path'
 import inspector from 'node:inspector'
 import {
   ALL_SETTINGS_FIELDS, AUTOSTART_API_PATH, DOCTOR_API_PATH,
-  DEFAULT_HEADER_NAME, DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
-  KEYS_ENABLED_FIELD, MENU_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
+  DEFAULT_QUICK_PROMPTS, DEFAULT_SETTINGS, ENABLED_FIELD,
+  KEYS_ENABLED_FIELD, PANEL_ENABLED_FIELD, QUICK_ENABLED_FIELD,
   TERMINAL_ENABLED_FIELD,
-  HEADER_APPLIED_NAME_FIELD,
-  HEADER_APPLIED_VALUE_FIELD, HEADER_CLEANUP_FIELD, HEADER_ENABLED_FIELD, HEADER_NAME_FIELD, HEADER_NAME_MAX,
-  HEADER_ROUTES_FIELD, HEADER_STATUS_FIELD, HEADER_VALUE_FIELD, HEADER_VALUE_MAX,
-  LLM_NAMESPACE, MENU_FIELDS, MENU_MODE_FIELD, MENU_NATIVE_FIELD, NAMESPACE, NEWLINE_KEY_FIELD,
-  NATIVE_STATUS_PREFIX,
-  OPENCODE_HOSTS, OPENCODE_ROUTE_PREFIX, OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
+  NAMESPACE, NEWLINE_KEY_FIELD,
+  OPTIMIZE_OUTPUT_MAX, OPTIMIZE_TEXT_MAX,
   OPTIMIZE_BASH_FIELD, OPTIMIZE_KEEP_DOCK_FIELD, OPTIMIZE_READ_TOOLS_FIELD, OPTIMIZE_STATE_API_PATH,
   MODELS_API_PATH,
   RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
-  NOTIFY_TEST_API_PATH,
   OPTIMIZER_FRAMING_FIELD, OPTIMIZER_HISTORY_FIELD, OPTIMIZER_MODEL_FIELD, OPTIMIZER_PERMISSION_FIELD,
   normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
@@ -50,8 +45,6 @@ import {
   SYNC_API_PATH,
   BALANCE_ENABLED_FIELD, DEFAULT_PEAK_ALERT, HOLIDAY_SOURCE_LABEL, PEAK_ALERT_FIELD, PEAK_HOLIDAYS_FIELD,
   PRICE_AUTO_SYNC_FIELD, SYNCED_PRICES_FIELD, parseHolidayYears,
-  NOTIFY_ENABLED_FIELD, NOTIFY_CHANNEL_FIELD, NOTIFY_PUSHPLUS_FIELD, NOTIFY_WECOM_FIELD, NOTIFY_KINDS_FIELD,
-  DIRECTORY_PICK_ENABLED_FIELD,
   type QuickPromptBook,
 } from './settings-contract.ts'
 import {
@@ -64,15 +57,10 @@ import {
   readPriceFile, samePriceTable, writePriceFile,
 } from './price-sync.ts'
 import { fetchHolidayYears, holidaySyncDue, holidayYearsWanted, mergeHolidayDays } from './holiday-sync.ts'
-import { createNotifyTestHandler } from './notify-route.ts'
-import { registerNotifyHooks } from './notify-hooks.ts'
-import { sendNotification, type NotifyIo } from './notify-send.ts'
 import { sanitizeSettings } from './settings-contract.ts'
-import type { NotifyEvent, NotifySettings } from './notify.ts'
 import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
-import { nativeSessionHeader, resetNativeSessionHeaderCache } from './opencode-header.ts'
 import { detectRuntimeVersion } from './runtime-version.ts'
 import {
   SUBSCRIPTION_PLANS, degradeQuota, planOf, parseQuotaPayload, quotaCostOf,
@@ -102,7 +90,6 @@ import { BASH_TOOL_SYSTEM_NOTE, resolveBashAuthority, type BashAuthority } from 
 import { READ_TOOLS_SYSTEM_NOTE } from './optimize-tools.ts'
 import { contextBlock, contextWithinBudget, recentTurns } from './prompt-context.ts'
 import { ensureQuickBook, quickStorePath, readQuickBook, writeQuickBook } from './quick-store.ts'
-import { pendingMigrations } from './migrations.ts'
 import {
   addArgs, deleteArgs, describeAutostart, listArgs, parseQueryValue, planAutostart, queryArgs, runtimeOf, unsupportedReason,
   type AutostartFacts, type AutostartPlan, type AutostartRuntime, type AutostartState,
@@ -120,7 +107,6 @@ export const name = 'composer-ux'
  * 路由（webServer）哪个先跑是不确定的 —— 2026-10-13 真机就是这么读到一份陈旧值，
  * 报告里写"覆盖没挂上"，而它其实挂上了。共享同一个对象，读到的永远是当下。
  */
-const headerOverlayState = { installed: false }
 
 /** 设置面板可调尺寸的上下限（与 client 侧的 clamp 保持一致）。 */
 const PANEL_MIN = 560
@@ -324,317 +310,30 @@ function bookLooksCustom(book: QuickPromptBook): boolean {
   return JSON.stringify(sanitizeBook(book)) !== JSON.stringify(defaultQuickBook())
 }
 
-/** 头名是否合法：与 llm-pi-ai 的 assertValidHeaders 同规则（Fetch 接受才算）。 */
-function nameIsValid(name: string): boolean {
-  if (name === '' || name.length > HEADER_NAME_MAX) return false
-  try {
-    new Headers([[name, 'probe']])
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** 头值是否合法：非空、不超长、单行且可表示为字节（Fetch 接受才算）。 */
-function valueIsValid(value: string): boolean {
-  if (value === '' || value.length > HEADER_VALUE_MAX) return false
-  try {
-    new Headers([['x-dsh-probe', value]])
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
- * provider 的 baseURL 是否指向 OpenCode（含子域）。
- * 用户自建路由的名字可以是任意字符串（例如 `go`），端点却仍是 OpenCode，
- * 所以「按 URL 认」比「按名字认」可靠；URL 解析失败时退回子串判断。
- */
-function isOpencodeBaseUrl(value: unknown): boolean {
-  const raw = textOf(value).trim()
-  if (raw === '') return false
-  let host = ''
-  try {
-    host = new URL(raw).hostname.toLowerCase()
-  } catch {
-    return raw.toLowerCase().includes('opencode.ai')
-  }
-  return OPENCODE_HOSTS.some(name => host === name || host.endsWith(`.${name}`))
-}
-
-/**
- * 本次要写的目标路由。
- * 显式名单只保留 llm-pi-ai 里**已存在**的路由——profile 的 `models` 是必填项，
- * 凭空造一个只有 headers 的 profile 会让整份配置校验失败。
- * 留空时的自动匹配：路由名以 `opencode` 开头（内置 `opencode-go` 走这条，它的
- * baseURL 由 pi-ai 目录内置、配置里没有），**或**该路由的 `baseURL` 指向 opencode.ai
- * （自建路由常起别名，按 URL 认更准）。
- * @param providers - llm-pi-ai 当前的 providers 字典。
- * @param listed - 设置里的「作用路由」名单（留空表示自动匹配）。
- * @returns 目标路由名，顺序跟随 providers 的键顺序。
- */
-function pickRoutes(
-  providers: Record<string, unknown>,
-  listed: readonly string[],
-): readonly string[] {
-  const keys = Object.keys(providers)
-  if (listed.length === 0) {
-    return keys.filter(key => key.startsWith(OPENCODE_ROUTE_PREFIX)
-      || isOpencodeBaseUrl(objectOf(providers[key])?.baseURL))
-  }
-  return listed.filter(key => Object.prototype.hasOwnProperty.call(providers, key))
-}
-
-/** 错误转一行可读文本（写进 headerStatus，供设置页展示）。 */
+/** 错误转一行可读文本（多条路由要把它塞进 JSON 回给客户端）。 */
 function errorText(error: unknown): string {
   if (error instanceof Error && error.message !== '') return error.message
   return String(error)
 }
 
-/** 本次要注入的请求头（0.22.0 的纯函数产物）。 */
-export type HeaderRequest =
-  | { readonly kind: 'off' }
-  | { readonly kind: 'invalid'; readonly reason: string }
-  | { readonly kind: 'plan'; readonly name: string; readonly value: string; readonly routes: readonly string[] }
-
-/**
- * 从本插件自己的设置里读出"这次要注入什么"（纯函数，便于逐格钉住）。
- *
- * 0.22.0 起这条链**只读不写用户配置**：它产出的是一份"运行期覆盖用的计划"，
- * 真正生效靠 `internal/config` 事件（见 {@link installHeaderOverlay}）。
- *
- * @param own - 本插件命名空间下的原始行。
- * @returns `off`（没开）/ `invalid`（开了但参数不合法，附原因）/ `plan`（可以注入）。
- */
-export function readHeaderRequest(own: Record<string, unknown> | undefined): HeaderRequest {
-  if (own === undefined) return { kind: 'off' }
-  if (own[ENABLED_FIELD] !== true || own[HEADER_ENABLED_FIELD] !== true) return { kind: 'off' }
-  const name = textOf(own[HEADER_NAME_FIELD])
-  if (!nameIsValid(name)) return { kind: 'invalid', reason: '头名不合法' }
-  const value = textOf(own[HEADER_VALUE_FIELD])
-  if (!valueIsValid(value)) return { kind: 'invalid', reason: `头值不合法（需 1–${String(HEADER_VALUE_MAX)} 字符且单行）` }
-  const routes = parseRouteList(textOf(own[HEADER_ROUTES_FIELD]))
-  return { kind: 'plan', name, value, routes }
-}
-
-/** 在 pi-ai 那行的配置上挂上 `providers.<route>.headers.<name>`（不修改入参）。 */
-function withHeaderOverlay(raw: unknown, request: Extract<HeaderRequest, { kind: 'plan' }>): unknown {
-  const row = objectOf(raw)
-  const providers = row === undefined ? undefined : objectOf(row.providers)
-  if (row === undefined || providers === undefined) return raw
-  const targets = pickRoutes(providers, request.routes)
-  if (targets.length === 0) return raw
-  const nextProviders: Record<string, unknown> = { ...providers }
-  for (const route of targets) {
-    const profile = objectOf(providers[route])
-    if (profile === undefined) continue
-    const headers = objectOf(profile.headers) ?? {}
-    nextProviders[route] = { ...profile, headers: { ...headers, [request.name]: request.value } }
-  }
-  return { ...row, providers: nextProviders }
-}
-
-/**
- * 把「请求头」栏目改成**运行期可逆覆盖**（0.22.0，用户 2026-10-13 选定）。
- *
- * 为什么不再写配置：以前这条链把 `providers.<route>.headers.<name>` **写进用户的模型路由配置**，
- * 再靠记账 + 撤销去回滚 —— 那是本插件唯一会动用户配置的功能，风险面（写坏了、撤销漏了、
- * 用户自己又改了同一处）都由它承担。dsh-ops 的做法更克制：用官方 loader 的 `internal/config`
- * 事件在**配置被解析时**补上字段，从不落盘（`lib/session-pwsh.js`，注释写着
- * "never edits profile files or services"）。官方 `llm-pi-ai` 自己也是这么挂这个事件的。
- *
- * @param ctx - 插件上下文（只用来拿 loader 与挂事件）。
- * @param read - 本插件设置的读口。
- * @param onInstalled - 覆盖真的挂上之后回调一次（让状态行立刻从"没生效"变成真话）。
- * @returns 一个可读的安装状态：installed 字段供 {@link syncHeaderOverlay} 如实回报。
- */
-function installHeaderOverlay(ctx: Context, read: ReadRow, onInstalled: () => void, state: { installed: boolean } = headerOverlayState): { installed: boolean } {
-  // 能力探测：拿不到注入面就**什么都不做**（旧版服务、精简上下文、测试用的假 ctx）。
-  // 失败方向安全 —— 状态行会说"没生效"，而不是把整个插件拖崩。
-  const inject = (ctx as { inject?: unknown }).inject
-  if (typeof inject !== 'function') return state
-  try {
-    ;(inject as (names: readonly string[], fn: (inner: unknown) => unknown) => unknown).call(ctx, ['loader'], (loaderCtx: unknown) => {
-      const on = (loaderCtx as { on?: unknown } | undefined)?.on
-      if (typeof on !== 'function') return
-      ;(on as (event: string, fn: unknown) => unknown).call(
-        loaderCtx,
-        'internal/config',
-        function (this: unknown, _raw: unknown, next: () => unknown): unknown {
-          const raw = next()
-          const request = readHeaderRequest(read(NAMESPACE))
-          if (request.kind !== 'plan') return raw
-          // 0.25.0：宿主自己会发（pi-ai 自带 opencode-headers.js、用每段对话的真实 session id）
-          // 时**一律不注入** —— 补一个固定值只会把它顶掉（见 src/opencode-header.ts 文件头）。
-          if (nativeSessionHeader().support === 'native') return raw
-          // 只认"看着像 llm-pi-ai 那一行"的配置（有 providers）。这里不比较 fiber：
-          // 事件是瀑布式派发，`this` 的形态跨版本会变，而"哪份配置里有 providers"足够精确 ——
-          // 而且我们只往**已存在的路由**上补一个头，认错的代价是零。
-          return withHeaderOverlay(raw, request)
-        },
-      )
-      state.installed = true
-      try {
-        onInstalled()
-      } catch (error: unknown) {
-        console.error('[composer-ux] 请求头覆盖挂上后同步状态失败', error)
-      }
-      return () => { state.installed = false }
-    })
-  } catch (error: unknown) {
-    console.error('[composer-ux] 运行期请求头覆盖挂不上（继续按未生效运行）', error)
-  }
-  return state
-}
-
-/**
- * 把「请求头」栏目的状态对齐到现实（0.22.0）。
- *
- * 干两件事，都**不碰用户配置**：
- *  1. 把状态写回**本插件自己的命名空间**（`headerStatus`），供设置页显示；
- *  2. **一次性**清理 0.21.x 及以前真的写进用户配置里的那些头（迁移表的第一条）。
- *
- * @param settings - settings 服务（用于写本插件自己的字段）。
- * @param read - 按命名空间读值的读口。
- * @param hasLoader - 运行期覆盖挂上没有（没有就没法生效，状态如实说）。
- */
-async function syncHeaderOverlay(settings: SettingsLike, read: ReadRow, hasLoader: boolean): Promise<void> {
-  const own = read(NAMESPACE)
-  if (own === undefined) return
-  // 0.25.0：宿主自己会发这个头时，生成 UUID 与记账都没有意义（注入会被跳过）。
-  const native = nativeSessionHeader()
-  // 首次启用且值是空的：生成一个稳定 ID，并写进**本插件自己的**命名空间（此前一直用它）。
-  // 注意落点：这是 composer-ux 的字段，不是用户的模型路由配置 —— 后者 0.22.0 起一个字都不写。
-  if (native.support !== 'native' && own[ENABLED_FIELD] === true && own[HEADER_ENABLED_FIELD] === true) {
-    const name = textOf(own[HEADER_NAME_FIELD])
-    if (nameIsValid(name) && textOf(own[HEADER_VALUE_FIELD]) === '') {
-      const generated = newSessionId()
-      await retryWrite(() => settings.mutate(NAMESPACE, [{ op: 'set', path: [HEADER_VALUE_FIELD], value: generated }]), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
-      own[HEADER_VALUE_FIELD] = generated
-    }
-  }
-  const request = readHeaderRequest(own)
-
-  const llm = read(LLM_NAMESPACE)
-  const providers = llm === undefined ? undefined : objectOf(llm.providers)
-  const applied = request.kind === 'plan' && providers !== undefined
-    ? pickRoutes(providers, request.routes)
-    : []
-
-  const status = native.support === 'native'
-    // 宿主自己的实现按**每段对话的真实 id** 发；本栏注入的是固定值，所以什么都不做才对。
-    ? `${NATIVE_STATUS_PREFIX}（${native.evidence}）：按每段对话的真实 session id 自动发送，本栏不再注入`
-    : request.kind === 'off'
-    ? ''
-    : request.kind === 'invalid'
-      ? `${request.reason}，未注入`
-      : !hasLoader
-        ? '没找到 loader 服务，运行期覆盖挂不上，未注入'
-        : providers === undefined
-          ? '未挂载 llm-pi-ai（模型路由）设置，暂未注入'
-          : applied.length === 0
-            ? `已启用，但没有匹配的路由（目标：${request.routes.length === 0 ? `自动（名字以 ${OPENCODE_ROUTE_PREFIX} 开头，或 baseURL 指向 opencode.ai）` : request.routes.join('、')}）`
-            : `运行期注入 ${applied.join('、')}（只在本插件运行时生效，不改你的配置）`
-
-  const ownOps: PathOp[] = []
-  if (textOf(own[HEADER_STATUS_FIELD]) !== status) {
-    ownOps.push({ op: 'set', path: [HEADER_STATUS_FIELD], value: status })
-  }
-  // 记账继续保留（改名/改值后清理要用），但含义从"写入成功"变成"运行期生效"。
-  // 原生支持时不记账：什么都没注入，记账只会让状态行自相矛盾。
-  const injected = native.support !== 'native' && request.kind === 'plan' && applied.length > 0
-  const nextAppliedName = injected ? request.name : ''
-  const nextAppliedValue = injected ? request.value : ''
-  if (textOf(own[HEADER_APPLIED_NAME_FIELD]) !== nextAppliedName) {
-    ownOps.push({ op: 'set', path: [HEADER_APPLIED_NAME_FIELD], value: nextAppliedName })
-  }
-  if (textOf(own[HEADER_APPLIED_VALUE_FIELD]) !== nextAppliedValue) {
-    ownOps.push({ op: 'set', path: [HEADER_APPLIED_VALUE_FIELD], value: nextAppliedValue })
-  }
-
-  // 迁移（0.22.0 第 1 条）：把老版本**真的写进**用户配置的那些头删掉 —— 一次性，做完打标记。
-  // 该不该跑由迁移表说了算（见 src/migrations.ts）：跑成功才写标记，失败下次启动重来。
-  const headerCleanup = pendingMigrations(own).find(row => row.field === HEADER_CLEANUP_FIELD)
-  if (headerCleanup !== undefined) {
-    const stale = collectOursToClean(own, providers, request)
-    try {
-      if (stale.length > 0) await retryWrite(() => settings.mutate(LLM_NAMESPACE, stale), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
-      ownOps.push({ op: 'set', path: [headerCleanup.field], value: headerCleanup.version })
-    } catch (error: unknown) {
-      // 清理失败不阻断：下次启动再来（标记没写进去就是"没完成"）。
-      console.error('[composer-ux] 旧请求头清理失败', error)
-    }
-  }
-
-  if (ownOps.length > 0) await retryWrite(() => settings.mutate(NAMESPACE, ownOps), STARTUP_WRITE_ATTEMPTS, STARTUP_WRITE_RETRY_MS)
-}
-
-/**
- * 找出"确实是我们写进去的"头，用来清理（0.22.0 一次性迁移）。
- *
- * 判据与老版本的撤销完全一致，**绝不误删用户自己写的**：值必须等于当前设置值或记账值。
- * @param own - 本插件当前设置行。
- * @param providers - 用户配置里的 providers 映射（可能缺席）。
- * @param request - 这次解析出来的注入计划（它的目标键不能被当成过期项）。
- * @returns 要 unset 的路径操作。
- */
-function collectOursToClean(
-  own: Record<string, unknown>,
-  providers: Record<string, unknown> | undefined,
-  request: HeaderRequest,
-): PathOp[] {
-  if (providers === undefined) return []
-  const previousName = textOf(own[HEADER_APPLIED_NAME_FIELD])
-  const previousValue = textOf(own[HEADER_APPLIED_VALUE_FIELD])
-  const ours = new Set([textOf(own[HEADER_VALUE_FIELD]), previousValue])
-  ours.delete('')
-  // 与老版"撤销"的唯一区别：**没有豁免项** —— 老版要跳过"本轮的目标键"（那正是它要写的），
-  // 而现在一个字节都不写，凡是值等于我们记账值、名字是我们用过的，都是该清的残留。
-  const candidates = new Set([previousName, request.kind === 'plan' ? request.name : ''])
-  candidates.delete('')
-  const stale: PathOp[] = []
-  for (const candidate of candidates) {
-    for (const [route, profile] of Object.entries(providers)) {
-      const headers = objectOf(objectOf(profile)?.headers)
-      const current = headers?.[candidate]
-      if (typeof current !== 'string' || !ours.has(current)) continue
-      stale.push({ op: 'unset', path: ['providers', route, 'headers', candidate] })
-    }
-  }
-  return stale
-}
-
 /**
  * 本插件的字段表 —— 设置页可编辑的字段全在这里。
  *
- * 抽成函数是为了让模块级常量 {@link Config} 与旧版的显式注册共用一份真相
+ * 抽成函数是为了让模块级常量 Config 与旧版的显式注册共用一份真相
  * （0.1.6 及以前必须 `settings.register(NAMESPACE, schema)`）。
  */
 function ownSchema(): Schema {
   return z.object({
     [ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.enabled),
-    // 五栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
+    // 各栏开关。**故意不给默认值、声明成可选**：迁移要用的信息就是"文档里有没有这个键"
     // —— 没有 ⇒ 从没碰过这一栏 ⇒ 关闭；有 ⇒ 用户碰过 ⇒ 保持他写下的值。
     // 给了静态默认值就再也分不出这两种情况了（净化的 sectionEnabledOf 靠它）。
     [KEYS_ENABLED_FIELD]: z.boolean().required(false),
-    [MENU_ENABLED_FIELD]: z.boolean().required(false),
     [QUICK_ENABLED_FIELD]: z.boolean().required(false),
     [PANEL_ENABLED_FIELD]: z.boolean().required(false),
     [TERMINAL_ENABLED_FIELD]: z.boolean().required(false),
     [SEND_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.sendKey),
     [NEWLINE_KEY_FIELD]: z.string().default(DEFAULT_SETTINGS.newlineKey),
-    ...Object.fromEntries(MENU_FIELDS.map(field => [
-      field,
-      z.boolean().default(DEFAULT_SETTINGS[field]),
-    ])),
-    // 右键菜单模式（0.5.0 起三档）。**故意不给默认值、且声明成可选**：
-    // 「文档里没有这个键」本身就是迁移要用的信息——净化据此按旧布尔 menuNative
-    // 推断（见 menuModeFrom）。给了默认值就再也分不出「从没设置过」与「明确设成了它」。
-    [MENU_MODE_FIELD]: z.string().required(false),
-    // 旧的布尔字段：只作迁移线索，故同样不给默认值——旧文档里的 true / false
-    // 都要保住原意（true = 浏览器菜单、false = 明确选过自定义菜单）。
-    [MENU_NATIVE_FIELD]: z.boolean().required(false),
     // 「导航滚动」在 0.6.0 随功能一起删掉了（DSH 0.1.7 的官方设置页自带导航列滚动）。
     // 旧文档里可能仍留着 panelScroll：schemastery 对未声明键是**原样放行**（已实测），
     // 所以不需要为它保留一个宽容字段，升级时也不会因此判非法。
@@ -642,16 +341,6 @@ function ownSchema(): Schema {
     // schemastery 无 .optional()：可选键用 .required(false)。
     [PANEL_WIDTH_FIELD]: z.number().min(PANEL_MIN).max(PANEL_MAX).required(false),
     [PANEL_HEIGHT_FIELD]: z.number().min(320).max(PANEL_MAX).required(false),
-    // OpenCode 请求头栏目（值由宿主半按 llm-pi-ai 的 Fetch 规则自校验后再写入）。
-    [HEADER_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.headerEnabled),
-    [HEADER_NAME_FIELD]: z.string().default(DEFAULT_HEADER_NAME),
-    [HEADER_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerValue),
-    [HEADER_ROUTES_FIELD]: z.string().default(DEFAULT_SETTINGS.headerRoutes),
-    [HEADER_APPLIED_NAME_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedName),
-    [HEADER_APPLIED_VALUE_FIELD]: z.string().default(DEFAULT_SETTINGS.headerAppliedValue),
-    [HEADER_STATUS_FIELD]: z.string().default(DEFAULT_SETTINGS.headerStatus),
-    // 迁移标记（0.22.0，本插件自己的字段）：0/未设置 = 0.21.x 写进用户配置的头还没清理。
-    [HEADER_CLEANUP_FIELD]: z.number().required(false),
     // 快捷指令列表：结构固定为 {id,label,prompt,always}，逐条自带默认值，
     // 让旧设置文档（没有这个键）在读取时直接得到内置 9 条。
     [QUICK_PROMPTS_FIELD]: z.array(z.object({
@@ -728,23 +417,6 @@ function ownSchema(): Schema {
     [SYNCED_PRICES_FIELD]: z.any().required(false),
     // 「金额」（0.10.0）自动同步官方价：默认关（会自动出网的开关不默认开）。
     [PRICE_AUTO_SYNC_FIELD]: z.boolean().default(DEFAULT_SETTINGS.priceAutoSync),
-    // 微信通知（0.17.0）。⚠️ 2026-10-09 补：这 5 个字段在 0.17.0 漏了 —— 只加进了设置契约
-    // 与设置页，**没加进这张 schema**。后果不是"界面少了什么"，而是宿主设置服务的写路径会
-    // 直接拒绝：`settings.mutate` 对每个 path 先查 `isVolatilePath(schema, path)`，
-    // 没声明就抛 `Config field "notifyEnabled" is not volatile`（见 DSH 源码
-    // packages/settings/settings/src/index.ts 的 `write`），于是通知卡那几个开关根本存不住。
-    // 教训写进测试：`test/client-registration.mjs` 第 16 节逐字段核对契约与这张表。
-    [NOTIFY_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.notifyEnabled),
-    [NOTIFY_CHANNEL_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyChannel),
-    [NOTIFY_PUSHPLUS_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyPushplusToken),
-    [NOTIFY_WECOM_FIELD]: z.string().default(DEFAULT_SETTINGS.notifyWecomWebhook),
-    [NOTIFY_KINDS_FIELD]: z.object({
-      'needs-input': z.boolean().default(DEFAULT_SETTINGS.notifyKinds['needs-input']),
-      done: z.boolean().default(DEFAULT_SETTINGS.notifyKinds.done),
-      error: z.boolean().default(DEFAULT_SETTINGS.notifyKinds.error),
-    }),
-    // 工作区目录选择（0.19.0）：默认关（接管官方槽位这件事必须由用户自己点）。
-    [DIRECTORY_PICK_ENABLED_FIELD]: z.boolean().default(DEFAULT_SETTINGS.directoryPickEnabled),
   })
 }
 
@@ -1023,9 +695,6 @@ export const Config: Schema = markVolatile(ownSchema())
  *   （那时读值仍走 `settings.get`，这个参数只用作兜底）。
  */
 export function apply(ctx: Context, config?: unknown): void {
-  // 0.25.0：每次挂载重新探测宿主能力。进程不变，但同一进程里可能换环境变量、换宿主布局
-  // （测试也要能在一次进程里把「原生 / 旧宿主」两条路都跑到）。
-  resetNativeSessionHeaderCache()
   // 额度缓存的键是"套餐 id"，跨挂载复用没有意义（换宿主 / 换 key 后就该重取）；
   // 清掉也让测试能在同一个进程里把 ok / 失败两条分支都跑到。
   planQuotaCache.clear()
@@ -1069,52 +738,6 @@ export function apply(ctx: Context, config?: unknown): void {
     const settings = settingsCtx.settings as unknown as SettingsLike
     // 0.1.6 及以前：命名空间必须显式注册。0.1.7 起 register 不存在，什么都不做。
     if (typeof settings.register === 'function') settings.register(NAMESPACE, Config)
-    const read = makeReader(settings, config)
-    /**
-     * 运行期覆盖（0.22.0）：装一次，之后每次 llm-pi-ai 那行配置被解析时按需补头。
-     * `installed` 只用来让状态行说实话（没 loader = 挂不上 = 没生效）。
-     */
-    let resync: () => void = () => {}
-    installHeaderOverlay(ctx, read, () => { resync() })
-    // 串行化：本插件自己的写入也会再触发 settings/updated，用 busy/again 保证
-    // 一次只跑一轮镜像，且不漏掉期间到达的变更。
-    let busy = false
-    let again = false
-    const sync = (): void => {
-      if (busy) {
-        again = true
-        return
-      }
-      busy = true
-      void syncHeaderOverlay(settings, read, headerOverlayState.installed)
-        .catch((error: unknown) => {
-          console.error('[composer-ux] 请求头状态同步失败', error)
-        })
-        .finally(() => {
-          busy = false
-          if (again) {
-            again = false
-            sync()
-          }
-        })
-    }
-
-    /**
-     * 设置变化后重跑镜像。
-     *
-     * ⚠️ 事件名也换代了：0.1.7 起是 `settings/document-updated`（参数是 `(ns, revision)`），
-     * 而旧名 `settings/updated` 在 0.1.7 里**整个不存在**（服务已经不发它了）。
-     * 两个都听：任一世代只会有一个真的触发，且 `sync()` 本身幂等、不产生回环。
-     */
-    const onSettingsUpdated = (ns: unknown): void => {
-      if (ns === NAMESPACE || ns === LLM_NAMESPACE) sync()
-    }
-    for (const event of ['settings/updated', 'settings/document-updated']) {
-      ctx.on(event as never, onSettingsUpdated as never)
-    }
-    resync = sync
-    // 启动即对齐一次：状态与一次性清理都在这儿收口（运行期覆盖不改用户配置）。
-    sync()
   })
 
   // ── 提示词优化接口 ────────────────────────────────────────────────────────
@@ -3403,12 +3026,9 @@ export function apply(ctx: Context, config?: unknown): void {
         enabled: bool(ENABLED_FIELD),
         sections: {
           键位: bool(KEYS_ENABLED_FIELD),
-          右键菜单: bool(MENU_ENABLED_FIELD),
           快捷指令: bool(QUICK_ENABLED_FIELD),
           设置面板: bool(PANEL_ENABLED_FIELD),
           默认终端: bool(TERMINAL_ENABLED_FIELD),
-          微信通知: bool(NOTIFY_ENABLED_FIELD),
-          'OpenCode 请求头': bool(HEADER_ENABLED_FIELD),
           只读查证: bool(OPTIMIZE_READ_TOOLS_FIELD),
         },
         fieldConstants: ALL_SETTINGS_FIELDS,
@@ -3430,27 +3050,11 @@ export function apply(ctx: Context, config?: unknown): void {
           hasSandbox: has('sandbox'),
         },
         persistentTerminals,
-        header: {
-          overlayInstalled: headerOverlayState.installed,
-          hasLoader: has('loader'),
-          migrated: pendingMigrations(own).length === 0,
-          status: text(HEADER_STATUS_FIELD),
-          // 0.22.0 起这条链不再写用户配置；真写了就是回归，自检要红。
-          writesUserConfig: false,
-          // 0.25.0：宿主自己会发这个头时，上面那些"挂没挂上"都不再重要（见 src/opencode-header.ts）。
-          native: nativeSessionHeader().support === 'native',
-          nativeEvidence: nativeSessionHeader().evidence,
-        },
         quick: {
           file: quickStorePath(),
           readable: quickOutcome.kind === 'ok',
           custom: quickOutcome.kind === 'ok' ? bookLooksCustom(quickOutcome.book) : false,
           error: quickOutcome.kind === 'ok' ? '' : String(quickOutcome.kind),
-        },
-        notify: {
-          enabled: bool(NOTIFY_ENABLED_FIELD),
-          channel: text(NOTIFY_CHANNEL_FIELD),
-          credentialSet: text(NOTIFY_PUSHPLUS_FIELD) !== '' || text(NOTIFY_WECOM_FIELD) !== '',
         },
         optimize: {
           tier: text(OPTIMIZER_TIER_FIELD),
@@ -3835,66 +3439,6 @@ export function apply(ctx: Context, config?: unknown): void {
         logHint: join(io.tmpdir, `${RESTART_LOG_PREFIX}*.err.log`),
       }
     }
-
-    // ── 微信通知（0.17.0，单向）──────────────────────────────────────────
-    //
-    // 用户 2026-10-01：只要通知、不做双向、不走 OpenClaw。所以这里只有"往外推"，
-    // 没有任何"往回收"的东西 —— 界面上也必须明说这一点。
-    const readNotifySettings = (): NotifySettings => {
-      // ⚠ 没找到 makeReader（可能不是模块级 import）：直读服务并**如实报错** ——
-      // 绝不静默当成"配置为空"，那会让用户以为开关坏了。
-      const service = restartCtx.get('settings') as unknown as { get?: (ns: string) => unknown } | undefined
-      const raw = typeof service?.get === 'function' ? service.get(NAMESPACE) : undefined
-      if (raw === undefined) throw new Error('读不到本插件的设置命名空间（这也说明 reader 没接对）')
-      const all = sanitizeSettings(raw as Record<string, unknown>)
-      return {
-        enabled: all.notifyEnabled,
-        channel: all.notifyChannel,
-        pushplusToken: all.notifyPushplusToken,
-        wecomWebhook: all.notifyWecomWebhook,
-        kinds: all.notifyKinds,
-      }
-    }
-
-    /** 宿主侧发一次 HTTP（凭据只进请求体，绝不进日志）。 */
-    const notifyFetchText: NotifyIo['fetchText'] = async (url, init) => {
-      const response = await fetch(url, { method: init.method, headers: { ...init.headers }, body: init.body })
-      return { status: response.status, body: await response.text() }
-    }
-
-    // 「测试推送」：用户在设置页点一下，验证配置对不对（成败看 ok，原因来自渠道原话）。
-    restartCtx.effect(() => restartCtx.webServer.register({
-      kind: 'exact',
-      path: NOTIFY_TEST_API_PATH,
-      handler: createNotifyTestHandler({ readSettings: readNotifySettings, fetchText: notifyFetchText }),
-    }))
-
-    // 四个官方事件：只观察、不干预（approval/user-questions 是 waterfall，务必透传）。
-    // 通知出错只留一行日志 —— 绝不能让"没人收到提醒"变成"审批界面卡住"。
-    restartCtx.effect(() => {
-      // 事件总线不一定是 cordis 的 ctx（宿主形态/测试替身可能不同）：没有 on 就**不挂**，
-      // 并留下一句话 —— 绝不能因为通知没挂上而让宿主起不来。
-      const bus = restartCtx as unknown as { on?: (name: string, handler: unknown) => unknown }
-      if (typeof bus.on !== 'function') {
-        console.warn('[composer-ux] 这个宿主没有事件总线（ctx.on），微信通知的事件钩子没挂上')
-        return
-      }
-      const lastSent: Record<string, number> = {}
-      const dispose = registerNotifyHooks({
-        on: (name, handler) => bus.on?.(name, handler) as unknown as (() => void) | void,
-        deliver: (event: NotifyEvent) => {
-          void sendNotification(readNotifySettings(), event, { fetchText: notifyFetchText, lastSent })
-            .then(outcome => {
-              if (!outcome.sent && outcome.reason !== '') console.warn(`[composer-ux] 微信通知未发出：${outcome.reason}`)
-            })
-            .catch(error => { console.warn('[composer-ux] 微信通知异常', error) })
-        },
-        // TODO(0.17.x)：宿主里没有现成的"会话 id → 标题"查表，先给空串（消息省掉「会话：」那行）。
-        titleOf: () => '',
-        warn: (message: string) => { console.warn(`[composer-ux] ${message}`) },
-      })
-      return dispose
-    })
 
     restartCtx.effect(() => restartCtx.webServer.register({
       kind: 'exact',

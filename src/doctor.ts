@@ -57,30 +57,12 @@ export interface DoctorInput {
     readonly peerInstalled: string
     readonly mismatch: boolean
   }
-  /** 请求头那一栏。 */
-  readonly header: {
-    readonly overlayInstalled: boolean
-    readonly hasLoader: boolean
-    readonly migrated: boolean
-    readonly status: string
-    readonly writesUserConfig: boolean
-    /** 宿主自己会发这个头（0.25.0）：为真时这一栏本来就不需要。 */
-    readonly native: boolean
-    /** 原生支持的证据（pi-ai 版本 / 环境变量强制）；没探到就是空串。 */
-    readonly nativeEvidence: string
-  }
   /** 快捷指令本。 */
   readonly quick: {
     readonly file: string
     readonly readable: boolean
     readonly custom: boolean
     readonly error: string
-  }
-  /** 微信通知。 */
-  readonly notify: {
-    readonly enabled: boolean
-    readonly channel: string
-    readonly credentialSet: boolean
   }
   /** 解释层。 */
   readonly optimize: {
@@ -175,38 +157,12 @@ export function buildDoctorReport(input: DoctorInput): readonly DoctorRow[] {
   })
 
   rows.push({
-    id: 'header',
-    label: 'OpenCode 请求头',
-    level: input.header.writesUserConfig
-      ? 'fail'
-      : !input.header.native && !input.header.overlayInstalled && input.header.status !== ''
-        ? 'warn'
-        : 'ok',
-    detail: input.header.writesUserConfig
-      ? '❗检测到它仍在写用户配置（0.22.0 起应改为运行期覆盖）'
-      // 0.25.0：宿主自己会发这个头时，正确答案是"这一栏什么都不做" —— 说清证据，
-      // 免得用户以为插件坏了（状态行同时会写同一句话）。
-      : input.header.native
-        ? `宿主已原生支持（${input.header.nativeEvidence}）：按每段对话的真实 session id 自动发送，这一栏不需要、也不会注入`
-        : `${input.header.overlayInstalled ? '运行期覆盖已挂上' : input.header.hasLoader ? '覆盖没挂上' : '没有 loader 服务，挂不上'}；旧写入清理=${input.header.migrated ? '已完成' : '未完成'}${input.header.status === '' ? '；当前未启用' : `；${input.header.status}`}`,
-  })
-
-  rows.push({
     id: 'quick',
     label: '快捷指令本',
     level: input.quick.readable ? 'ok' : 'fail',
     detail: input.quick.readable
       ? `${input.quick.file}${input.quick.custom ? '（有自定义内容）' : '（内置 9 条）'}`
       : `读不到 ${input.quick.file}：${input.quick.error === '' ? '未知原因' : input.quick.error}`,
-  })
-
-  rows.push({
-    id: 'notify',
-    label: '微信通知',
-    level: input.notify.enabled ? (input.notify.credentialSet ? 'ok' : 'fail') : 'info',
-    detail: input.notify.enabled
-      ? `${input.notify.channel}：${input.notify.credentialSet ? '凭据已设置' : '缺凭据（开关是开的，但发不出去）'}`
-      : '未启用',
   })
 
   rows.push({

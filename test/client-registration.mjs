@@ -202,13 +202,12 @@ const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
 // 0.15.0 起是 8 个（多了侧边栏脚注那枚「重启」）。
-check('注册了 9 个槽位条目', registrations.length === 9, JSON.stringify(registrations.map(r => r.id)))
+check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
 // 0.15.4：侧边栏脚注那枚按用户要求移除了（侧边栏底部太挤）；现在入口是标题栏那枚 + 设置页那枚。
 check('侧边栏脚注那枚已移除', byId('composer-ux-restart') === undefined)
 check('标题栏条那枚在（摆放照 HHHEEEWWW/dsh-quick-restart）',
   byId('composer-ux-restart-titlebar')?.name === 'shell.overlay')
 check('设置页条目', byId('composer-ux')?.name === 'settings.section')
-check('右键菜单浮层', byId('composer-ux-menu')?.name === 'shell.overlay')
 check('面板缩放手柄', byId('composer-ux-panel-resize')?.name === 'shell.overlay')
 check('快捷指令按钮', byId('composer-ux-quick')?.name === 'conversation.input.right')
 check('快捷指令面板', byId('composer-ux-quick-panel')?.name === 'shell.overlay')
@@ -429,13 +428,6 @@ console.log('2.0e 非浏览器环境下的健壮性（Node 20 没有全局 navig
   const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
     .filter(line => !/^\s*\/\//.test(line)).join('\n')
   const interceptors = strip(readFileSync('src/client/interceptors.ts', 'utf8').replace(/\r\n/g, '\n'))
-  // Node 22 才把 `navigator`（连剪贴板）补成全局；Node 20 及更早读它就是 ReferenceError。
-  // 0.12.0 三平台 CI 里三个平台**同时**在测试步骤崩掉，就是 `prefetchClipboard` 直接读
-  // `navigator.clipboard` —— 这条护栏让它在默认（Node 24）本地跑里也能被挡住。
-  check('预读剪贴板前先判 navigator 存在',
-    /function prefetchClipboard[\s\S]{0,500}?typeof navigator === 'undefined'/.test(interceptors))
-  check('剪贴板粘贴路径同样先判环境',
-    interceptors.includes("typeof navigator === 'undefined' || navigator.clipboard === undefined"))
 }
 
 console.log('2.0f 主按钮的填色与前景必须成对（深色主题下 brand-primary 是近白）')
@@ -605,7 +597,6 @@ check(
 
 console.log('4. 输入框拦截器真的挂上了')
 check('注册了 keydown 捕获监听', listeners.includes('keydown'), listeners.join(','))
-check('注册了 contextmenu 捕获监听', listeners.includes('contextmenu'), listeners.join(','))
 check('注册了 click 捕获监听（官方发送按钮那一路）', listeners.includes('click'), listeners.join(','))
 
 console.log('5. 设置写入面齐备')
@@ -626,53 +617,6 @@ for (const name of ['close', 'insert', 'optimize', 'setTier', 'setInsertMode', '
 check('面板不再拿到会造成矛盾状态的 setAlways', panelInject.actions.setAlways === undefined)
 for (const name of ['live', 'panel', 'busy', 'notice', 'book', 'bookStatus']) {
   check(`面板拿到 ${name} 钩子`, typeof panelInject.hooks[name]?.getSnapshot === 'function')
-}
-
-console.log('6. 右键菜单三档（派发真实 contextmenu，看实际行为而不是看源码文本）')
-{
-  /** 派发一次 contextmenu，返回这次事件被怎么对待。 */
-  const fireContextMenu = () => {
-    const event = {
-      target: root,
-      prevented: false,
-      stopped: false,
-      immediate: false,
-      preventDefault() { this.prevented = true },
-      stopPropagation() { this.stopped = true },
-      stopImmediatePropagation() { this.immediate = true },
-    }
-    const handler = handlers.get('contextmenu')
-    if (typeof handler !== 'function') throw new Error('contextmenu 拦截器没有装上')
-    handler(event)
-    return event
-  }
-  /** 改档并让插件重新同步（真实插件走的就是这个订阅回放）。 */
-  const setMenuMode = (mode) => {
-    scopeValue.menuMode = mode
-    for (const listener of settingsSubscribers) listener()
-  }
-
-  // 初始设置里没有 menuMode：应当落到默认档。
-  const initial = fireContextMenu()
-  check('没设过档位 → 默认「官方不介入」：不 preventDefault、也不拦事件',
-    !initial.prevented && !initial.immediate && !initial.stopped, JSON.stringify(initial))
-
-  setMenuMode('official')
-  const official = fireContextMenu()
-  check('官方档：插件完全不介入（别的插件的右键处理拿得到事件）',
-    !official.prevented && !official.immediate && !official.stopped, JSON.stringify(official))
-
-  setMenuMode('browser')
-  const browser = fireContextMenu()
-  check('浏览器档：挡住别的插件（stopImmediatePropagation）但不 preventDefault（浏览器菜单照常弹）',
-    browser.immediate && browser.stopped && !browser.prevented, JSON.stringify(browser))
-
-  setMenuMode('custom')
-  const custom = fireContextMenu()
-  // 自定义档：preventDefault 掉浏览器菜单、由本插件接管，同时挡住同一层里其它插件的
-  // 捕获监听（否则两边会各弹一个菜单；浏览器档同样这么做）。
-  check('自定义档：preventDefault 掉浏览器菜单、并挡住同层其它捕获监听',
-    custom.prevented && custom.stopped && custom.immediate, JSON.stringify(custom))
 }
 
 console.log('7. 抬头那个「GitHub ↗」链接（两处地址不许分叉）')
@@ -714,7 +658,7 @@ console.log('8. 「重启 DSH」：在抬头右端、两步确认、靠 boot 号
     `actions=${String(actionsAt)} button=${String(buttonAt)} link=${String(linkAt)}`)
   // 0.23.1：这条原来只验"在链接之后"，而横幅当时渲染在所有卡片之后 —— 放错了也照样绿。
   // 现在真的钉"抬头之后、第一张卡之前"。
-  const firstCardAt = section.indexOf('<NotifyCard')
+  const firstCardAt = section.indexOf('name="自检"')
   check('❗确认条挂在抬头正下方（在第一张卡之前）',
     bannerAt > linkAt && firstCardAt > 0 && bannerAt < firstCardAt,
     `link=${String(linkAt)} banner=${String(bannerAt)} firstCard=${String(firstCardAt)}`)
@@ -765,30 +709,14 @@ console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关�
   const bundle = readFileSync('lib/client.js', 'utf8').replace(/\r\n/g, '\n')
 
   const cardToggles = (section.match(/checked: sections\.\w+/g) ?? []).length
-  check('七张折叠卡各有自己的卡级开关（读 activeSections 的结果）', cardToggles === 7, String(cardToggles))
+  check('各折叠卡的卡级开关都读 activeSections 的结果', cardToggles >= 4, String(cardToggles))
   check('七栏的判据只有一处（activeSections(settings)），不在每个组件里各写一遍',
     section.includes('const sections = activeSections(settings)'))
   check('未启用时概览上加前缀，一眼看得出这一栏没生效', section.includes('未启用 · '))
 
-  // 「卡内已有的开关全部移到标题行」——但右键菜单那 7 项按后来的反馈又搬回了卡内
-  // （理由：那 7 项只对「自定义」档有意义，摆在标题行等于在任何档位都能改一堆当时不生效的东西）。
-  const customAt = section.indexOf("settings.menuMode === 'custom' && (")
-  const itemsAt = section.indexOf('{MENU_ITEMS.map((item, index) => (')
-  check('那 7 个条目开关确实在「自定义」分支里（位置上在它之后，不在标题行）',
-    customAt > 0 && itemsAt > customAt, `custom@${customAt} items@${itemsAt}`)
-  check('标题行不再有「7 项 ▼」：strip 那一套（按钮 + 展开条 + 专用样式）整套拆掉，不留第二个入口',
-    !section.includes('strip={{') && !section.includes('strip?: {')
-    && !section.includes('dsh-ux-stripButton') && !section.includes('dsh-ux-cardStrip'))
-  check('三档说明改成「点哪档只显示哪档」（官方 / 浏览器 / 自定义各一段，互斥渲染）',
-    section.includes("settings.menuMode === 'official' && (")
-    && section.includes("settings.menuMode === 'browser' && ("))
-  check('标题行下不再重复当前档位的 hint（那一档的说明只剩卡内那一段）',
-    !section.includes('MENU_MODES.find(item => item.id === settings.menuMode)?.hint'))
   check('设置面板的两个开关搬到标题行（MiniToggle）', section.includes('<MiniToggle'))
   check('默认终端的三档搬到标题行（compact 胶囊）',
     /controls=\{\(\s*<PillChoice\s+compact/.test(section))
-  check('OpenCode 那一栏复用 headerEnabled，没有第二个同义开关',
-    section.includes('checked: sections.header') && !section.includes('headerSectionEnabled'))
 
   // 标题行里现在有按钮，不能再把整行包成一个 <button>（嵌套按钮是无效 HTML，点击也会冒泡成"展开"）。
   check('标题行拆成"展开按钮 + 控件区"两个兄弟节点',
@@ -808,8 +736,6 @@ console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关�
   const interceptors = readFileSync('src/client/interceptors.ts', 'utf8').replace(/\r\n/g, '\n')
   check('键位：拦截器按「键位」栏判断',
     interceptors.includes('activeSections(deps.settings()).keys'))
-  check('右键菜单：拦截器按「右键菜单」栏判断',
-    interceptors.includes('activeSections(settings).menu'))
   check('快捷指令：入口按钮按栏开关返回 null',
     readFileSync('src/client/QuickCommandsButton.tsx', 'utf8').replace(/\r\n/g, '\n').includes('activeSections(settings).quick'))
   check('设置面板：尺寸把手按栏开关停用',
@@ -818,7 +744,7 @@ console.log('9. 「每一栏一个开关」：七张卡各一个 + 卡内开关�
   // 「恢复默认」清掉栏开关 = 回到"从没碰过"的样子。五栏那是"关"，而 0.7.0 的统计行
   // 清掉之后是"开"（它的默认就是开）—— 方向相反但各自都对，所以两组都要清。
   const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
-  for (const field of ['KEYS_ENABLED_FIELD', 'MENU_ENABLED_FIELD', 'QUICK_ENABLED_FIELD',
+  for (const field of ['KEYS_ENABLED_FIELD', 'QUICK_ENABLED_FIELD',
     'PANEL_ENABLED_FIELD', 'TERMINAL_ENABLED_FIELD', 'STATS_ENABLED_FIELD']) {
     check(`「恢复默认」清掉 ${field}`, new RegExp(`${field},`).test(client))
   }
@@ -1190,29 +1116,6 @@ console.log('14. React 副作用：alive ref 必须在 effect 体里重置（Str
   }
 }
 
-console.log('15. 「工作区目录选择」：0.23.3 起**停用接管**（不许再按设置值装影子）')
-{
-  // 为什么钉源码级：真机现象是"选完工作区几秒后自己退回选择工作区"，只有真的装上才复现。
-  // 本仓测不到浏览器里那一步，能钉的是**接线本身**：接管必须被硬编码为不安装。
-  const contract = readFileSync('src/settings-contract.ts', 'utf8').replace(/\r\n/g, '\n')
-  check('字段仍留在契约里且默认关（字段不再驱动接管，留着是为了 schema 稳定）',
-    contract.includes("export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'")
-    && /directoryPickEnabled: false,/.test(contract))
-  check('净化仍会读它（历史值不会被当成未知键）',
-    /directoryPickEnabled: asBool\(DIRECTORY_PICK_ENABLED_FIELD\)/.test(contract))
-
-  const client = readFileSync('src/client.tsx', 'utf8').replace(/\r\n/g, '\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  check('❗接管被硬编码为不安装（flow.sync(false)）—— 2026-10-16 真机拍板停用',
-    /flow\.sync\(false\)/.test(client))
-  check('❗不许再按设置值决定接管（那条路会回滚工作区状态）',
-    !client.includes('flow.sync(live.getSnapshot().directoryPickEnabled === true)'))
-  check('控制器还在（恢复时只改一个实参，不用重搭）',
-    client.includes('createDirectoryFlowController({ slots, scope: globalThis, component: DirectoryFlowEntry })'))
-  check('卸载仍会 dispose（不留影子占用者）',
-    /flow\.dispose\(\)/.test(client))
-}
-
 console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须都在 ownSchema() 里（0.19.0 补漏）')
 {
   // 为什么必须有这一节：写设置走的是宿主设置服务的 `settings.mutate`，它对每个 path 先查
@@ -1233,21 +1136,10 @@ console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须
   const declared = [...contract.matchAll(/export const ([A-Z0-9_]+_FIELDS?)\s*=/g)]
     .map(match => match[1])
     .filter(name => !PLUGIN_OWNED.has(name))
-  check('契约里确实有一批字段常量（正则没跑空）', declared.length >= 40, String(declared.length))
+  check('契约里确实有一批字段常量（正则没跑空）', declared.length >= 25, String(declared.length))
   const missing = declared.filter(name => !body.includes(name))
   check(`契约里的 ${declared.length} 个字段常量全部在 ownSchema() 里（缺一个 = 那个开关拨不动）`,
     missing.length === 0, missing.join(' / '))
-  // 逐个点名 0.17.0 漏过的那 5 个 + 0.19.0 新增的这 1 个：漏了要一眼看出是哪个。
-  for (const [name, label] of [
-    ['NOTIFY_ENABLED_FIELD', '微信通知总开关'],
-    ['NOTIFY_CHANNEL_FIELD', '微信通知渠道'],
-    ['NOTIFY_PUSHPLUS_FIELD', 'PushPlus token'],
-    ['NOTIFY_WECOM_FIELD', '企业微信 webhook'],
-    ['NOTIFY_KINDS_FIELD', '三类事件开关'],
-    ['DIRECTORY_PICK_ENABLED_FIELD', '工作区目录选择开关'],
-  ]) {
-    check(`${label}（${name}）在 schema 里`, body.includes(name))
-  }
 }
 
 console.log('17. 真机事故（0.2.1-alpha.2，2026-10-10）：设置页用了一个不存在的 props')
@@ -1293,16 +1185,9 @@ console.log('18. 0.22.0：启动期写一律走 retryWrite；覆盖状态是共�
   // 启动期的写会和宿主自己写 profile 抢锁（2026-10-10 撞掉迁移、2026-10-13 撞掉终端状态）。
   check('❗终端状态写入走 retryWrite（不再裸 mutate）',
     /retryWrite\(\(\) => settings\.mutate\(namespace, ops\)/.test(term))
-  check('❗请求头的生成/清理/回写三处都走 retryWrite',
-    (host.match(/retryWrite\(\(\) => settings\.mutate\(/g) ?? []).length >= 3,
-    String((host.match(/retryWrite\(\(\) => settings\.mutate\(/g) ?? []).length))
   check('retryWrite 本体在共享模块里（终端子系统也 import 它）',
     readFileSync('src/retry-write.ts', 'utf8').includes('export async function retryWrite')
     && term.includes("from '../retry-write.ts'"))
-  check('❗覆盖状态是共享可变对象（不是"装完抄一份"）',
-    host.includes('const headerOverlayState = { installed: false }')
-    && host.includes('overlayInstalled: headerOverlayState.installed')
-    && !host.includes('headerOverlayInstalled'))
   check('自检的纯函数在 doctor.ts（宿主半只采集）',
     doctor.includes('export function buildDoctorReport') && host.includes('buildDoctorReport(await collectDoctor())'))
 }

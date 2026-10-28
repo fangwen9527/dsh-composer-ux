@@ -2,6 +2,42 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.28.0] — 2026-10-28（删掉四栏：微信通知 / 工作区目录选择 / 右键菜单 / OpenCode 请求头）
+
+用户 2026-10-28：「我的插件去掉微信通知，去掉工作区目录选择，去掉右键菜单，去掉 open code 请求头」。
+追问两次定下：**彻底删掉（不是藏起来）**，并且**清掉他机器上的旧配置、清之前先把凭据备份成 JSON**。
+
+**破坏性变更（0.27.0 → 0.28.0）**
+
+这四栏从插件里整体移除：设置页卡片、宿主 schema 字段、净化与默认值、路由、宿主半逻辑、
+独立模块、测试套件、变异用例、文档章节全部删掉，不是"隐藏入口"。
+
+| 删掉的东西 | 连带删掉的代码 |
+|---|---|
+| 微信通知 | `notify.ts` / `notify-send.ts` / `notify-hooks.ts` / `notify-route.ts` / `notify-events.ts`、`/composer-ux/notify/test` 路由、四个事件钩子 |
+| 工作区目录选择 | `client/directory-flow.ts` / `client/DirectoryFlowEntry.tsx`、`directoryPickEnabled` 字段 |
+| 右键菜单 | `client/ContextMenuHost.tsx`、`interceptors.ts` 里的 contextmenu 分支与 `runMenuAction`、七个条目开关与三档 `menuMode` |
+| OpenCode 请求头 | `opencode-header.ts`、`migrations.ts`（唯一一条迁移就是它）、`internal/config` 运行期覆盖、`header*` 七个字段 |
+
+**升级后会怎样**
+
+- **右键菜单**：回到 DSH / 浏览器原生行为（本插件不再拦 `contextmenu`）。之前选「自定义菜单」的人
+  会立刻感觉到差别 —— 这是删这一栏的必然结果，不是 bug。
+- **OpenCode 路由**：不受影响。宿主自 pi-ai 1.0.2 起就自带 `opencode-headers.js`，按**每段对话的真实
+  session id** 发 `x-opencode-session`，比本插件那个固定 UUID 更准（0.25.0 起本插件本来就只在旧宿主上才注入）。
+- **旧配置**：profile 里残留的 `notify*` / `menu*` / `header*` / `directoryPickEnabled` 键会被静默忽略
+  （schemastery 对未声明键原样放行）。这次顺手清掉了本机 9 个 profile 里的死键，清之前备份在
+  `~/.dsh/dsh-composer-ux-遗留配置备份-<日期>.json`。
+
+**代码体量**
+
+`src/` 少 9 个文件、约 1300 行（`host.ts` 净减 456 行）；测试套件 35 → **29**，
+用例 2889 → **2603**；变异用例 233 → **87**（删掉的全是指向已删代码的那些）。
+
+**顺手修的**
+
+- 客户端入口的注释与「恢复默认」的字段清单同步瘦身（`MENU_FIELDS` 一类死引用清零）。
+
 ## [0.27.0] — 2026-10-28（左侧「全局面板」默认折叠：收成一条 / 只留图标，设置里选）
 
 用户 2026-10-28（截图圈住侧边栏那 5 个入口）：「给我的插件添加一个打开后默认折叠这个区域的功能」，

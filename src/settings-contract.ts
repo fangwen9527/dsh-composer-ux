@@ -110,44 +110,6 @@ export const SYNC_API_PATH = '/composer-ux/sync-prices'
 /** 全局总开关字段名。 */
 export const ENABLED_FIELD = 'enabled'
 
-// ── 微信通知（0.17.0，单向）────────────────────────────────────────────────
-//
-// 用户 2026-10-01 明确：「只要通知，不做双向」。所以这里只有"往外推"的配置，
-// 没有任何"往回收"的东西 —— 界面上也必须明说这件事，不能让它看起来像双向。
-
-/** 通知总开关。默认**关**：不打招呼就往手机推消息是越界。 */
-export const NOTIFY_ENABLED_FIELD = 'notifyEnabled'
-/** 渠道：'pushplus' | 'wecom'。 */
-export const NOTIFY_CHANNEL_FIELD = 'notifyChannel'
-/** PushPlus token（推到你关注的公众号对话）。 */
-export const NOTIFY_PUSHPLUS_FIELD = 'notifyPushplusToken'
-/** 企业微信群机器人 webhook 地址。 */
-export const NOTIFY_WECOM_FIELD = 'notifyWecomWebhook'
-/** 三类事件各自的开关：{ needs-input, done, error }。 */
-export const NOTIFY_KINDS_FIELD = 'notifyKinds'
-
-/** 「测试推送」那条路由（0.17.0）：用户在设置页点一下，验证凭据与渠道对不对。 */
-export const NOTIFY_TEST_API_PATH = '/composer-ux/notify/test'
-
-// ── 工作区目录选择自适应（0.19.0）────────────────────────────────────────────
-//
-// 背景：官方的目录选择是两个互斥界面（`-native` 系统选择器 / `-browse` 应用内 Miller 分栏），
-// 由 `-auto` 在宿主启动时二选一，**只看宿主不看客户端**；官方 README 自己承认 `-browse`
-// 「不枚举盘符根 —— 跨盘依赖浏览器 UI 的路径输入入口」，而社区 bundle `dsh-mobile` 为手机端
-// 把 browse 钉死 ⇒ 桌面也只剩应用内框、换盘必须手输。
-//
-// 做法：槽位自身的 shadow 能力（同 cell 不同优先级可共存、**最低的活条目渲染**）。桌面应用的
-// preload 注入了 `__DSH_DIRECTORY_PICKER__` ⇒ 本插件在优先级 -1 上接管那两个目录流程槽位，
-// 弹系统文件夹框；手机/远端浏览器没有该桥 ⇒ 一个槽位都不注册，官方界面照旧。
-
-/**
- * 目录选择自适应开关。默认**关**。
- *
- * 为什么默认关：它是**接管官方槽位**（改掉别人的选择框），属于"不打招呼就不该动"的默认行为 ——
- * 与通知总开关（默认关）同一个理由。用户在设置页打开后**即时生效**（不用重启）。
- */
-export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'
-
 // ── 「每一栏一个开关」 ───────────────────────────────────────────────────────
 //
 // 六张折叠卡各有一个"这一栏要不要生效"的开关，**默认关**；总开关（`enabled`）默认开，
@@ -159,13 +121,9 @@ export const DIRECTORY_PICK_ENABLED_FIELD = 'directoryPickEnabled'
 // 所以：**这一栏的值不等于"从没碰过的样子" ⇒ 认定碰过 ⇒ 开**（判据见 `sectionEnabledOf`）。
 // 全新安装（什么痕迹都没有）因此是六栏全关。规则的实现在下面 `sectionEnabledOf`。
 //
-// 「OpenCode 请求头」那一栏**没有新键**：它原来的 `headerEnabled`（默认 false）本来就是
-// "这一栏要不要生效"，直接搬到标题行当卡级开关，不再造一个同义的键。
 
 /** 「键位」栏开关。 */
 export const KEYS_ENABLED_FIELD = 'keysEnabled'
-/** 「右键菜单」栏开关。 */
-export const MENU_ENABLED_FIELD = 'menuEnabled'
 /** 「快捷指令」栏开关。 */
 export const QUICK_ENABLED_FIELD = 'quickEnabled'
 /** 「设置面板」栏开关。 */
@@ -178,8 +136,8 @@ export const TERMINAL_ENABLED_FIELD = 'terminalEnabled'
 // 与上面五栏**规则不同**，这一点必须显式写下来，否则后来的人会照抄 sectionEnabledOf：
 // 那五栏默认关、靠"用户碰过没"迁移，是因为它们**已经发布过**——一律默认关会把老用户正在
 // 用的键位/请求头/终端当场关掉。而「统计行」是新能力，没有任何"碰过"的痕迹可依，
-// 且用户 2026-09-28 明确要求"装完就生效"，所以它是**普通布尔字段、默认开**（同
-// `headerEnabled` 的写法，只是默认值相反）。因此它不进 SECTION_SIGNALS。
+// 且用户 2026-09-28 明确要求"装完就生效"，所以它是**普通布尔字段、默认开**，
+// 因此不参与下面那套"碰过才开"的迁移（不进 SECTION_SIGNALS）。
 //
 // 这一栏**只有这一个键**：曾经还有 `statsPrecision` / `statsWiden` 两个子开关（三位小数 /
 // 加宽统计行），但「加宽」做完真机核对后被用户拍板撤掉（前提不成立，理由见
@@ -328,84 +286,6 @@ export const PANEL_HEIGHT_FIELD = 'panelHeight'
 export const NAV_FOLD_MODE_FIELD = 'navFoldMode'
 /** 折叠状态本身（true = 收起）。分开存是为了"形态"与"展开收起"互不覆盖。 */
 export const NAV_FOLD_COLLAPSED_FIELD = 'navFoldCollapsed'
-
-/** 右键菜单开关字段名。 */
-export const MENU_FIELDS = [
-  'menuUndo',
-  'menuRedo',
-  'menuCut',
-  'menuCopy',
-  'menuPaste',
-  'menuDelete',
-  'menuSelectAll',
-] as const
-
-export type MenuField = (typeof MENU_FIELDS)[number]
-
-/**
- * 右键菜单模式字段名（0.5.0 起三档）。
- *
- * 0.2.x～0.4.0 用的是布尔 `menuNative`：true = 浏览器原生菜单、false = 自定义菜单。
- * 布尔只有两位，表达不了「插件完全不介入」（不挡别的插件的菜单）这一档，所以换成
- * 字符串三档。旧字段**只作为迁移线索保留**：本字段为空时按旧字段推断（见 `menuModeFrom`）。
- */
-export const MENU_MODE_FIELD = 'menuMode'
-
-/** 0.2.x～0.4.0 的旧字段名：迁移线索，0.5.0 起不再写它。 */
-export const MENU_NATIVE_FIELD = 'menuNative'
-
-/** 「全局面板」折叠形态（0.27.0）。 */
-export type NavFoldMode = 'off' | 'bar' | 'icons'
-
-/** 三档的展示文案（设置页分段控件与自检/文档共用一处）。 */
-export const NAV_FOLD_MODES: ReadonlyArray<{ readonly id: NavFoldMode; readonly label: string }> = [
-  { id: 'off', label: '不折叠' },
-  { id: 'bar', label: '收成一条' },
-  { id: 'icons', label: '只留图标' },
-]
-
-/** 右键菜单模式：官方不介入 / 浏览器菜单 / 自定义菜单。 */
-export type MenuMode = 'official' | 'browser' | 'custom'
-
-/** 三档的元数据（数组顺序即界面顺序）。 */
-export const MENU_MODES: readonly {
-  readonly id: MenuMode
-  readonly label: string
-  readonly hint: string
-}[] = [
-  {
-    id: 'official',
-    label: '官方',
-    hint: '本插件完全不介入：DSH 与其它插件自己的右键处理原样生效（DSH 官方输入框本身没有右键菜单，通常看到的就是浏览器的菜单）',
-  },
-  {
-    id: 'browser',
-    label: '浏览器',
-    hint: '固定使用浏览器自带的菜单，并在本插件这一层挡住其它插件的菜单；粘贴免授权、零配置',
-  },
-  {
-    id: 'custom',
-    label: '自定义',
-    hint: '使用本插件的固定样式菜单；未选中文本时「剪切 / 复制 / 删除」置灰，粘贴需要浏览器剪贴板授权',
-  },
-]
-
-/**
- * 定出右键菜单模式：新字段优先，其次按旧布尔推断，都没有就用默认档。
- *
- * 三种情况判断得出来，是因为宿主半把旧字段声明成**可选**（没有 `.default(false)`）：
- * 「从没碰过那个开关」与「明确关了它」在文档里长得不一样（键不存在 / 键为 false），
- * 前者落到新默认档（官方不介入），后者保持原来的自定义菜单。
- * @param storedMode - 文档里的新字段值（可能是脏数据）。
- * @param legacyNative - 文档里的旧布尔值（可能不存在）。
- * @returns 三档之一。
- */
-export function menuModeFrom(storedMode: unknown, legacyNative: unknown): MenuMode {
-  if (storedMode === 'official' || storedMode === 'browser' || storedMode === 'custom') return storedMode
-  if (legacyNative === true) return 'browser'
-  if (legacyNative === false) return 'custom'
-  return DEFAULT_SETTINGS.menuMode
-}
 
 // ── 快捷指令与提示词优化 ─────────────────────────────────────────────────────
 
@@ -993,96 +873,10 @@ export function appendBatchForSend(book: QuickPromptBook, blank: boolean): reado
   return [...every, ...firstOnlyQuickPrompts(book)]
 }
 
-// ── OpenCode 请求头 ─────────────────────────────────────────────────────────
-//
-// OpenCode 的接口要求客户端每次请求都带一个稳定的会话 ID 请求头
-// （官方 Go 文档「可以在哪里使用？」第 3 条）。
-//
-// 0.25.0 起这条链的定位变了：**它只是给旧宿主补缺口的兼容层**。`@earendil-works/pi-ai`
-// 从 1.0.2 起自带 `dist/providers/opencode-headers.js`（`opencode` / `opencode-go` 两个 provider
-// 都被包过），用它自己拿到的**每段对话真实 session id** 发这个头；本插件注入的是**固定值**，
-// 而且 pi-ai「已有同名头就不覆盖」⇒ 开着这一栏反而会顶掉真实 id。
-// 所以宿主半先探测（见 `src/opencode-header.ts`）：宿主自己会发，就一律不注入。
-
-/** 请求头栏目字段名。 */
-export const HEADER_ENABLED_FIELD = 'headerEnabled'
-export const HEADER_NAME_FIELD = 'headerName'
-export const HEADER_VALUE_FIELD = 'headerValue'
-/** 作用路由名单（逗号/空格分隔）；留空 = 自动匹配 OpenCode 路由（见 OPENCODE_ROUTE_PREFIX / OPENCODE_HOSTS）。 */
-export const HEADER_ROUTES_FIELD = 'headerRoutes'
-
-/** 宿主半记账：上次实际写入的头名与值（决定停用/改名时撤销哪些键）。 */
-export const HEADER_APPLIED_NAME_FIELD = 'headerAppliedName'
-export const HEADER_APPLIED_VALUE_FIELD = 'headerAppliedValue'
-
-/** 宿主半写入的执行结果；设置页只读展示。 */
-export const HEADER_STATUS_FIELD = 'headerStatus'
-
-/**
- * 「宿主已原生支持」状态行前缀（0.25.0，两端共用）。
- *
- * 宿主自己的 pi-ai 会按**每段对话的真实 session id** 发 `x-opencode-session`，所以这一栏
- * 什么也不做才是对的。客户端靠这个前缀认出"这不是没生效、而是不需要"，从而把卡片文案
- * 换成"本宿主已原生支持，这一栏只给旧宿主用"，而不是显示一句像故障话的状态。
- */
-export const NATIVE_STATUS_PREFIX = '宿主已原生支持'
-
-/**
- * 迁移标记（0.22.0）：`internal/config` 运行期覆盖到位后，把 0.21.x 及以前**真的写进**
- * 用户模型路由配置里的请求头清理掉，并在本插件自己的命名空间里记下"已清理到第几版"。
- * 0 = 没清理过；1 = 已清理。
- */
-export const HEADER_CLEANUP_FIELD = 'headerCleanupVersion'
-
-/**
- * 只在宿主半维护的字段：设置页「恢复默认」不得清空它们，
- * 否则已写入的头会失去记账、永远撤销不掉。
- *
- * 「默认终端」的三个自持字段同理：候选表与状态是**宿主半的探测结果**，
- * 清掉之后界面会变成"没探测过"的样子（而实际还在用某个 bash），
- * 用户点一次「恢复默认」就会看到自相矛盾的状态。
- */
-export const HOST_OWNED_FIELDS = [
-  HEADER_APPLIED_NAME_FIELD,
-  HEADER_APPLIED_VALUE_FIELD,
-  HEADER_STATUS_FIELD,
-  HEADER_CLEANUP_FIELD,
-  TERMINAL_CANDIDATES_FIELD,
-  TERMINAL_STATUS_FIELD,
-  TERMINAL_EFFECTIVE_FIELD,
-  // 「金额」（0.10.0）：同步来的价目元信息由宿主半在"一键同步"里写（界面只读展示）。
-  SYNCED_PRICES_FIELD,
-] as const
-
-/** 请求头最终落地的设置命名空间（由 llm-pi-ai 注册）。 */
-export const LLM_NAMESPACE = 'llm-pi-ai'
-
-/**
- * 自动匹配的两条判据（满足其一即算 OpenCode 路由）：
- *  1. 路由名以 `opencode` 开头——DSH 内置的 `opencode-go` 就属于这种，
- *     它的 baseURL 由 pi-ai 目录内置，配置里读不到，只能靠名字。
- *  2. 该路由的 `baseURL` 主机是 opencode.ai（含子域）——用户自建路由常起任意名字
- *     （例如 `go`），但端点照样是 OpenCode，按 URL 认比按名字认可靠。
- */
-export const OPENCODE_ROUTE_PREFIX = 'opencode'
-
-/** 判据 2 用的主机名（含子域）。 */
-export const OPENCODE_HOSTS = ['opencode.ai'] as const
-
-/** 头名默认值 = OpenCode 官方要求的那一个。 */
-export const DEFAULT_HEADER_NAME = 'x-opencode-session'
-
-/** 头值长度上限（HTTP 头与设置文档都不宜过长）。 */
-export const HEADER_VALUE_MAX = 200
-
-/** 头名长度上限。 */
-export const HEADER_NAME_MAX = 64
-
 /** 全部可持久化字段。 */
 export type SettingsField =
   | typeof ENABLED_FIELD
   | typeof KEYS_ENABLED_FIELD
-  | typeof MENU_ENABLED_FIELD
   | typeof QUICK_ENABLED_FIELD
   | typeof PANEL_ENABLED_FIELD
   | typeof TERMINAL_ENABLED_FIELD
@@ -1091,24 +885,11 @@ export type SettingsField =
   | typeof PANEL_RESIZE_FIELD
   | typeof PANEL_WIDTH_FIELD
   | typeof PANEL_HEIGHT_FIELD
-  | typeof MENU_NATIVE_FIELD
-  | typeof MENU_MODE_FIELD
-  | typeof HEADER_ENABLED_FIELD
-  | typeof HEADER_NAME_FIELD
-  | typeof HEADER_VALUE_FIELD
-  | typeof HEADER_ROUTES_FIELD
-  | typeof HEADER_CLEANUP_FIELD
   | typeof QUICK_PROMPTS_FIELD
   | typeof OPTIMIZER_TIER_FIELD
   | typeof OPTIMIZER_CONTEXT_FIELD
   | typeof OPTIMIZER_LEDGER_FIELD
   | typeof OPTIMIZE_KEEP_DOCK_FIELD
-  | typeof NOTIFY_ENABLED_FIELD
-  | typeof NOTIFY_CHANNEL_FIELD
-  | typeof NOTIFY_PUSHPLUS_FIELD
-  | typeof NOTIFY_WECOM_FIELD
-  | typeof NOTIFY_KINDS_FIELD
-  | typeof DIRECTORY_PICK_ENABLED_FIELD
   | typeof OPTIMIZE_READ_TOOLS_FIELD
   | typeof OPTIMIZER_FRAMING_FIELD
   | typeof OPTIMIZER_PERMISSION_FIELD
@@ -1128,7 +909,6 @@ export type SettingsField =
   | typeof BALANCE_ENABLED_FIELD
   | typeof SYNCED_PRICES_FIELD
   | typeof PRICE_AUTO_SYNC_FIELD
-  | MenuField
 
 /** 鼠标右键菜单打开时的一次快照（含位置与选择状态）。 */
 export interface MenuState {
@@ -1147,10 +927,9 @@ export interface ComposerUxSettings {
   enabled: boolean
   /**
    * 六栏各自的开关：`enabled && 该栏开关` 才生效。默认**关**（老用户按"碰过没"迁移，见
-   * `sectionEnabledOf`）。「OpenCode 请求头」那一栏直接用 `headerEnabled`，没有单独的键。
+   * `sectionEnabledOf`）。
    */
   keysEnabled: boolean
-  menuEnabled: boolean
   quickEnabled: boolean
   panelEnabled: boolean
   terminalEnabled: boolean
@@ -1158,39 +937,12 @@ export interface ComposerUxSettings {
   sendKey: string
   /** 换行键位规范串。 */
   newlineKey: string
-  menuUndo: boolean
-  menuRedo: boolean
-  menuCut: boolean
-  menuCopy: boolean
-  menuPaste: boolean
-  menuDelete: boolean
-  menuSelectAll: boolean
-  /**
-   * 右键菜单模式（官方不介入 / 浏览器菜单 / 自定义菜单）。
-   * 文档里没有这个字段时按旧布尔 `menuNative` 推断，见 `menuModeFrom`。
-   */
-  menuMode: MenuMode
   /** 设置面板：允许拖拽边缘调整大小。 */
   panelResize: boolean
   /** 设置面板宽（px）；缺省使用官方默认 800。 */
   panelWidth?: number
   /** 设置面板高（px）；缺省使用官方默认 min(800, 视口-48)。 */
   panelHeight?: number
-  /** OpenCode 请求头：启用后写进 llm-pi-ai 的 opencode 系路由。 */
-  headerEnabled: boolean
-  /** 头名（默认 x-opencode-session）。 */
-  headerName: string
-  /** 头值；留空时首次启用由宿主半生成一个稳定 ID 并落盘沿用。 */
-  headerValue: string
-  /** 作用路由名单；留空 = 自动匹配 opencode 系路由（只动已存在的路由）。 */
-  headerRoutes: string
-  /** 宿主半记账字段（设置页只读）。 */
-  headerAppliedName: string
-  headerAppliedValue: string
-  /** 宿主半写入结果（设置页只读）。 */
-  headerStatus: string
-  /** 旧写入的清理进度（宿主半维护；0/未设置 = 还没清理）。 */
-  headerCleanupVersion?: number
   /** 快捷指令列表（顺序即面板与设置页里的显示顺序）。 */
   quickPrompts: readonly QuickPrompt[]
   /** 提示词优化强度档位。 */
@@ -1241,7 +993,7 @@ export interface ComposerUxSettings {
    * 「统计行」栏开关（0.7.0）：默认**开**。
    *
    * 与上面五栏的迁移规则不同：那五栏默认关是因为它们已发布过、默认关会打断正在用的人；
-   * 这一栏是新能力，用户要求装完即生效，所以按普通布尔字段处理（同 `headerEnabled`）。
+   * 这一栏是新能力，用户要求装完即生效，所以按普通布尔字段处理。
    */
   statsEnabled: boolean
   /**
@@ -1262,58 +1014,20 @@ export interface ComposerUxSettings {
   syncedPrices?: SyncedPrices
   /** 「金额」（0.10.0）：自动同步官方价（每天最多一次）。默认**关** —— 会自己出网的开关不该默认开。 */
   priceAutoSync: boolean
-  // ── 微信通知（0.17.0）──────────────────────────────────────────────────
-  /** 总开关。默认关。 */
-  notifyEnabled: boolean
-  /** 渠道。默认 PushPlus（token 最省事）。 */
-  notifyChannel: 'pushplus' | 'wecom'
-  /** PushPlus token；存本机，界面与日志里只显示打码形式。 */
-  notifyPushplusToken: string
-  /** 企业微信群机器人 webhook。 */
-  notifyWecomWebhook: string
-  /** 三类事件各自的开关。 */
-  notifyKinds: { readonly 'needs-input': boolean, readonly done: boolean, readonly error: boolean }
-  // ── 工作区目录选择自适应（0.19.0）────────────────────────────────────────
-  /** 桌面应用里把应用内浏览对话框换成系统文件夹框。默认**关**（接管官方槽位，不打招呼不动）。 */
-  directoryPickEnabled: boolean
 }
 
 /** 默认值 = DSH Web 现状（Enter 发送、Shift+Enter 换行、右键菜单全开）。 */
 export const DEFAULT_SETTINGS: ComposerUxSettings = {
-  // 微信通知：默认全关全空（0.17.0）。
-  notifyEnabled: false,
-  notifyChannel: 'pushplus',
-  notifyPushplusToken: '',
-  notifyWecomWebhook: '',
-  notifyKinds: { 'needs-input': true, done: true, error: true },
-  // 工作区目录选择自适应：默认**关**（0.19.0）。接管官方槽位这件事必须由用户自己点。
-  directoryPickEnabled: false,
   // 总开关默认开：它只是总闸，真正"要不要用这一栏"由下面五个开关决定（默认关）。
   enabled: true,
   // 五栏默认关（老文档由 sectionEnabledOf 迁移成"碰过就开"）。
   keysEnabled: false,
-  menuEnabled: false,
   quickEnabled: false,
   panelEnabled: false,
   terminalEnabled: false,
   sendKey: 'Enter',
   newlineKey: 'Shift+Enter',
-  menuUndo: true,
-  menuRedo: true,
-  menuCut: true,
-  menuCopy: true,
-  menuPaste: true,
-  menuDelete: true,
-  menuSelectAll: true,
-  menuMode: 'official',
   panelResize: true,
-  headerEnabled: false,
-  headerName: DEFAULT_HEADER_NAME,
-  headerValue: '',
-  headerRoutes: '',
-  headerAppliedName: '',
-  headerAppliedValue: '',
-  headerStatus: '',
   quickPrompts: DEFAULT_QUICK_PROMPTS,
   optimizerTier: DEFAULT_OPTIMIZER_TIER,
   optimizerContext: true,
@@ -1359,20 +1073,16 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
  * 宿主半与客户端半都走这一个函数，免得有人只看了栏开关、忘了总闸（或者反过来）。
  */export function activeSections(settings: ComposerUxSettings): {
   readonly keys: boolean
-  readonly menu: boolean
   readonly quick: boolean
   readonly panel: boolean
-  readonly header: boolean
   readonly terminal: boolean
   readonly stats: boolean
 } {
   const on = settings.enabled
   return {
     keys: on && settings.keysEnabled,
-    menu: on && settings.menuEnabled,
     quick: on && settings.quickEnabled,
     panel: on && settings.panelEnabled,
-    header: on && settings.headerEnabled,
     terminal: on && settings.terminalEnabled,
     stats: on && settings.statsEnabled,
   }
@@ -1381,21 +1091,6 @@ export const DEFAULT_SETTINGS: ComposerUxSettings = {
 /** 设置页「键位」一节的预设。 */
 export const SEND_PRESETS: readonly string[] = ['Enter', 'Ctrl+Enter', 'Alt+Enter', 'Shift+Enter']
 export const NEWLINE_PRESETS: readonly string[] = ['Shift+Enter', 'Enter', 'Ctrl+Enter', 'Alt+Enter']
-
-/** 右键菜单条目（顺序即显示顺序；shortcut 与图片一致）。 */
-export const MENU_ITEMS: readonly {
-  readonly field: MenuField
-  readonly label: string
-  readonly shortcut: string
-}[] = [
-  { field: 'menuUndo', label: '撤销', shortcut: 'Ctrl+Z' },
-  { field: 'menuRedo', label: '重做', shortcut: 'Ctrl+Y' },
-  { field: 'menuCut', label: '剪切', shortcut: 'Ctrl+X' },
-  { field: 'menuCopy', label: '复制', shortcut: 'Ctrl+C' },
-  { field: 'menuPaste', label: '粘贴', shortcut: 'Ctrl+V' },
-  { field: 'menuDelete', label: '删除', shortcut: '' },
-  { field: 'menuSelectAll', label: '全选', shortcut: 'Ctrl+A' },
-]
 
 /**
  * 生成一个稳定的会话 ID（UUID v4；无 crypto 时退回等价的随机十六进制）。
@@ -1428,7 +1123,7 @@ export function parseRouteList(text: string): readonly string[] {
  * （第一版就写成了"键存在"，是推理 + 测试当场逮住的，注释留在这里防复发。）
  *
  * 另外：宿主半自持字段（`terminalStatus` / `terminalCandidates` / `terminalEffective` /
- * `headerApplied*`）**不许**当判据 —— 它们是插件自己写的，全新安装也会出现。
+ * 的宿主半记账字段）**不许**当判据 —— 它们是插件自己写的，全新安装也会出现。
  *
  * 「快捷指令」栏还有一个文档里看不出来的信号：0.3.0 起条目搬到了 `quick-prompts.json`，
  * 用过的人和没用过的人的设置文档可以一模一样。那一条由宿主半读文件后**一次性写回文档**
@@ -1438,10 +1133,6 @@ const SECTION_SIGNALS: Readonly<Record<string, (source: Record<string, unknown>)
   [KEYS_ENABLED_FIELD]: source =>
     touched(source, SEND_KEY_FIELD, DEFAULT_SETTINGS.sendKey)
     || touched(source, NEWLINE_KEY_FIELD, DEFAULT_SETTINGS.newlineKey),
-  // 「官方」＝本插件不介入，等价于关；所以只有选过另外两档才算"碰过"。
-  // （`menuModeFrom` 对"两个键都没有"给的就是 'official'，天然满足"缺省 = 默认"。）
-  [MENU_ENABLED_FIELD]: source =>
-    menuModeFrom(source[MENU_MODE_FIELD], source[MENU_NATIVE_FIELD]) !== 'official',
   [QUICK_ENABLED_FIELD]: source =>
     (Array.isArray(source[QUICK_PROMPTS_FIELD])
       && source[QUICK_PROMPTS_FIELD].length !== DEFAULT_QUICK_PROMPTS.length)
@@ -1563,10 +1254,8 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     return typeof v === 'string' && v.length <= max ? v : ''
   }
   /**
-   * 自定义提示词专用：**超上限就截断**，而不是像 `asText` 那样整份丢掉。
-   *
-   * 为什么这里与 headerName 那条相反：头名非法是"写进去会出网出错"，丢掉是对的；
-   * 而提示词是**用户自己敲的内容**，静默丢弃等于把他的工作弄没了。截断至少留得下大半，
+   * 自定义提示词专用：**超上限就截断**，而不是整份丢掉 —— 提示词是**用户自己敲的内容**，
+   * 静默丢弃等于把他的工作弄没了。截断至少留得下大半，
    * 且设置页里当场看得见被截断后的样子（textarea 有 maxLength，正常根本走不到这里，
    * 只有手改 settings.yaml 才会）。
    */
@@ -1613,59 +1302,18 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
     return out
   }
   const asTier = (): OptimizerTier => normalizeOptimizerTier(source[OPTIMIZER_TIER_FIELD])
-  // 微信通知（0.17.0）：渠道只认两个值，非法一律回落 pushplus（不因为存了个怪值就整份配置读不出来）。
-  const asNotifyChannel = (): 'pushplus' | 'wecom' => {
-    const raw = source[NOTIFY_CHANNEL_FIELD]
-    return raw === 'wecom' ? 'wecom' : 'pushplus'
-  }
-  // 三类事件各自的开关：缺省 true（总开关默认关着，所以这里给 true 不会替用户打开什么）。
-  const asNotifyKinds = () => {
-    const raw = source[NOTIFY_KINDS_FIELD]
-    const row = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
-    return {
-      'needs-input': row['needs-input'] !== false,
-      done: row.done !== false,
-      error: row.error !== false,
-    }
-  }
   return {
-    // 微信通知（0.17.0，单向）：默认全关/全空。
-    notifyEnabled: asBool(NOTIFY_ENABLED_FIELD),
-    // 工作区目录选择自适应（0.19.0）：默认关。
-    directoryPickEnabled: asBool(DIRECTORY_PICK_ENABLED_FIELD),
-    notifyChannel: asNotifyChannel(),
-    notifyPushplusToken: asString(NOTIFY_PUSHPLUS_FIELD),
-    notifyWecomWebhook: asString(NOTIFY_WECOM_FIELD),
-    notifyKinds: asNotifyKinds(),
     enabled: asBool(ENABLED_FIELD),
-    // 五栏开关：显式写过听它的，否则按"用户碰过没"迁移（见 sectionEnabledOf）。
+    // 各栏开关：显式写过听它的，否则按"用户碰过没"迁移（见 sectionEnabledOf）。
     keysEnabled: sectionEnabledOf(KEYS_ENABLED_FIELD, source),
-    menuEnabled: sectionEnabledOf(MENU_ENABLED_FIELD, source),
     quickEnabled: sectionEnabledOf(QUICK_ENABLED_FIELD, source),
     panelEnabled: sectionEnabledOf(PANEL_ENABLED_FIELD, source),
     terminalEnabled: sectionEnabledOf(TERMINAL_ENABLED_FIELD, source),
     sendKey: asString(SEND_KEY_FIELD),
     newlineKey: asString(NEWLINE_KEY_FIELD),
-    menuUndo: asBool('menuUndo'),
-    menuRedo: asBool('menuRedo'),
-    menuCut: asBool('menuCut'),
-    menuCopy: asBool('menuCopy'),
-    menuPaste: asBool('menuPaste'),
-    menuDelete: asBool('menuDelete'),
-    menuSelectAll: asBool('menuSelectAll'),
-    menuMode: menuModeFrom(source[MENU_MODE_FIELD], source[MENU_NATIVE_FIELD]),
     panelResize: asBool(PANEL_RESIZE_FIELD),
     panelWidth: asSize(PANEL_WIDTH_FIELD),
     panelHeight: asSize(PANEL_HEIGHT_FIELD),
-    headerEnabled: asBool(HEADER_ENABLED_FIELD),
-    // 头名留空是不合法状态（宿主半会拒绝写入并把原因写进 headerStatus），
-    // 故净化只做长度收窄、保留原样，让用户看得见自己输错了什么。
-    headerName: asText(HEADER_NAME_FIELD, HEADER_NAME_MAX),
-    headerValue: asText(HEADER_VALUE_FIELD, HEADER_VALUE_MAX),
-    headerRoutes: asText(HEADER_ROUTES_FIELD, HEADER_VALUE_MAX),
-    headerAppliedName: asText(HEADER_APPLIED_NAME_FIELD, HEADER_NAME_MAX),
-    headerAppliedValue: asText(HEADER_APPLIED_VALUE_FIELD, HEADER_VALUE_MAX),
-    headerStatus: asText(HEADER_STATUS_FIELD, HEADER_VALUE_MAX),
     quickPrompts: asQuickPrompts(),
     optimizerTier: asTier(),
     optimizerContext: asBool(OPTIMIZER_CONTEXT_FIELD),
@@ -1717,26 +1365,9 @@ export function sanitizeSettings(value: unknown): ComposerUxSettings {
  */
 export const ALL_SETTINGS_FIELDS: readonly string[] = [
   BALANCE_ENABLED_FIELD,
-  DIRECTORY_PICK_ENABLED_FIELD,
   ENABLED_FIELD,
-  HEADER_APPLIED_NAME_FIELD,
-  HEADER_APPLIED_VALUE_FIELD,
-  HEADER_CLEANUP_FIELD,
-  HEADER_ENABLED_FIELD,
-  HEADER_NAME_FIELD,
-  HEADER_ROUTES_FIELD,
-  HEADER_STATUS_FIELD,
-  HEADER_VALUE_FIELD,
   KEYS_ENABLED_FIELD,
-  MENU_ENABLED_FIELD,
-  MENU_MODE_FIELD,
-  MENU_NATIVE_FIELD,
   NEWLINE_KEY_FIELD,
-  NOTIFY_CHANNEL_FIELD,
-  NOTIFY_ENABLED_FIELD,
-  NOTIFY_KINDS_FIELD,
-  NOTIFY_PUSHPLUS_FIELD,
-  NOTIFY_WECOM_FIELD,
   OPTIMIZER_CONTEXT_FIELD,
   OPTIMIZER_FRAMING_FIELD,
   OPTIMIZER_HISTORY_FIELD,

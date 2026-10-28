@@ -202,7 +202,7 @@ const byId = (id) => registrations.find(entry => entry.id === id)
 
 console.log('1. 槽位注册')
 // 0.15.0 起是 8 个（多了侧边栏脚注那枚「重启」）。
-check('注册了 8 个槽位条目', registrations.length === 8, JSON.stringify(registrations.map(r => r.id)))
+check('注册了 9 个槽位条目', registrations.length === 9, JSON.stringify(registrations.map(r => r.id)))
 // 0.15.4：侧边栏脚注那枚按用户要求移除了（侧边栏底部太挤）；现在入口是标题栏那枚 + 设置页那枚。
 check('侧边栏脚注那枚已移除', byId('composer-ux-restart') === undefined)
 check('标题栏条那枚在（摆放照 HHHEEEWWW/dsh-quick-restart）',
@@ -1227,7 +1227,12 @@ console.log('16. 设置契约 ⇄ 宿主 schema：契约里声明的字段必须
   check('找得到 ownSchema()（下面所有核对都基于它）', start !== -1)
   const end = host.indexOf('\n}', start)
   const body = host.slice(start, end === -1 ? undefined : end)
-  const declared = [...contract.matchAll(/export const ([A-Z0-9_]+_FIELDS?)\s*=/g)].map(match => match[1])
+  // NAV_FOLD_* 两件不是**宿主设置字段**（0.27.0 起改存插件自己的小文件，见 nav-fold-store.ts 的说明），
+  // 所以不参与这条核对；名字留在契约里只是为了让路由/界面共用同一份字符串。
+  const PLUGIN_OWNED = new Set(['NAV_FOLD_MODE_FIELD', 'NAV_FOLD_COLLAPSED_FIELD'])
+  const declared = [...contract.matchAll(/export const ([A-Z0-9_]+_FIELDS?)\s*=/g)]
+    .map(match => match[1])
+    .filter(name => !PLUGIN_OWNED.has(name))
   check('契约里确实有一批字段常量（正则没跑空）', declared.length >= 40, String(declared.length))
   const missing = declared.filter(name => !body.includes(name))
   check(`契约里的 ${declared.length} 个字段常量全部在 ownSchema() 里（缺一个 = 那个开关拨不动）`,

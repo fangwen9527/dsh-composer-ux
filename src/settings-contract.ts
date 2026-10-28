@@ -64,6 +64,9 @@ export const USAGE_API_PATH = '/composer-ux/usage'
  */
 export const QUOTA_API_PATH = '/composer-ux/quota'
 
+/** 「全局面板」折叠状态的写入路由（0.27.0）：宿主半无条件写，绕开客户端的 revision 竞态。 */
+export const NAV_FOLD_API_PATH = '/composer-ux/nav-fold'
+
 /**
  * 模型清单（0.14.1）：只读，给「优化选项」卡片的模型下拉用。
  *
@@ -314,6 +317,18 @@ export const PANEL_RESIZE_FIELD = 'panelResize'
 export const PANEL_WIDTH_FIELD = 'panelWidth'
 export const PANEL_HEIGHT_FIELD = 'panelHeight'
 
+/**
+ * 左侧「全局面板」那一组（插件 / 自动化任务 / 上下文洞察 / MCP连接器 / 更多）的折叠形态（0.27.0）。
+ *
+ * 用户 2026-10-28：「打开后默认折叠这个区域」，并要 A（收成一条）/ B（只留图标）**两种形态都能选**。
+ * 它属"界面布局"，与「设置面板」那张卡同一域，所以字段也放在这里。
+ *
+ * 值：`'off'` 原样不动 / `'bar'` 收成一条「全局面板」细行 / `'icons'` 只留图标一行。
+ */
+export const NAV_FOLD_MODE_FIELD = 'navFoldMode'
+/** 折叠状态本身（true = 收起）。分开存是为了"形态"与"展开收起"互不覆盖。 */
+export const NAV_FOLD_COLLAPSED_FIELD = 'navFoldCollapsed'
+
 /** 右键菜单开关字段名。 */
 export const MENU_FIELDS = [
   'menuUndo',
@@ -338,6 +353,16 @@ export const MENU_MODE_FIELD = 'menuMode'
 
 /** 0.2.x～0.4.0 的旧字段名：迁移线索，0.5.0 起不再写它。 */
 export const MENU_NATIVE_FIELD = 'menuNative'
+
+/** 「全局面板」折叠形态（0.27.0）。 */
+export type NavFoldMode = 'off' | 'bar' | 'icons'
+
+/** 三档的展示文案（设置页分段控件与自检/文档共用一处）。 */
+export const NAV_FOLD_MODES: ReadonlyArray<{ readonly id: NavFoldMode; readonly label: string }> = [
+  { id: 'off', label: '不折叠' },
+  { id: 'bar', label: '收成一条' },
+  { id: 'icons', label: '只留图标' },
+]
 
 /** 右键菜单模式：官方不介入 / 浏览器菜单 / 自定义菜单。 */
 export type MenuMode = 'official' | 'browser' | 'custom'

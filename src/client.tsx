@@ -30,6 +30,8 @@ import { installSettingsCardStyle } from './client/settings-style.ts'
 import { installQuickButtonStyle } from './client/quick-style.ts'
 import { ContextMenuHost } from './client/ContextMenuHost.tsx'
 import { PanelResizeHandles } from './client/PanelResizeHandles.tsx'
+import { NavFoldHost } from './client/NavFoldHost.tsx'
+import { loadNavFold } from './client/nav-fold-store.ts'
 import { RestartTitlebarButton } from './client/RestartTitlebarButton.tsx'
 import { maybeShowRestartDone } from './client/restart-screen.ts'
 import { SettingsSection } from './client/SettingsSection.tsx'
@@ -245,33 +247,62 @@ export function apply(ctx: any): void {
    * 于是"回读仍不等于刚写的值"就是明确异常；尺寸/文本有夹取与截断，拿它们判等会误报。
    */
   const WRITE_READBACK_MS = 1200
+  /** 冲突重试的间隔：镜像 recover 是异步的，给它一拍。 */
+  const WRITE_RETRY_MS = 120
+  /**
+   * 写入一个字段（带一次冲突重试）。
+   *
+   * ## 为什么必须重试（2026-10-28 真机定位，浏览器里抓到的原始响应）
+   *
+   * `POST /api/settings/mutate` 回的是
+   * `{"ok":false,"error":{"code":"settings/conflict","message":"… changed since it was read
+   * (expected revision 0, now 2)"}}` —— 客户端的设置镜像停在 revision 0，而宿主已经到 2。
+   * 原因是**宿主半在启动时会自己写设置**（请求头清理、终端状态回写），每次写都让 revision +1；
+   * 客户端镜像只要还没跟上，这一轮写入就必然被判冲突。
+   *
+   * 界面上的表现是最难查的那种：开关点了不动、也没有任何提示（旧代码只 console.warn 一句）。
+   * 而 `ConfigForm.mutate` 在返回 false 之前**已经 recover 过镜像**（重新 load 了宿主状态），
+   * 所以"立刻再写一次"就能成功。重试一次不够才如实报错。
+   */
   const setField = (field: SettingsField, value: unknown): void => {
     writeNotice.set('')
     const verify = typeof value === 'boolean'
-    void scope.set(field, value as never).then((accepted: unknown) => {
-      if (accepted === false) {
-        console.warn('[composer-ux] settings write refused', field)
-        writeNotice.set(
-          `写入「${field}」被宿主拒绝。常见原因：profile 的写入锁被占用，或是一把孤儿锁`
-          + '（硬杀重启留下的）——见 README「设置写不进去」一节；重启 DSH 后仍无效，'
-          + '就手工删掉 profiles/<你的 profile>/package.json.lock。',
-        )
-        return
-      }
-      if (!verify) return
-      setTimeout(() => {
-        const now = (live.getSnapshot() as unknown as Record<string, unknown>)[field]
-        if (now === value) return
-        console.warn('[composer-ux] settings write had no visible effect', field, now, value)
-        writeNotice.set(
-          `写入「${field}」已被宿主接受，但运行时的值没有变化（仍是 ${String(now)}）。`
-          + '配置可能已经落盘，只是这个进程没接住——重启 DSH 即可生效。',
-        )
-      }, WRITE_READBACK_MS)
-    }, (error: unknown) => {
-      console.error('[composer-ux] settings write failed', error)
-      writeNotice.set(`写入「${field}」失败：${error instanceof Error ? error.message : String(error)}`)
-    })
+    const attempt = (remaining: number): void => {
+      void scope.set(field, value as never).then((accepted: unknown) => {
+        if (accepted === false) {
+          if (remaining > 0) {
+            // 冲突（最常见）后镜像已被 recover 刷新：稍等一拍再写一次。
+            setTimeout(() => { attempt(remaining - 1) }, WRITE_RETRY_MS)
+            return
+          }
+          console.warn('[composer-ux] settings write refused', field)
+          writeNotice.set(
+            `写入「${field}」被宿主拒绝。常见原因：设置版本刚被改过（启动时宿主半会自己写一次）、`
+            + 'profile 的写入锁被占用，或是一把孤儿锁（硬杀重启留下的）——见 README「设置写不进去」一节；'
+            + '重启 DSH 后仍无效，就手工删掉 profiles/<你的 profile>/package.json.lock。',
+          )
+          return
+        }
+        if (!verify) return
+        setTimeout(() => {
+          const now = (live.getSnapshot() as unknown as Record<string, unknown>)[field]
+          if (now === value) return
+          console.warn('[composer-ux] settings write had no visible effect', field, now, value)
+          writeNotice.set(
+            `写入「${field}」已被宿主接受，但运行时的值没有变化（仍是 ${String(now)}）。`
+            + '配置可能已经落盘，只是这个进程没接住——重启 DSH 即可生效。',
+          )
+        }, WRITE_READBACK_MS)
+      }, (error: unknown) => {
+        console.error('[composer-ux] settings write failed', error)
+        writeNotice.set(`写入「${field}」失败：${error instanceof Error ? error.message : String(error)}`)
+      }).catch((error: unknown) => {
+        // 宿主把写入**抛错**（不是返回 false）时也要说：否则用户只看到"点了没反应"。
+        console.warn('[composer-ux] settings write threw', field, error)
+        writeNotice.set('写入「' + field + '」失败：' + (error instanceof Error ? error.message : String(error)))
+      })
+    }
+    attempt(1)
   }
   const clearField = (field: SettingsField): void => {
     void scope.unset(field).then((accepted: unknown) => {
@@ -694,6 +725,16 @@ export function apply(ctx: any): void {
     id: 'composer-ux-panel-resize',
     inject: () => ({ hooks: { live }, actions: { setField } }),
   }, PanelResizeHandles))
+
+  // 启动时读一次折叠状态（插件自己的小文件，不走宿主设置 —— 原因见 nav-fold-store.ts）。
+  void loadNavFold()
+
+  // 左侧「全局面板」组的折叠（0.27.0）：用户要"打开后默认收起"，形态在设置里选。
+  // 它改的是宿主侧边栏的 DOM（不属于本插件任何槽位），所以挂一个**不渲染**的常驻组件。
+  slots.inject('shell.overlay', () => slots.register({
+    name: 'shell.overlay',
+    id: 'composer-ux-nav-fold',
+  }, NavFoldHost))
 
   // 「快捷指令」入口按钮：与官方「展开」按钮同排（order 89 < 展开的 90）。
   slots.inject('conversation.input.right', () => slots.register({

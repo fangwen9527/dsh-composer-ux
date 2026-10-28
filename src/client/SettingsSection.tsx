@@ -35,6 +35,7 @@ import {
   type QuickPromptBook, type SettingsField,
   RESTART_CSRF_HEADER, RESTART_CSRF_VALUE,
 } from '../settings-contract.ts'
+import { NAV_FOLD_MODES, saveNavFold, useNavFold } from './nav-fold-store.ts'
 import { enterRestartScreen } from './restart-screen.ts'
 import {
   bookCounts, withCategoryAdded, withCategoryMoved, withCategoryRemoved, withCategoryRenamed,
@@ -1151,6 +1152,8 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
   // 0.25.0：宿主自己会发这个头时，正确状态是"不需要"而不是"没生效"——概览优先说这件事，
   // 哪怕用户把开关关着（关着正好，本来就不用开）。
   const headerNative = settings.headerStatus.startsWith(NATIVE_STATUS_PREFIX)
+  /** 左侧「全局面板」的折叠状态（插件自有存储，见 nav-fold-store.ts）。 */
+  const navFold = useNavFold()
   const headerSummary = headerNative
     ? '宿主已原生支持（不需要）'
     : settings.headerEnabled
@@ -1584,6 +1587,41 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             宽敞（1040×760）
           </button>
         </div>
+
+        {/* 左侧「全局面板」组的折叠（0.27.0）：形态三档 + 现在是否收起。
+            状态存在插件自己的小文件里（nav-fold-store.ts），**不是**宿主设置字段 ——
+            原因写在那个文件头：设置服务的 revision 竞态 + legacy/patch 双存储，会让开关"点了没反应"。 */}
+        <GroupLabel hint="折叠的是左侧那一组入口（插件 / 自动化任务 / 上下文洞察 / MCP连接器 / 更多）。会话列表不受影响，DSH 自带的「收起侧边栏」也不受影响。">侧边栏</GroupLabel>
+        <Row title="全局面板" desc="那一组入口怎么摆" first stacked>
+          <Segmented
+            ariaLabel="全局面板折叠形态"
+            items={NAV_FOLD_MODES.map(mode => ({
+              id: mode.id,
+              label: mode.label,
+              hint: mode.id === 'off'
+                ? '保持 DSH 原样'
+                : mode.id === 'bar'
+                  ? '收成一条「全局面板」，点一下展开'
+                  : '只留一行图标，悬停出名字',
+            }))}
+            value={navFold.mode}
+            onChange={mode => { void saveNavFold({ mode }) }}
+          />
+        </Row>
+        <Row
+          title="现在收起"
+          desc={navFold.mode === 'off'
+            ? '形态是「不折叠」，这个开关不起作用'
+            : '记住这个状态：下次打开 DSH 沿用'}
+        >
+          <Switch
+            small
+            label="现在收起全局面板"
+            checked={navFold.collapsed}
+            disabled={navFold.mode === 'off'}
+            onChange={next => { void saveNavFold({ collapsed: next }) }}
+          />
+        </Row>
       </FoldCard>
 
       <FoldCard

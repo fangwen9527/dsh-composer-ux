@@ -1751,7 +1751,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.26.1\",",
+    from: "\"version\": \"0.27.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1762,7 +1762,7 @@ const cases = [
     from: "      path: DOCTOR_API_PATH,",
     to: "      path: '/composer-ux/doctor2',",
     test: "test/quick-commands.mjs",
-    expect: "注册了十一条 exact 路由",
+    expect: "注册了十二条 exact 路由",
   },
   {
     name: "HO retryWrite 不再重试（第一次撞锁就放弃）",
@@ -1921,6 +1921,40 @@ const cases = [
     to: "      if (false) return version",
     test: "test/doctor.mjs",
     expect: "从 app-boot 入口解析出版本",
+  },
+
+  // ── 0.27.0：左侧「全局面板」折叠 ───────────────────────────────────────────
+  {
+    name: "ST 图标模式退化成「不折叠」（用户选的形态没生效）",
+    file: "src/client/sidebar-nav.ts",
+    from: "  if (state.mode === 'icons') return 'icons'",
+    to: "  if (state.mode === 'icons') return null",
+    test: "test/sidebar-nav.mjs",
+    expect: "只留图标 ⇒ icons",
+  },
+  {
+    name: "SU 藏文字时把图标一起藏了（那一行变成空白）",
+    file: "src/client/sidebar-nav.ts",
+    from: "        if (span.querySelector('svg') !== null) continue",
+    to: "        if (false) continue",
+    test: "test/sidebar-nav.mjs",
+    expect: "图标（含 svg 的那颗）不能被一起藏了",
+  },
+  {
+    name: "SV 关掉功能时不摘 title（留一个假的悬停提示）",
+    file: "src/client/sidebar-nav.ts",
+    from: "    if (button.hasAttribute(NAV_FOLD_TITLE_ATTR)) {",
+    to: "    if (false) {",
+    test: "test/sidebar-nav.mjs",
+    expect: "关掉后 title 也摘干净",
+  },
+  {
+    name: "SW 折叠条重复插入（设置一变就多一条）",
+    file: "src/client/sidebar-nav.ts",
+    from: "  if (head === null) {",
+    to: "  if (true) {",
+    test: "test/sidebar-nav.mjs",
+    expect: "重复贴三次也只有一条折叠条",
   },
 
 ]

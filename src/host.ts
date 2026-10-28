@@ -39,7 +39,7 @@ import {
   normalizeOptimizerTurns,
   OPTIMIZER_TURNS_FIELD,
   LEGACY_OPTIMIZER_PROMPT_FIELDS,
-  OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
+  OPTIMIZER_API_PATH, OPTIMIZER_CONTEXT_FIELD, OPTIMIZER_LEDGER_FIELD, OPTIMIZER_PROMPT_FIELDS, OPTIMIZER_TIER_FIELD, NAV_FOLD_API_PATH, NAV_FOLD_COLLAPSED_FIELD, NAV_FOLD_MODE_FIELD, PANEL_HEIGHT_FIELD, PANEL_RESIZE_FIELD,
   PANEL_WIDTH_FIELD, PRICE_OVERRIDES_FIELD, QUICK_PROMPTS_API_PATH, QUICK_PROMPTS_FIELD,
   RESTART_API_PATH,
   SEND_KEY_FIELD, defaultQuickBook, newSessionId, optimizerPromptFieldOf, parseRouteList, sanitizeBook, DEFAULT_OPTIMIZER_TIER,
@@ -155,6 +155,21 @@ interface SettingsLike {
   register?(ns: string, schema: unknown): unknown
   describe?(options?: { redactSecrets?: boolean }): readonly { ns?: string; value?: unknown }[]
   mutate(ns: string, ops: readonly PathOp[]): Promise<void>
+}
+
+/** 「全局面板」折叠的默认值（与客户端 `nav-fold-store.ts` 的 DEFAULT_NAV_FOLD 必须一致）。 */
+const DEFAULT_NAV_FOLD = { mode: 'bar', collapsed: true } as const
+
+/**
+ * 折叠状态存在哪：`$DSH_HOME/composer-ux-nav-fold.json`。
+ *
+ * 为什么不用宿主设置：见下方 nav-fold 路由那一段注释（legacy/patch 双存储 + revision 竞态）。
+ */
+function navFoldStorePath(): string {
+  const home = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0
+    ? process.env.DSH_HOME
+    : join(process.getBuiltinModule('node:os').homedir(), '.dsh')
+  return join(home, 'composer-ux-nav-fold.json')
 }
 
 /** 读一个命名空间的普通值。 */
@@ -3181,6 +3196,104 @@ export function apply(ctx: Context, config?: unknown): void {
         console.error('[composer-ux] quick section migration skipped', error)
       }
     })()
+  })
+
+  // ── 「全局面板」折叠状态（0.27.0）────────────────────────────────────────
+  //
+  // 为什么**不写宿主设置**（2026-10-28 真机定位）：本插件走的是 `settings.register` 老接口，
+  // 宿主把写落进 `$DSH_HOME/settings-legacy.yaml`，而界面读的是 patch 层 —— 写进去了也看不见；
+  // 客户端那条路还要带 `expectedRevision`，而宿主半启动时会自己写设置，revision 一落后就
+  // `settings/conflict`（原始响应：`expected revision 0, now 2`）。
+  // 折叠形态本来就是**界面偏好**，所以和快捷指令本一样存成插件自己的小文件，读写都走这条路由。
+  ctx.inject(['webServer'], (navCtx) => {
+    const sendJson = (
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+      code: number,
+      payload: unknown,
+    ): void => {
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(payload))
+    }
+
+    const readBody = async (req: AsyncIterable<unknown>): Promise<string> => {
+      const chunks: Buffer[] = []
+      let total = 0
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+        total += buf.length
+        if (total > 64_000) throw new Error('请求体过大')
+        chunks.push(buf)
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    }
+
+    const readNavFold = (): { mode: string; collapsed: boolean } => {
+      const fallback = { mode: DEFAULT_NAV_FOLD.mode as string, collapsed: DEFAULT_NAV_FOLD.collapsed }
+      try {
+        const parsed = JSON.parse(readFileSync(navFoldStorePath(), 'utf8')) as { mode?: unknown; collapsed?: unknown }
+        const mode = parsed.mode === 'off' || parsed.mode === 'icons' || parsed.mode === 'bar'
+          ? parsed.mode
+          : fallback.mode
+        return { mode, collapsed: typeof parsed.collapsed === 'boolean' ? parsed.collapsed : fallback.collapsed }
+      } catch {
+        return fallback
+      }
+    }
+
+    const handleNavFold = async (
+      req: { method?: string; headers?: Record<string, unknown> } & AsyncIterable<unknown>,
+      res: { writeHead: (code: number, headers: Record<string, string>) => void; end: (body?: string) => void },
+    ): Promise<void> => {
+      const method = (req.method ?? 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: '只接受 GET / POST' })
+        return
+      }
+      // 与其它路由同一道官方信任关卡：这条会写用户目录里的文件。
+      if (rejectUntrustedRequest(navCtx as never, req, res)) return
+      if (method === 'GET') {
+        sendJson(res, 200, { ok: true, ...readNavFold() })
+        return
+      }
+      let payload: { mode?: unknown; collapsed?: unknown }
+      try {
+        payload = JSON.parse(await readBody(req)) as { mode?: unknown; collapsed?: unknown }
+      } catch (error: unknown) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : '正文不是 JSON' })
+        return
+      }
+      const current = readNavFold()
+      const next = { ...current }
+      if (payload.mode !== undefined) {
+        if (payload.mode !== 'off' && payload.mode !== 'bar' && payload.mode !== 'icons') {
+          sendJson(res, 400, { ok: false, error: 'mode 只能是 off / bar / icons' })
+          return
+        }
+        next.mode = payload.mode
+      }
+      if (payload.collapsed !== undefined) {
+        if (typeof payload.collapsed !== 'boolean') {
+          sendJson(res, 400, { ok: false, error: 'collapsed 必须是布尔' })
+          return
+        }
+        next.collapsed = payload.collapsed
+      }
+      try {
+        const target = navFoldStorePath()
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, JSON.stringify(next, null, 2) + String.fromCharCode(10), 'utf8')
+      } catch (error: unknown) {
+        sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        return
+      }
+      sendJson(res, 200, { ok: true, ...next })
+    }
+
+    void navCtx.effect(() => navCtx.webServer.register({
+      kind: 'exact',
+      path: NAV_FOLD_API_PATH,
+      handler: handleNavFold as never,
+    }), 'composer-ux: nav fold route')
   })
 
   // ── 自检（0.22.0）────────────────────────────────────────────────────────

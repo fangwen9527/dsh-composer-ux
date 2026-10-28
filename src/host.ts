@@ -16,7 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z, { type Schema } from '@deepseek-ai/schemastery'
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import inspector from 'node:inspector'
@@ -73,6 +73,7 @@ import {
   BALANCE_API_PATH, DEEPSEEK_BALANCE_URL, balanceEndpointAllowed, parseBalancePayload,
 } from './balance.ts'
 import { nativeSessionHeader, resetNativeSessionHeaderCache } from './opencode-header.ts'
+import { detectRuntimeVersion } from './runtime-version.ts'
 import {
   SUBSCRIPTION_PLANS, degradeQuota, planOf, parseQuotaPayload, quotaCostOf,
   type PlanQuotaSnapshot, type QuotaCost, type SubscriptionPlan,
@@ -158,6 +159,13 @@ interface SettingsLike {
 
 /** 读一个命名空间的普通值。 */
 type ReadRow = (ns: string) => Record<string, unknown> | undefined
+
+/** 宿主运行时版本（0.26.1）：实现与判据见 src/runtime-version.ts；这里只做一次性缓存。 */
+let runtimeVersionCache: string | undefined
+function runtimeVersionOf(): string {
+  if (runtimeVersionCache === undefined) runtimeVersionCache = detectRuntimeVersion()
+  return runtimeVersionCache
+}
 
 /** 把 volatile 引用解引用成普通值（0.1.6 的普通值原样返回）。 */
 function plainConfig(value: unknown): unknown {
@@ -2108,6 +2116,31 @@ export function apply(ctx: Context, config?: unknown): void {
      * 子代理这条路必须知道 `inheritedEventCount`：fork 出来的子代理会带着父会话的历史开头，
      * 那段事件里的 usage **父会话已经计过账**（见下面 {@link ownEvents}）。
      */
+    /**
+     * 上一次读某个会话失败的**原因**（0.26.1）。
+     *
+     * 为什么必须记：`readSession()` 在"持久化 / header 兼容 / 回放校验"任一失败时都会抛
+     * （0.2.2-alpha.2 的 `session-query` 注释原话），而这条路由过去把异常整个咽掉、回一份
+     * 全 0 的账 —— 屏幕上是「¥0」，看起来像"这个会话没花钱"。2026-10-28 在 0.2.2-alpha.2 上
+     * 真机撞到：旧宿主写的日志一份都读不出来，界面却毫无提示。
+     *
+     * 记在模块级 Map 里（按会话 id），成功读一次就删掉；只在诊断字段里回给界面。
+     */
+    const readErrorOf = new Map<string, string>()
+    /**
+     * 这个会话 id 用**哪一种写法**读成功过（0.26.1）。
+     *
+     * 为什么需要：0.2.2-alpha.2 起 `sessionQuery.readSession()` 只认 `session-<uuid>` 全写，
+     * 而客户端半传下来的是裸 uuid（0.2.1 及以前两种写法都不认错）。真机实测（2026-10-28）：
+     * 同一个会话 —— 裸 uuid ⇒ `session "…" not found`、`session-…` ⇒ 4036 条事件。
+     * 后果不是报错，是**金额胶囊显示 ¥0**，看起来像"这个会话没花钱"。
+     * 所以两种写法都试，记住成功的那一种（下次不再多问一次）。
+     */
+    const idFormOf = new Map<string, string>()
+    /** 另一种写法：`x` ⇄ `session-x`。 */
+    const alternateId = (id: string): string => (
+      id.startsWith('session-') ? id.slice('session-'.length) : `session-${id}`
+    )
     const readSnapshot = async (
       id: string,
     ): Promise<{ readonly events: readonly unknown[]; readonly inherited: number } | undefined> => {
@@ -2119,15 +2152,36 @@ export function apply(ctx: Context, config?: unknown): void {
             >
           }
           | undefined
-        if (typeof query?.readSession !== 'function') return undefined
-        const snapshot = await query.readSession(id)
-        if (snapshot === undefined) return undefined
-        const inherited = typeof snapshot.inheritedEventCount === 'number'
-          && Number.isFinite(snapshot.inheritedEventCount) && snapshot.inheritedEventCount > 0
-          ? snapshot.inheritedEventCount
-          : 0
-        return { events: Array.isArray(snapshot.events) ? snapshot.events : [], inherited }
-      } catch {
+        if (typeof query?.readSession !== 'function') {
+          readErrorOf.set(id, '宿主没有 sessionQuery.readSession 服务')
+          return undefined
+        }
+        const known = idFormOf.get(id)
+        const candidates = known === undefined ? [id, alternateId(id)] : [known, alternateId(known)]
+        let lastError = ''
+        let empty = false
+        for (const candidate of candidates) {
+          try {
+            const snapshot = await query.readSession(candidate)
+            if (snapshot === undefined) {
+              empty = true
+              continue
+            }
+            const inherited = typeof snapshot.inheritedEventCount === 'number'
+              && Number.isFinite(snapshot.inheritedEventCount) && snapshot.inheritedEventCount > 0
+              ? snapshot.inheritedEventCount
+              : 0
+            idFormOf.set(id, candidate)
+            readErrorOf.delete(id)
+            return { events: Array.isArray(snapshot.events) ? snapshot.events : [], inherited }
+          } catch (error: unknown) {
+            lastError = error instanceof Error ? error.message : String(error)
+          }
+        }
+        readErrorOf.set(id, lastError !== '' ? lastError : (empty ? 'readSession 返回空（会话不存在或已归档）' : '读不到会话'))
+        return undefined
+      } catch (error: unknown) {
+        readErrorOf.set(id, error instanceof Error ? error.message : String(error))
         return undefined
       }
     }
@@ -2508,6 +2562,8 @@ export function apply(ctx: Context, config?: unknown): void {
           sessionId,
           source,
           // 诊断字段：分列出不来时，界面靠 events/samples 区分"没事件"和"事件形状不对"。
+          /** 读日志失败的原因（空 = 读到了）；界面据此说"读不到会话日志"而不是显示 ¥0。 */
+          readError: readErrorOf.get(sessionId) ?? '',
           events: fold.events,
           samples: fold.samples,
           total: fold.total,
@@ -3289,7 +3345,7 @@ export function apply(ctx: Context, config?: unknown): void {
           bashOn: bool(OPTIMIZE_BASH_FIELD),
           bashGate: '按会话权限判定（完全权限直跑；否则必须过沙箱，证明不了就不给）',
         },
-        runtime: { node: process.version, dshVersion: '' },
+        runtime: { node: process.version, dshVersion: runtimeVersionOf() },
       }
     }
     const handleDoctor = async (

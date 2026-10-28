@@ -545,6 +545,14 @@ export function CostChipEntry({ useLive, sessionId, useProjection }: CostChipInj
             ? note(`订阅内 · 按刊例价折算 ${formatMoney(view.total)}（两套口径并存：上面是实际被扣的套餐额度，这里是这些 token 按官方价折算值多少钱）`, '__quota_head__')
             : null}
           <div style={{ marginBottom: 10, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }} />
+          {/*
+            读不到会话日志时**必须说出来**（0.26.1）：否则分列全 0，屏幕上是一个「¥0」，
+            看起来像"这个会话没花钱"。真机来源：0.2.2-alpha.2 起会话 id 要 `session-<uuid>`
+            全写，裸 uuid 会 not found（宿主半已经两种都试，仍失败才走到这里）。
+          */}
+          {data?.ok === true && typeof data.readError === 'string' && data.readError !== ''
+            ? note(`读不到会话日志：${data.readError}（金额按 0 计）`, '__read_error__')
+            : null}
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'minmax(76px, auto) minmax(0, 1fr)',

@@ -112,6 +112,14 @@ export interface SessionCostResponse {
   readonly error?: string
   /** 事件来源：`sessionQuery`（完整日志）/ `cache`（增量折叠器）/ `none`。 */
   readonly source?: string
+  /**
+   * 读会话日志失败的原因（0.26.1；空 = 读到了）。
+   *
+   * 为什么单独一个字段：0.2.2-alpha.2 起 `readSession()` 只认 `session-<uuid>` 全写，
+   * 裸 uuid 会报 not found；而这条路由过去把失败咽掉、回全 0 ——
+   * 界面显示「¥0」，看起来像"没花钱"。
+   */
+  readonly readError?: string
   /** 折过的事件条数与折到 usage 的条数（诊断用：区分"没事件"与"形状不对"）。 */
   readonly events?: number
   readonly samples?: number

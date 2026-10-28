@@ -170,7 +170,7 @@ section('3. 额度接口（/zen/go/v1/usage）响应解析')
 section('4. 宿主半：/composer-ux/usage 的额度口径')
 
 /** 一个"父会话 + 子代理"的假宿主；credentials 返回一把假 key，fetch 由用例注入。 */
-async function bootHost({ parentId = 'root', events, children = {}, quotaBody, quotaStatus = 200, neverResolve = false } = {}) {
+async function bootHost({ parentId = 'root', events, children = {}, quotaBody, quotaStatus = 200, neverResolve = false, prefixedOnly = false } = {}) {
   process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-sub-billing-'))
   const realFetch = globalThis.fetch
   const routes = []
@@ -181,9 +181,12 @@ async function bootHost({ parentId = 'root', events, children = {}, quotaBody, q
     sessions: { list: () => [] },
     sessionQuery: {
       readSession: async id => {
-        if (id === parentId) return { events, inheritedEventCount: 0 }
-        const child = children[id]
-        if (child === undefined) throw new Error(`no such session: ${id}`)
+        // 0.2.2-alpha.2 的实测行为：只认 `session-<uuid>` 全写，裸 uuid 直接 not found。
+        if (prefixedOnly && !id.startsWith('session-')) throw new Error(`session "${id}" not found`)
+        const key = id.startsWith('session-') ? id.slice('session-'.length) : id
+        if (key === parentId) return { events, inheritedEventCount: 0 }
+        const child = children[key]
+        if (child === undefined) throw new Error(`session "${id}" not found`)
         return { events: child.events, inheritedEventCount: child.inheritedEventCount ?? 0 }
       },
     },
@@ -402,6 +405,31 @@ section('5. 宿主半：/composer-ux/quota 单独一条路由')
     JSON.stringify(second.body.plans?.[0]?.windows))
   check('只接受 GET（POST 回 405）',
     (await call(host.route(pure.QUOTA_API_PATH), { method: 'POST', url: pure.QUOTA_API_PATH })).status === 405)
+  host.restore()
+}
+
+section('6. 会话 id 形状兼容（0.2.2-alpha.2 只认 session-<uuid>）')
+{
+  // 真机复现（2026-10-28）：同一个会话 —— 裸 uuid ⇒ not found、session-… ⇒ 4 千多条事件。
+  // 旧代码只试一种写法，于是新版宿主上**所有会话都显示 ¥0**。
+  const host = await bootHost({
+    prefixedOnly: true,
+    events: [header(0, 'opencode-go', 'deepseek-v4.1-flash'), usage(1, 0, 0, 1_000_000, 0)],
+  })
+  const bare = (await call(host.route(pure.USAGE_API_PATH), makeReq(usagePath('root')))).body
+  check('❗裸 uuid 也能读到（自动改试 session- 前缀）',
+    bare.events === 2 && bare.routes?.length === 1 && Math.abs(bare.quota.usd - 0.15) < 1e-9,
+    JSON.stringify({ events: bare.events, routes: bare.routes?.length, err: bare.readError }))
+  check('成功之后不再报错', bare.readError === '', JSON.stringify(bare.readError))
+
+  const prefixed = (await call(host.route(pure.USAGE_API_PATH), makeReq(`${pure.USAGE_API_PATH}?sessionId=session-root`))).body
+  check('已经带前缀的 id 也照常工作（两种写法都行）',
+    prefixed.events === 2 && prefixed.routes?.length === 1, JSON.stringify({ events: prefixed.events }))
+
+  const missing = (await call(host.route(pure.USAGE_API_PATH), makeReq(`${pure.USAGE_API_PATH}?sessionId=nope`))).body
+  check('❗都读不到时 readError 非空（界面不再显示像"没花钱"的 ¥0）',
+    missing.events === 0 && typeof missing.readError === 'string' && missing.readError.includes('not found'),
+    JSON.stringify(missing.readError))
   host.restore()
 }
 

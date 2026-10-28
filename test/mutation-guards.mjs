@@ -1751,7 +1751,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.26.0\",",
+    from: "\"version\": \"0.26.1\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1895,6 +1895,32 @@ const cases = [
     to: "    windows: [],",
     test: "test/subscription-billing.mjs",
     expect: "额度接口失败保留上一次的窗口",
+  },
+
+  // ── 0.26.1：0.2.2-alpha.2 真机撞到的两处 ──────────────────────────────────
+  {
+    name: "SP 会话 id 只试一种写法（0.2.2-alpha.2 上所有会话都变成 ¥0）",
+    file: "src/host.ts",
+    from: "const candidates = known === undefined ? [id, alternateId(id)] : [known, alternateId(known)]",
+    to: "const candidates = [id]",
+    test: "test/subscription-billing.mjs",
+    expect: "裸 uuid 也能读到",
+  },
+  {
+    name: "SQ 读日志失败又把原因咽回去（界面只看到 ¥0，看不出为什么）",
+    file: "src/host.ts",
+    from: "        readErrorOf.set(id, lastError !== '' ? lastError : (empty ? 'readSession 返回空（会话不存在或已归档）' : '读不到会话'))",
+    to: "        void lastError; void empty",
+    test: "test/subscription-billing.mjs",
+    expect: "readError 非空",
+  },
+  {
+    name: "SR 运行时版本永远读不到（自检卡那只写「拿不到」）",
+    file: "src/runtime-version.ts",
+    from: "      if (version !== '') return version",
+    to: "      if (false) return version",
+    test: "test/doctor.mjs",
+    expect: "从 app-boot 入口解析出版本",
   },
 
 ]

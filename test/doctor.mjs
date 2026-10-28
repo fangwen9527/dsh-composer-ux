@@ -30,7 +30,8 @@ function check(label, condition, detail) {
 const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
-    contents: "export { buildDoctorReport, enabledSections, missingSchemaFields } from './src/doctor.ts'\n",
+    contents: "export { buildDoctorReport, enabledSections, missingSchemaFields } from './src/doctor.ts'\n"
+      + "export { detectRuntimeVersion, versionOfManifest } from './src/runtime-version.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -199,4 +200,51 @@ console.log('5. CLI 冒烟：help / status / doctor（临时 DSH_HOME，不碰�
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)
+console.log('\n运行时版本探测（0.26.1：自检卡那一行不该永远写「拿不到」）')
+{
+  const manifest = version => JSON.stringify({ name: '@deepseek-ai/dsh-app-boot', version })
+  const mapRead = files => (path) => {
+    if (!Object.hasOwn(files, path)) throw new Error('ENOENT: ' + path)
+    return files[path]
+  }
+  const dirName = path => path.replace(/[\\/][^\\/]*$/, '')
+  // ① 源码 workspace / 桌面解包：从 app-boot 入口往上找 package.json
+  const fromResolve = pure.detectRuntimeVersion({
+    resolveAppBoot: () => 'D:/repo/packages/boot/app-boot/lib/index.js',
+    readFile: mapRead({ 'D:/repo/packages/boot/app-boot/package.json': manifest('0.2.2-alpha.2') }),
+    env: { DSH_HOME: 'D:/home/.dsh' },
+    listProfiles: () => [],
+    joinPath: (...parts) => parts.join('/'),
+    dirName,
+    homeDir: 'C:/Users/x',
+  })
+  check('从 app-boot 入口解析出版本（0.2.2-alpha.2）', fromResolve === '0.2.2-alpha.2', fromResolve)
+
+  // ② 入口解析不到就走 profiles 扫描（profile 里是扁平安装）
+  const fromProfiles = pure.detectRuntimeVersion({
+    resolveAppBoot: () => undefined,
+    readFile: mapRead({ 'D:/home/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-app-boot/package.json': manifest('0.2.1-rc.4') }),
+    env: { DSH_HOME: 'D:/home/.dsh' },
+    listProfiles: () => ['web', 'desktop'],
+    joinPath: (...parts) => parts.join('/'),
+    dirName,
+    homeDir: 'C:/Users/x',
+  })
+  check('入口解析不到时扫 profiles（0.2.1-rc.4）', fromProfiles === '0.2.1-rc.4', fromProfiles)
+
+  // ③ 全失败 ⇒ 空串（绝不猜一个版本号：兼容性预检正是拿它比区间）
+  const none = pure.detectRuntimeVersion({
+    resolveAppBoot: () => undefined,
+    readFile: () => { throw new Error('ENOENT') },
+    env: {},
+    listProfiles: () => { throw new Error('no dir') },
+    joinPath: (...parts) => parts.join('/'),
+    dirName: path => path,
+    homeDir: 'C:/Users/x',
+  })
+  check('一处都读不到 ⇒ 空串（界面照旧写「拿不到」）', none === '', JSON.stringify(none))
+  check('package.json 形状不对 ⇒ 空串（不把垃圾当版本）',
+    pure.versionOfManifest('{not json') === '' && pure.versionOfManifest('{"version":123}') === '')
+}
+
 process.exit(failures === 0 ? 0 : 1)

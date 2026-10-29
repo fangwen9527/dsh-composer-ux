@@ -184,9 +184,9 @@ console.log('2. 收起：整块藏，且不碰里面任何一个节点')
   check('细条插在底部区前面（同一个父节点，位置在它之前）',
     head !== null && head.parentElement === footer.parentElement
     && footer.parentElement.children.indexOf(head) === footer.parentElement.children.indexOf(footer) - 1)
-  check('细条文字来自 FOOTER_HEAD_TEXT', pure.FOOTER_HEAD_TEXT === '账号与用量')
+  check('细条文字来自 FOOTER_HEAD_TEXT（0.29.1 起叫「账号与其他」）', pure.FOOTER_HEAD_TEXT === '账号与其他')
   check('细条里有文字 + 一个箭头，且 aria-expanded=false',
-    head.children.some(child => child.textContent === '账号与用量')
+    head.children.some(child => child.textContent === '账号与其他')
     && head.children.some(child => child.getAttribute('data-ux-footer-fold-chevron') !== null)
     && head.getAttribute('aria-expanded') === 'false')
   head.onclick()

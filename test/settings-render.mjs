@@ -475,11 +475,11 @@ console.log('\n10. 真机在 0.2.1-alpha.2 干净 profile 上发现的两个渲�
   check('「设置面板」卡里有「全局面板」形态三档（不折叠 / 收成一条 / 只留图标）',
     navText.includes('全局面板') && navText.includes('不折叠')
     && navText.includes('收成一条') && navText.includes('只留图标'), navText.slice(0, 400))
-  check('还有一个「现在收起」开关（默认收起 = 用户要的"打开后默认折叠"）',
-    navText.includes('现在收起'))
-  // 折叠状态存在插件自己的小文件里（不再走宿主设置），所以这里只验默认那一档的文案。
-  check('「现在收起」在默认（收成一条）下说明"下次打开沿用"',
-    navText.includes('记住这个状态：下次打开 DSH 沿用'), navText.slice(0, 300))
+  check('0.29.1 起改成"打开时总是收起"，设置页里不再有那个记忆开关',
+    navText.includes('总是收起') && navText.includes('不记住展开')
+    && !navText.includes('现在收起'))
+  check('底部区也在这一组里，并说明"打开时总是收起"',
+    navText.includes('底部区') && navText.includes('账号与其他'), navText.slice(0, 400))
 }
 
 console.log('\n11. 自检卡（0.22.0）：纯只读检查，卡上没有开关')

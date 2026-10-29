@@ -52,7 +52,7 @@ export const FOOTER_HEAD_ATTR = 'data-ux-footer-fold-head'
 /** 样式表标记。 */
 export const FOOTER_FOLD_STYLE_ATTR = 'data-ux-footer-fold-style'
 /** 细条上的文字。 */
-export const FOOTER_HEAD_TEXT = '账号与用量'
+export const FOOTER_HEAD_TEXT = '账号与其他'
 /** 账号按钮的无障碍名（两条 i18n 文案；只用来兜底找容器）。 */
 const ACCOUNT_LABELS = ['账号菜单', 'Account menu', '账户菜单'] as const
 
@@ -149,7 +149,7 @@ function ensureHeader(
   }
   const open = !state.collapsed
   head.setAttribute('aria-expanded', open ? 'true' : 'false')
-  head.setAttribute('title', open ? '收起账号与用量' : '展开账号与用量')
+  head.setAttribute('title', open ? '收起账号与其他' : '展开账号与其他')
   head.textContent = ''
   const label = doc.createElement('span')
   label.textContent = FOOTER_HEAD_TEXT

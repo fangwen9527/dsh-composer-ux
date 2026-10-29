@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.29.0\",",
+    from: "\"version\": \"0.29.1\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1636,6 +1636,22 @@ const cases = [
   },
 
   // ── 0.27.0：左侧「全局面板」折叠 ───────────────────────────────────────────
+  {
+    name: "TC 又记住上次的展开状态（打开时不是默认收起）",
+    file: "src/client/nav-fold-state.ts",
+    from: "  return { mode, collapsed: true, footerCollapsed: true }",
+    to: "  return { mode, collapsed: raw.mode === 'bar', footerCollapsed: false }",
+    test: "test/sidebar-nav.mjs",
+    expect: "文件里写着\"上次是展开的\"也一律忽略",
+  },
+  {
+    name: "TD 收起状态也被写盘（下次打开还是展开的）",
+    file: "src/client/nav-fold-state.ts",
+    from: "  return patch.mode === undefined ? {} : { mode: patch.mode }",
+    to: "  return { ...patch }",
+    test: "test/sidebar-nav.mjs",
+    expect: "只改收起状态时，没有字段需要写盘",
+  },
   {
     name: "SZ 底部区认错容器（把整只侧边栏当成底部区）",
     file: "src/client/sidebar-footer.ts",

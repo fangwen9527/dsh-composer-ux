@@ -21,27 +21,14 @@
  */
 import { useEffect, useState } from 'react'
 import { NAV_FOLD_API_PATH } from '../settings-contract.ts'
+import {
+  DEFAULT_NAV_FOLD, persistableNavFold, sanitizeNavFold,
+  type NavFoldMode, type NavFoldState,
+} from './nav-fold-state.ts'
 
-/** 折叠形态：不折叠 / 收成一条 / 只留图标。 */
-export type NavFoldMode = 'off' | 'bar' | 'icons'
-
-/** 三档的展示文案（设置页分段控件用）。 */
-export const NAV_FOLD_MODES: ReadonlyArray<{ readonly id: NavFoldMode; readonly label: string }> = [
-  { id: 'off', label: '不折叠' },
-  { id: 'bar', label: '收成一条' },
-  { id: 'icons', label: '只留图标' },
-]
-
-/** 当前状态。 */
-export interface NavFoldState {
-  readonly mode: NavFoldMode
-  readonly collapsed: boolean
-  /** 侧边栏底部区（账号 + 用量卡片等）是否收起（0.29.0）。 */
-  readonly footerCollapsed: boolean
-}
-
-/** 默认：收成一条 + 收起（用户原话"打开后默认折叠这个区域"）。 */
-export const DEFAULT_NAV_FOLD: NavFoldState = { mode: 'bar', collapsed: true, footerCollapsed: true }
+// 这几个是纯状态，测试要直接 import；store 继续转发一份，调用方不用改。
+export { DEFAULT_NAV_FOLD, NAV_FOLD_MODES, sanitizeNavFold, persistableNavFold } from './nav-fold-state.ts'
+export type { NavFoldMode, NavFoldState } from './nav-fold-state.ts'
 
 let state: NavFoldState = DEFAULT_NAV_FOLD
 const listeners = new Set<() => void>()
@@ -64,19 +51,6 @@ function setLocal(next: Partial<NavFoldState>): void {
     && merged.footerCollapsed === state.footerCollapsed) return
   state = merged
   for (const listener of listeners) listener()
-}
-
-/** 把任意输入净化成合法状态（宿主/文件被手改坏时兜底）。 */
-export function sanitizeNavFold(value: unknown): NavFoldState {
-  const raw = (value ?? {}) as { mode?: unknown; collapsed?: unknown; footerCollapsed?: unknown }
-  const mode: NavFoldMode = raw.mode === 'off' || raw.mode === 'icons' || raw.mode === 'bar'
-    ? raw.mode
-    : DEFAULT_NAV_FOLD.mode
-  return {
-    mode,
-    collapsed: typeof raw.collapsed === 'boolean' ? raw.collapsed : DEFAULT_NAV_FOLD.collapsed,
-    footerCollapsed: typeof raw.footerCollapsed === 'boolean' ? raw.footerCollapsed : DEFAULT_NAV_FOLD.footerCollapsed,
-  }
 }
 
 /**
@@ -105,11 +79,14 @@ export async function loadNavFold(): Promise<void> {
 export async function saveNavFold(patch: Partial<NavFoldState>): Promise<string> {
   // 先落本地：点击的即时反馈不能等网络。
   setLocal(patch)
+  // 收起/展开**只活在本次会话**里：不写盘（下次打开一律回默认收起）。
+  const body = persistableNavFold(patch)
+  if (body.mode === undefined) return ''
   try {
     const response = await fetch(NAV_FOLD_API_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(patch),
+      body: JSON.stringify(body),
     })
     if (!response.ok) return `保存折叠状态失败：宿主返回 HTTP ${response.status}`
     const payload = await response.json() as { ok?: boolean; error?: string }

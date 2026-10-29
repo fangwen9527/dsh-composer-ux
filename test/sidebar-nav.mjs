@@ -30,6 +30,7 @@ const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
     contents: "export { NAV_FOLD_API_PATH } from './src/settings-contract.ts'\n"
+      + "export { sanitizeNavFold, persistableNavFold, DEFAULT_NAV_FOLD } from './src/client/nav-fold-state.ts'\n"
       + "export { NAV_FOLD_CSS, NAV_FOLD_ATTR, NAV_FOLD_HEAD_ATTR, NAV_FOLD_ROW_ATTR, NAV_FOLD_TITLE_ATTR, NAV_FOLD_HEADER_TEXT, applyNavFold, findPanelNav, navFoldAttrOf, splitPanelRows } from './src/client/sidebar-nav.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
@@ -283,6 +284,33 @@ console.log('6. 别人的按钮（0.28.1）：只动认得出的面板行，别�
     && withForeign.nav.style.display !== 'none'
     && withForeign.nav.getAttribute(pure.NAV_FOLD_ATTR) === null,
     JSON.stringify({ rows: split.rows.map(r => r.getAttribute(pure.NAV_FOLD_ROW_ATTR)), display: withForeign.nav.style.display, attr: withForeign.nav.getAttribute(pure.NAV_FOLD_ATTR) }))
+}
+
+console.log('7. 收起状态不落盘、打开时强制收起（0.29.1 用户拍板）')
+{
+  // 用户原话：「收起与否改为默认收起」，并选了"每次打开都强制收起、不记住展开"，
+  // 两处（顶部面板组 + 底部区）一起。这两条都必须钉死，否则某次重构就会把
+  // "上次点开过，这次也开着"又带回来 —— 那种回归在界面上几乎看不出来。
+  const blank = pure.sanitizeNavFold({})
+  check('缺省 ⇒ 收成一条 + 两处都收起',
+    blank.mode === 'bar' && blank.collapsed === true && blank.footerCollapsed === true, JSON.stringify(blank))
+
+  const stale = pure.sanitizeNavFold({ mode: 'bar', collapsed: false, footerCollapsed: false })
+  check('❗文件里写着"上次是展开的"也一律忽略（强制收起）',
+    stale.collapsed === true && stale.footerCollapsed === true, JSON.stringify(stale))
+
+  const icons = pure.sanitizeNavFold({ mode: 'icons' })
+  check('形态仍然记住（icons 会被保留）', icons.mode === 'icons' && icons.collapsed === true)
+
+  const junk = pure.sanitizeNavFold({ mode: 'nonsense' })
+  check('形态是脏数据 ⇒ 落回收成一条', junk.mode === 'bar')
+
+  check('❗只改收起状态时，没有字段需要写盘（{ }）',
+    Object.keys(pure.persistableNavFold({ collapsed: false, footerCollapsed: false })).length === 0,
+    JSON.stringify(pure.persistableNavFold({ collapsed: false })))
+  check('改形态时才写盘，且只带形态',
+    JSON.stringify(pure.persistableNavFold({ mode: 'icons', collapsed: false })) === '{"mode":"icons"}',
+    JSON.stringify(pure.persistableNavFold({ mode: 'icons', collapsed: false })))
 }
 
 process.exit(failures === 0 ? 0 : 1)

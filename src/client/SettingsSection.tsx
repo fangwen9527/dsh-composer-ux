@@ -1396,31 +1396,25 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
           />
         </Row>
         <Row
-          title="现在收起"
+          title="打开时"
           desc={navFold.mode === 'off'
-            ? '形态是「不折叠」，这个开关不起作用'
-            : '记住这个状态：下次打开 DSH 沿用'}
+            ? '形态是「不折叠」，这里不起作用'
+            : '总是收起（不记住展开）：点折叠条可临时展开，重开 DSH 又回到收起'}
+          first={false}
         >
-          <Switch
-            small
-            label="现在收起全局面板"
-            checked={navFold.collapsed}
-            disabled={navFold.mode === 'off'}
-            onChange={next => { void saveNavFold({ collapsed: next }) }}
-          />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {navFold.collapsed ? '收起中' : '已临时展开（仅本次）'}
+          </span>
         </Row>
         {/* 0.29.0：底部区（用户名 / 账号菜单 / 插件放在这里的用量卡片等）整块收成一行。
             整块藏/显 —— 里面的东西是宿主和别的插件渲染的，我们一个子节点都不碰。 */}
         <Row
           title="底部区"
-          desc="账号行与插件塞在这里的卡片（比如今日消耗金额）"
+          desc="账号行与插件塞在这里的卡片（比如今日消耗金额）；打开时总是收起，点「账号与其他」可临时展开"
         >
-          <Switch
-            small
-            label="现在收起侧边栏底部区"
-            checked={navFold.footerCollapsed}
-            onChange={next => { void saveNavFold({ footerCollapsed: next }) }}
-          />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {navFold.footerCollapsed ? '收起中' : '已临时展开（仅本次）'}
+          </span>
         </Row>
       </FoldCard>
 

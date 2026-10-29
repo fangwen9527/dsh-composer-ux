@@ -132,6 +132,16 @@ dsh plugin --profile web add <你克隆或解压出来的目录>
 所以跟着一起折叠；而**直接往 DOM 里塞**的按钮/包装层**一个字都不改**——收成一条时它们原地留着、
 照样能点（这时只藏面板行，不藏整只 `nav`）。这条有 9 条测试盯着（`test/sidebar-nav.mjs` 第 6 节）。
 
+### 侧边栏底部区（0.29.0）
+
+左下角那一块（账号行 + 插件塞在这里的卡片，比如「今日消耗金额」）也能收：**整块收成一行
+「账号与用量 ▾」**，点一下展开。设置 → 输入体验 →「设置面板」卡 →「侧边栏」组 →「底部区」（默认收起）。
+
+做法是**整块藏/显**：只在最外层容器挂一个属性，**不碰里面任何一个节点** —— 所以别的插件往这个插槽里
+放什么都不会被我们改坏（用量卡片就是 `@kenz1117/dsh-ui-usage-billing` 放在 `sidebar.footer.action` 里的）。
+容器靠结构定位：nav 的父节点是侧边栏根，根的最后一个子节点就是底部区；找不到 nav 时从账号按钮往上退两层。
+这条有 18 条测试盯着（`test/sidebar-footer.mjs`）。
+
 ## 快捷指令与提示词优化
 
 输入框工具行里、「展开」按钮的左侧有一个同款胶囊按钮「快捷指令」（槽位 `conversation.input.right`，order 89 < 官方「展开」的 90）。点开展开面板：
@@ -669,9 +679,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 29 个套件；当前 2603 passed, 0 failed（2026-10-28 实测；CI 三平台同样全绿）
+npm test                          # 30 个套件；当前 2621 passed, 0 failed（2026-10-28 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（200 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（203 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

@@ -144,7 +144,7 @@ interface SettingsLike {
 }
 
 /** 「全局面板」折叠的默认值（与客户端 `nav-fold-store.ts` 的 DEFAULT_NAV_FOLD 必须一致）。 */
-const DEFAULT_NAV_FOLD = { mode: 'bar', collapsed: true } as const
+const DEFAULT_NAV_FOLD = { mode: 'bar', collapsed: true, footerCollapsed: true } as const
 
 /**
  * 折叠状态存在哪：`$DSH_HOME/composer-ux-nav-fold.json`。
@@ -2850,14 +2850,26 @@ export function apply(ctx: Context, config?: unknown): void {
       return Buffer.concat(chunks).toString('utf8')
     }
 
-    const readNavFold = (): { mode: string; collapsed: boolean } => {
-      const fallback = { mode: DEFAULT_NAV_FOLD.mode as string, collapsed: DEFAULT_NAV_FOLD.collapsed }
+    const readNavFold = (): { mode: string; collapsed: boolean; footerCollapsed: boolean } => {
+      const fallback = {
+        mode: DEFAULT_NAV_FOLD.mode as string,
+        collapsed: DEFAULT_NAV_FOLD.collapsed,
+        footerCollapsed: DEFAULT_NAV_FOLD.footerCollapsed,
+      }
       try {
-        const parsed = JSON.parse(readFileSync(navFoldStorePath(), 'utf8')) as { mode?: unknown; collapsed?: unknown }
+        const parsed = JSON.parse(readFileSync(navFoldStorePath(), 'utf8')) as {
+          mode?: unknown
+          collapsed?: unknown
+          footerCollapsed?: unknown
+        }
         const mode = parsed.mode === 'off' || parsed.mode === 'icons' || parsed.mode === 'bar'
           ? parsed.mode
           : fallback.mode
-        return { mode, collapsed: typeof parsed.collapsed === 'boolean' ? parsed.collapsed : fallback.collapsed }
+        return {
+          mode,
+          collapsed: typeof parsed.collapsed === 'boolean' ? parsed.collapsed : fallback.collapsed,
+          footerCollapsed: typeof parsed.footerCollapsed === 'boolean' ? parsed.footerCollapsed : fallback.footerCollapsed,
+        }
       } catch {
         return fallback
       }
@@ -2878,9 +2890,9 @@ export function apply(ctx: Context, config?: unknown): void {
         sendJson(res, 200, { ok: true, ...readNavFold() })
         return
       }
-      let payload: { mode?: unknown; collapsed?: unknown }
+      let payload: { mode?: unknown; collapsed?: unknown; footerCollapsed?: unknown }
       try {
-        payload = JSON.parse(await readBody(req)) as { mode?: unknown; collapsed?: unknown }
+        payload = JSON.parse(await readBody(req)) as { mode?: unknown; collapsed?: unknown; footerCollapsed?: unknown }
       } catch (error: unknown) {
         sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : '正文不是 JSON' })
         return
@@ -2900,6 +2912,13 @@ export function apply(ctx: Context, config?: unknown): void {
           return
         }
         next.collapsed = payload.collapsed
+      }
+      if (payload.footerCollapsed !== undefined) {
+        if (typeof payload.footerCollapsed !== 'boolean') {
+          sendJson(res, 400, { ok: false, error: 'footerCollapsed 必须是布尔' })
+          return
+        }
+        next.footerCollapsed = payload.footerCollapsed
       }
       try {
         const target = navFoldStorePath()

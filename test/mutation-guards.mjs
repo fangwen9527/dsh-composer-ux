@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.28.1\",",
+    from: "\"version\": \"0.29.0\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1636,6 +1636,30 @@ const cases = [
   },
 
   // ── 0.27.0：左侧「全局面板」折叠 ───────────────────────────────────────────
+  {
+    name: "SZ 底部区认错容器（把整只侧边栏当成底部区）",
+    file: "src/client/sidebar-footer.ts",
+    from: "    if (last !== null && last !== nav && last.querySelector('button') !== null) return last",
+    to: "    if (last !== null && last !== nav && last.querySelector('button') !== null) return root",
+    test: "test/sidebar-footer.mjs",
+    expect: "nav 的父节点的最后一个子节点就是底部区",
+  },
+  {
+    name: "TA 收起底部区的样式丢了（点了没反应）",
+    file: "src/client/sidebar-footer.ts",
+    from: "[${FOOTER_FOLD_ATTR}='folded'] { display: none !important; }",
+    to: "[${FOOTER_FOLD_ATTR}='folded'] { opacity: 0.99; }",
+    test: "test/sidebar-footer.mjs",
+    expect: "有 folded 规则",
+  },
+  {
+    name: "TB 细条每次同步都新插一条（越贴越多）",
+    file: "src/client/sidebar-footer.ts",
+    from: "  if (head === null) {",
+    to: "  if (true) {",
+    test: "test/sidebar-footer.mjs",
+    expect: "重复贴三次也只有一条细条",
+  },
   {
     name: "SX 把别人的节点也当面板行（折叠时别的插件的按钮跟着消失）",
     file: "src/client/sidebar-nav.ts",

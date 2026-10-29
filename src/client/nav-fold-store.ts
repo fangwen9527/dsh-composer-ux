@@ -36,10 +36,12 @@ export const NAV_FOLD_MODES: ReadonlyArray<{ readonly id: NavFoldMode; readonly 
 export interface NavFoldState {
   readonly mode: NavFoldMode
   readonly collapsed: boolean
+  /** 侧边栏底部区（账号 + 用量卡片等）是否收起（0.29.0）。 */
+  readonly footerCollapsed: boolean
 }
 
 /** 默认：收成一条 + 收起（用户原话"打开后默认折叠这个区域"）。 */
-export const DEFAULT_NAV_FOLD: NavFoldState = { mode: 'bar', collapsed: true }
+export const DEFAULT_NAV_FOLD: NavFoldState = { mode: 'bar', collapsed: true, footerCollapsed: true }
 
 let state: NavFoldState = DEFAULT_NAV_FOLD
 const listeners = new Set<() => void>()
@@ -58,18 +60,23 @@ export function subscribeNavFold(listener: () => void): () => void {
 /** 本地更新 + 通知（写盘由 {@link saveNavFold} 负责）。 */
 function setLocal(next: Partial<NavFoldState>): void {
   const merged = { ...state, ...next }
-  if (merged.mode === state.mode && merged.collapsed === state.collapsed) return
+  if (merged.mode === state.mode && merged.collapsed === state.collapsed
+    && merged.footerCollapsed === state.footerCollapsed) return
   state = merged
   for (const listener of listeners) listener()
 }
 
 /** 把任意输入净化成合法状态（宿主/文件被手改坏时兜底）。 */
 export function sanitizeNavFold(value: unknown): NavFoldState {
-  const raw = (value ?? {}) as { mode?: unknown; collapsed?: unknown }
+  const raw = (value ?? {}) as { mode?: unknown; collapsed?: unknown; footerCollapsed?: unknown }
   const mode: NavFoldMode = raw.mode === 'off' || raw.mode === 'icons' || raw.mode === 'bar'
     ? raw.mode
     : DEFAULT_NAV_FOLD.mode
-  return { mode, collapsed: typeof raw.collapsed === 'boolean' ? raw.collapsed : DEFAULT_NAV_FOLD.collapsed }
+  return {
+    mode,
+    collapsed: typeof raw.collapsed === 'boolean' ? raw.collapsed : DEFAULT_NAV_FOLD.collapsed,
+    footerCollapsed: typeof raw.footerCollapsed === 'boolean' ? raw.footerCollapsed : DEFAULT_NAV_FOLD.footerCollapsed,
+  }
 }
 
 /**

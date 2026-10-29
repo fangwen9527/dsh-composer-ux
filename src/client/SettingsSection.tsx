@@ -1409,6 +1409,19 @@ export function SettingsSection({ useLive, useBook, useBookStatus, useWriteNotic
             onChange={next => { void saveNavFold({ collapsed: next }) }}
           />
         </Row>
+        {/* 0.29.0：底部区（用户名 / 账号菜单 / 插件放在这里的用量卡片等）整块收成一行。
+            整块藏/显 —— 里面的东西是宿主和别的插件渲染的，我们一个子节点都不碰。 */}
+        <Row
+          title="底部区"
+          desc="账号行与插件塞在这里的卡片（比如今日消耗金额）"
+        >
+          <Switch
+            small
+            label="现在收起侧边栏底部区"
+            checked={navFold.footerCollapsed}
+            onChange={next => { void saveNavFold({ footerCollapsed: next }) }}
+          />
+        </Row>
       </FoldCard>
 
       <FoldCard

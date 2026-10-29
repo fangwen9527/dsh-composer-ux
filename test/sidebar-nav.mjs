@@ -30,7 +30,7 @@ const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
     contents: "export { NAV_FOLD_API_PATH } from './src/settings-contract.ts'\n"
-      + "export { NAV_FOLD_CSS, NAV_FOLD_ATTR, NAV_FOLD_HEAD_ATTR, NAV_FOLD_TITLE_ATTR, NAV_FOLD_HEADER_TEXT, applyNavFold, findPanelNav, navFoldAttrOf } from './src/client/sidebar-nav.ts'\n",
+      + "export { NAV_FOLD_CSS, NAV_FOLD_ATTR, NAV_FOLD_HEAD_ATTR, NAV_FOLD_ROW_ATTR, NAV_FOLD_TITLE_ATTR, NAV_FOLD_HEADER_TEXT, applyNavFold, findPanelNav, navFoldAttrOf, splitPanelRows } from './src/client/sidebar-nav.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -101,7 +101,7 @@ class StubElement {
   }
 }
 
-function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'] } = {}) {
+function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'], foreign = [] } = {}) {
   const html = new StubElement('html')
   const head = new StubElement('head')
   const body = new StubElement('body')
@@ -124,6 +124,22 @@ function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务
     button.append(glyph, title)
     nav.appendChild(button)
   }
+  // 别的插件往这一组里塞的东西：可能是裸按钮、也可能是包一层的 div。
+  for (const item of foreign) {
+    if (item.kind === 'button') {
+      const button = new StubElement('button')
+      button.setAttribute('aria-label', item.label ?? '第三方按钮')
+      button.textContent = item.label ?? '第三方按钮'
+      nav.appendChild(button)
+      continue
+    }
+    const wrapper = new StubElement('div')
+    const inner = new StubElement('button')
+    inner.setAttribute('aria-label', item.label ?? '第三方包装按钮')
+    inner.textContent = item.label ?? '第三方包装按钮'
+    wrapper.appendChild(inner)
+    nav.appendChild(wrapper)
+  }
   sidebar.appendChild(nav)
   return { doc: { head, body, createElement: tag => new StubElement(tag), querySelector: sel => html.querySelector(sel), querySelectorAll: sel => html.querySelectorAll(sel) }, nav, sidebar }
 }
@@ -137,9 +153,9 @@ console.log('1. 三档形态 × 展开/收起 → 属性值')
   check('只留图标 ⇒ icons（与收起状态无关）',
     pure.navFoldAttrOf({ mode: 'icons', collapsed: true }) === 'icons'
     && pure.navFoldAttrOf({ mode: 'icons', collapsed: false }) === 'icons')
-  check('样式表里两条关键规则都在（藏整组 / 藏文字）',
-    pure.NAV_FOLD_CSS.includes("[data-ux-nav-fold='bar-collapsed'] { display: none !important; }")
-    && pure.NAV_FOLD_CSS.includes("span:not([aria-hidden='true']) { display: none !important; }"))
+  check('样式表里两条关键规则都在（藏面板行 / 藏文字），且都限定在我们标出来的行上',
+    pure.NAV_FOLD_CSS.includes("[data-ux-nav-fold='bar-collapsed'] > [data-ux-nav-row] { display: none !important; }")
+    && pure.NAV_FOLD_CSS.includes("[data-ux-nav-row] > span:not([aria-hidden='true']) { display: none !important; }"))
 }
 
 // ═══════════════════════════ 2. 找宿主那一组 ═══════════════════════════
@@ -227,4 +243,46 @@ console.log('4. 宿主没有那一组：静默不介入')
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)
+console.log('6. 别人的按钮（0.28.1）：只动认得出的面板行，别的节点一个字不改')
+{
+  // 宿主渲染的面板行：button + aria-label + aria-hidden 的图标。
+  // 别的插件**注册面板**时会得到一模一样的一行 —— 那种跟着折叠没问题（它本来就是这组里的入口）；
+  // 而**自己往 DOM 里塞**的节点（裸按钮 / 包一层 div）必须原样保留，否则"兼容所有插件"是空话。
+  const withForeign = makeDoc({ foreign: [{ kind: 'button', label: '别的插件的按钮' }, { kind: 'wrap', label: '包在 div 里' }] })
+  const split = pure.splitPanelRows(withForeign.nav)
+  check('认得出 5 颗面板行', split.rows.length === 5, String(split.rows.length))
+  check('别人的两个节点被分到 foreign（裸按钮 + 包装 div）', split.foreign.length === 2, String(split.foreign.length))
+  check('只有面板行被打了标记',
+    split.rows.every(row => row.getAttribute(pure.NAV_FOLD_ROW_ATTR) !== null)
+    && split.foreign.every(node => node.getAttribute(pure.NAV_FOLD_ROW_ATTR) === null))
+
+  pure.applyNavFold(withForeign.doc, { mode: 'bar', collapsed: true }, () => {})
+  check('❗收成一条时，别人的节点不被藏掉（它们在 DOM 里、也没被打标记）',
+    withForeign.sidebar.querySelectorAll('button').some(button => button.getAttribute('aria-label') === '别的插件的按钮')
+    && split.foreign.every(node => node.getAttribute(pure.NAV_FOLD_ROW_ATTR) === null))
+  check('❗这一组里有别人的节点时，整只 nav 不隐藏（否则它们跟着消失）',
+    withForeign.nav.style.display !== 'none', String(withForeign.nav.style.display))
+
+  const onlyRows = makeDoc()
+  pure.applyNavFold(onlyRows.doc, { mode: 'bar', collapsed: true }, () => {})
+  check('只有面板行时，整只 nav 照旧收起来（视觉不变）', onlyRows.nav.style.display === 'none')
+
+  pure.applyNavFold(withForeign.doc, { mode: 'icons', collapsed: true }, () => {})
+  const foreignLabel = split.foreign[0]
+  check('❗图标模式不去压缩别人的按钮（宽度/字号/文字都不碰）',
+    foreignLabel.getAttribute(pure.NAV_FOLD_ROW_ATTR) === null
+    && foreignLabel.style.fontSize === undefined
+    && foreignLabel.style.display === undefined)
+  check('图标模式仍然只标面板行',
+    split.rows.every(row => row.getAttribute(pure.NAV_FOLD_ROW_ATTR) !== null)
+    && split.foreign.every(node => node.getAttribute(pure.NAV_FOLD_ROW_ATTR) === null))
+
+  pure.applyNavFold(withForeign.doc, { mode: 'off', collapsed: true }, () => {})
+  check('关掉之后：标记全部摘掉、nav 不再隐藏',
+    split.rows.every(row => row.getAttribute(pure.NAV_FOLD_ROW_ATTR) === null)
+    && withForeign.nav.style.display !== 'none'
+    && withForeign.nav.getAttribute(pure.NAV_FOLD_ATTR) === null,
+    JSON.stringify({ rows: split.rows.map(r => r.getAttribute(pure.NAV_FOLD_ROW_ATTR)), display: withForeign.nav.style.display, attr: withForeign.nav.getAttribute(pure.NAV_FOLD_ATTR) }))
+}
+
 process.exit(failures === 0 ? 0 : 1)

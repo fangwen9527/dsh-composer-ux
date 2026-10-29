@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.28.0\",",
+    from: "\"version\": \"0.28.1\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1636,6 +1636,22 @@ const cases = [
   },
 
   // ── 0.27.0：左侧「全局面板」折叠 ───────────────────────────────────────────
+  {
+    name: "SX 把别人的节点也当面板行（折叠时别的插件的按钮跟着消失）",
+    file: "src/client/sidebar-nav.ts",
+    from: "    const isRow = child.tagName === 'BUTTON'\n      && label !== ''\n      && child.querySelector('[aria-hidden=\"true\"]') !== null",
+    to: '    const isRow = true',
+    test: "test/sidebar-nav.mjs",
+    expect: "别人的两个节点被分到 foreign",
+  },
+  {
+    name: "SY 有别人的节点时仍把整只 nav 收起来（别人的按钮被一起藏掉）",
+    file: "src/client/sidebar-nav.ts",
+    from: "  const hideWhole = state.mode === 'bar' && state.collapsed && foreign.length === 0",
+    to: "  const hideWhole = state.mode === 'bar' && state.collapsed",
+    test: "test/sidebar-nav.mjs",
+    expect: "整只 nav 不隐藏",
+  },
   {
     name: "ST 图标模式退化成「不折叠」（用户选的形态没生效）",
     file: "src/client/sidebar-nav.ts",

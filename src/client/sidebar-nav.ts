@@ -27,6 +27,20 @@
  * `button > span:not([aria-hidden="true"])` —— 图标那一颗带 `aria-hidden`，文字那颗没有，
  * 这个区别是语义上的、不是样式上的，比类名稳。
  *
+ * ## 别人的按钮怎么办（0.28.1，用户 2026-10-29 提的）
+ *
+ * 这一组是**插件可以往里加东西**的地方，有两种加法，我们对它们的处理不一样：
+ *
+ *   1. **注册面板**（走官方 panel 注册表）：宿主会为它渲染一颗结构和宿主自己那几颗
+ *      **完全一样**的 `PanelRow`（button + aria-hidden 的图标 span + 文字 span）。
+ *      这种就该跟着一起折叠 —— 它本来就是这组里的一个入口。
+ *   2. **直接往 DOM 里塞节点**（别的插件自己注入的按钮 / 包装层）：**一个字都不动**。
+ *      项目符号：bar 模式只藏"我们认得出的面板行"，别人的节点原地留着、照样能点；
+ *      icons 模式只压缩面板行，别人的节点保持原样（不去改它们的宽度/字号/文字）。
+ *
+ * 判据（结构，不看类名）：`nav` 的直接子节点里，**button + 非空 aria-label + 内含
+ * aria-hidden 元素（那颗图标）** ⇒ 面板行；其余一律当"别人的"，只读不写。
+ *
  * ## 为什么还要 MutationObserver
  *
  * 面板条目是 React 渲染的（切换会话、装了新插件、`wide` 变化都会重渲染）。我们改的是
@@ -58,6 +72,8 @@ export const NAV_FOLD_ATTR = 'data-ux-nav-fold'
 export const NAV_FOLD_HEAD_ATTR = 'data-ux-nav-fold-head'
 export const NAV_FOLD_STYLE_ATTR = 'data-ux-nav-fold-style'
 export const NAV_FOLD_TITLE_ATTR = 'data-ux-nav-title'
+/** 我们认出来的"面板行"标记（只给这些节点加样式，别人的节点永远不加）。 */
+export const NAV_FOLD_ROW_ATTR = 'data-ux-nav-row'
 
 /**
  * 把状态折算成贴在 `<nav>` 上的属性值。
@@ -81,9 +97,11 @@ export function navFoldAttrOf(state: NavFoldState): string | null {
  * 其余都靠属性选择器自然生效。
  */
 export const NAV_FOLD_CSS = `
-nav[${NAV_FOLD_ATTR}='bar-collapsed'] { display: none !important; }
+/* ⚠️ 所有规则都只认 [${NAV_FOLD_ROW_ATTR}]（我们标出来的面板行），
+   不写 nav > button —— 别的插件往这一组里注入的按钮/包装层必须原样不动。 */
+nav[${NAV_FOLD_ATTR}='bar-collapsed'] > [${NAV_FOLD_ROW_ATTR}] { display: none !important; }
 nav[${NAV_FOLD_ATTR}='icons'] { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-nav[${NAV_FOLD_ATTR}='icons'] > button {
+nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}] {
   width: 34px;
   min-width: 34px;
   padding-left: 0;
@@ -91,10 +109,10 @@ nav[${NAV_FOLD_ATTR}='icons'] > button {
   justify-content: center;
 }
 /* 图标那一颗带 aria-hidden，文字那颗不带 —— 靠语义藏文字，不认哈希类名。 */
-nav[${NAV_FOLD_ATTR}='icons'] > button > span:not([aria-hidden='true']) { display: none !important; }
+nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}] > span:not([aria-hidden='true']) { display: none !important; }
 /* 「更多」那颗按钮的标签是**裸文本节点**（没有 span），上面那条规则管不到它；
    所以图标模式再补一刀 fontSize:0（图标是 SVG，不受字号影响）。 */
-nav[${NAV_FOLD_ATTR}='icons'] > button { font-size: 0; }
+nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}] { font-size: 0; }
 [${NAV_FOLD_HEAD_ATTR}] {
   display: flex;
   align-items: center;
@@ -162,8 +180,8 @@ function ensureStyle(doc: Document): void {
  *   · 其余 span = 文字，`display:none`。
  * 判定依据是**结构**（有没有 svg），不是类名，宿主改样式也不受影响。
  */
-function applyTitles(nav: HTMLElement, on: boolean): void {
-  for (const button of [...nav.querySelectorAll(':scope > button')] as HTMLElement[]) {
+function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
+  for (const button of rows) {
     if (on) {
       const label = (button.getAttribute('aria-label') ?? '').trim()
       if (label !== '' && button.getAttribute(NAV_FOLD_TITLE_ATTR) !== label) {
@@ -186,6 +204,41 @@ function applyTitles(nav: HTMLElement, on: boolean): void {
       if (span.style.display === 'none') span.style.display = ''
     }
   }
+}
+
+/**
+ * 把 `nav` 的直接子节点分成"面板行"与"别人的节点"（只读分类，不写 DOM）。
+ *
+ * 面板行的判据（结构，不看类名 —— 宿主类名是哈希，每版都可能变）：
+ *   `BUTTON` + 非空 `aria-label` + 内含带 `aria-hidden` 的元素（那颗图标）。
+ * 宿主自己的 `PanelRow` 与「更多」（`PanelMoreMenu`）都长这样；**别的插件注册的面板**
+ * 也由宿主渲染成同样的结构，于是天然被认成面板行 —— 它们就该跟着一起折叠。
+ *
+ * 其余（别的插件自己注入的按钮、包装层、分隔线……）一律算"别人的"：不标记、不改样式，
+ * 折叠时原地留着，照样能点。
+ *
+ * @param nav - 那一组。
+ * @returns 面板行（按 DOM 顺序）与其它节点。
+ */
+export function splitPanelRows(nav: HTMLElement, mark = true): { rows: HTMLElement[]; foreign: HTMLElement[] } {
+  const rows: HTMLElement[] = []
+  const foreign: HTMLElement[] = []
+  for (const child of [...nav.children] as HTMLElement[]) {
+    const label = (child.getAttribute('aria-label') ?? '').trim()
+    const isRow = child.tagName === 'BUTTON'
+      && label !== ''
+      && child.querySelector('[aria-hidden="true"]') !== null
+    const shouldMark = isRow && mark
+    if (!shouldMark) {
+      // 不标（关掉了 / 别人的节点）：顺手把上一轮留下的标记摘干净。
+      if (child.hasAttribute(NAV_FOLD_ROW_ATTR)) child.removeAttribute(NAV_FOLD_ROW_ATTR)
+    } else if (!child.hasAttribute(NAV_FOLD_ROW_ATTR)) {
+      child.setAttribute(NAV_FOLD_ROW_ATTR, '')
+    }
+    if (isRow) rows.push(child)
+    else foreign.push(child)
+  }
+  return { rows, foreign }
 }
 
 /** 造/更新那条「全局面板」折叠条。 */
@@ -231,7 +284,20 @@ export function applyNavFold(doc: Document, state: NavFoldState, onToggle: (next
   const attr = navFoldAttrOf(state)
   if (attr === null) nav.removeAttribute(NAV_FOLD_ATTR)
   else if (nav.getAttribute(NAV_FOLD_ATTR) !== attr) nav.setAttribute(NAV_FOLD_ATTR, attr)
-  applyTitles(nav, state.mode === 'icons')
+
+  // 关掉时不标记任何节点（标记本身就是"我们在接管"的证据，关掉就该摘干净）。
+  const { rows, foreign } = splitPanelRows(nav, state.mode !== 'off')
+  applyTitles(rows, state.mode === 'icons')
+
+  // 收成一条：面板行由 CSS 藏掉；**只有当这一组里没有别人的节点时**才把整只 nav 也收起来
+  // （否则别人的按钮会跟着消失 —— 那是"不兼容"，不是折叠）。
+  const hideWhole = state.mode === 'bar' && state.collapsed && foreign.length === 0
+  if (hideWhole) {
+    if (nav.style.display !== 'none') nav.style.display = 'none'
+  } else if (nav.style.display === 'none') {
+    nav.style.display = ''
+  }
+
   ensureHeader(doc, nav, state, onToggle)
   return true
 }

@@ -684,7 +684,7 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
 npm test                          # 30 个套件；当前 2621 passed, 0 failed（2026-10-28 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（205 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（206 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本

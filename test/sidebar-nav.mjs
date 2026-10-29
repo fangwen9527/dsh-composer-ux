@@ -54,9 +54,15 @@ class StubElement {
   getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null }
   hasAttribute(name) { return this.attributes.has(name) }
   removeAttribute(name) { this.attributes.delete(name) }
-  appendChild(child) { child.parentElement = this; this.children.push(child); return child }
+  appendChild(child) {
+    if (child.parentElement !== null) child.parentElement.children = child.parentElement.children.filter(item => item !== child)
+    child.parentElement = this
+    this.children.push(child)
+    return child
+  }
   append(...nodes) { for (const node of nodes) this.appendChild(node) }
   insertBefore(child, before) {
+    if (child.parentElement !== null) child.parentElement.children = child.parentElement.children.filter(item => item !== child)
     child.parentElement = this
     const at = this.children.indexOf(before)
     if (at < 0) this.children.push(child)

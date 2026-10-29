@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.29.1\",",
+    from: "\"version\": \"0.29.2\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1636,6 +1636,14 @@ const cases = [
   },
 
   // ── 0.27.0：左侧「全局面板」折叠 ───────────────────────────────────────────
+  {
+    name: "TE 展开时还在老位置占一整行（用户要的缩进右端没生效）",
+    file: "src/client/sidebar-footer.ts",
+    from: "  const inline = !state.collapsed && accountArea !== null",
+    to: "  const inline = false",
+    test: "test/sidebar-footer.mjs",
+    expect: "展开态：细条被塞进账号那一块",
+  },
   {
     name: "TC 又记住上次的展开状态（打开时不是默认收起）",
     file: "src/client/nav-fold-state.ts",

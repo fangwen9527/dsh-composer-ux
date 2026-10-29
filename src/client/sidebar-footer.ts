@@ -51,6 +51,8 @@ export const FOOTER_FOLD_ATTR = 'data-ux-footer-fold'
 export const FOOTER_HEAD_ATTR = 'data-ux-footer-fold-head'
 /** 样式表标记。 */
 export const FOOTER_FOLD_STYLE_ATTR = 'data-ux-footer-fold-style'
+/** 展开态下"贴在账号行右端"的标记属性（只影响我们这颗按钮的定位）。 */
+export const FOOTER_HEAD_INLINE_ATTR = 'data-ux-footer-inline'
 /** 细条上的文字。 */
 export const FOOTER_HEAD_TEXT = '账号与其他'
 /** 账号按钮的无障碍名（两条 i18n 文案；只用来兜底找容器）。 */
@@ -86,6 +88,17 @@ export const FOOTER_FOLD_CSS = `
   cursor: pointer;
 }
 [${FOOTER_HEAD_ATTR}]:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+/* 展开态：贴在账号那一行的右端，不占布局高度（绝对定位在账号块里）。 */
+[${FOOTER_HEAD_ATTR}][${FOOTER_HEAD_INLINE_ATTR}] {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: auto;
+  max-width: 55%;
+  padding: 2px 6px;
+  z-index: 1;
+}
 [${FOOTER_HEAD_ATTR}]:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
 [${FOOTER_HEAD_ATTR}] > span[data-ux-footer-fold-chevron] { margin-left: auto; opacity: .7; }
 `
@@ -145,7 +158,24 @@ function ensureHeader(
     head = doc.createElement('button')
     head.type = 'button'
     head.setAttribute(FOOTER_HEAD_ATTR, '')
-    footer.parentElement?.insertBefore(head, footer)
+  }
+
+  // 展开时贴在"账号那一块"的右端（不占布局高度）；收起时是底部容器前面那一整条。
+  // 账号块 = 底部容器的最后一个子节点（宿主结构：footerActions + settingsArea）。
+  const accountArea = footer.lastElementChild as HTMLElement | null
+  const inline = !state.collapsed && accountArea !== null
+  const parent = inline ? accountArea : footer.parentElement
+  if (parent !== null && head.parentElement !== parent) {
+    // 收起态要保持在底部容器**前面**（原来那一整条的位置）；展开态塞进账号块里。
+    if (inline) parent.appendChild(head)
+    else parent.insertBefore(head, footer)
+  }
+  if (inline && accountArea !== null) {
+    // 绝对定位需要一个已定位的包含块；只加 position，其余样式不动。
+    if (accountArea.style.position !== 'relative') accountArea.style.position = 'relative'
+    if (!head.hasAttribute(FOOTER_HEAD_INLINE_ATTR)) head.setAttribute(FOOTER_HEAD_INLINE_ATTR, '')
+  } else if (head.hasAttribute(FOOTER_HEAD_INLINE_ATTR)) {
+    head.removeAttribute(FOOTER_HEAD_INLINE_ATTR)
   }
   const open = !state.collapsed
   head.setAttribute('aria-expanded', open ? 'true' : 'false')

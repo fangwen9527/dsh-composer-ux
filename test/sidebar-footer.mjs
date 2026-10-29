@@ -30,7 +30,7 @@ function check(label, condition, detail) {
 const bundled = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: ['es2022'], logLevel: 'warning',
   stdin: {
-    contents: "export { FOOTER_FOLD_CSS, FOOTER_FOLD_ATTR, FOOTER_HEAD_ATTR, FOOTER_HEAD_TEXT, applyFooterFold, findSidebarFooter } from './src/client/sidebar-footer.ts'\n",
+    contents: "export { FOOTER_FOLD_CSS, FOOTER_FOLD_ATTR, FOOTER_HEAD_ATTR, FOOTER_HEAD_INLINE_ATTR, FOOTER_HEAD_TEXT, applyFooterFold, findSidebarFooter } from './src/client/sidebar-footer.ts'\n",
     resolveDir: process.cwd(), loader: 'ts',
   },
 })
@@ -52,9 +52,15 @@ class StubElement {
   getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null }
   hasAttribute(name) { return this.attributes.has(name) }
   removeAttribute(name) { this.attributes.delete(name) }
-  appendChild(child) { child.parentElement = this; this.children.push(child); return child }
+  appendChild(child) {
+    if (child.parentElement !== null) child.parentElement.children = child.parentElement.children.filter(item => item !== child)
+    child.parentElement = this
+    this.children.push(child)
+    return child
+  }
   append(...nodes) { for (const node of nodes) this.appendChild(node) }
   insertBefore(child, before) {
+    if (child.parentElement !== null) child.parentElement.children = child.parentElement.children.filter(item => item !== child)
     child.parentElement = this
     const at = this.children.indexOf(before)
     if (at < 0) this.children.push(child)
@@ -234,4 +240,38 @@ console.log('5. 样式表只藏容器，不写任何子选择器')
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)
+console.log('6. 展开时缩进账号行右端（0.29.2 用户截图要求），收起时仍是整条')
+{
+  // 用户 2026-10-29：「这个展开时，把这个账号和其他和收缩按钮放到这个位置」（指方文右侧的空白）。
+  const { doc, footer } = makeSidebar()
+  const accountArea = footer.lastElementChild
+
+  pure.applyFooterFold(doc, { collapsed: true }, () => {})
+  const collapsedHead = doc.querySelector(`button[${pure.FOOTER_HEAD_ATTR}]`)
+  check('收起态：细条是底部容器的兄弟节点（在它前面）',
+    collapsedHead.parentElement === footer.parentElement, collapsedHead.parentElement?.tagName)
+  check('收起态：没有 inline 标记', collapsedHead.getAttribute(pure.FOOTER_HEAD_INLINE_ATTR) === null)
+
+  pure.applyFooterFold(doc, { collapsed: false }, () => {})
+  const expandedHead = doc.querySelector(`button[${pure.FOOTER_HEAD_ATTR}]`)
+  check('❗展开态：细条被塞进账号那一块（不单独占一行）',
+    expandedHead.parentElement === accountArea, expandedHead.parentElement?.tagName)
+  check('❗展开态：打上 inline 标记（CSS 靠它做绝对定位）',
+    expandedHead.getAttribute(pure.FOOTER_HEAD_INLINE_ATTR) !== null)
+  check('❗展开态：账号块被标成已定位（绝对定位的包含块）',
+    accountArea.style.position === 'relative', String(accountArea.style.position))
+  check('❗展开态：仍然只有这一个按钮（没有在旧位置留一个）',
+    doc.querySelectorAll(`button[${pure.FOOTER_HEAD_ATTR}]`).length === 1)
+
+  pure.applyFooterFold(doc, { collapsed: true }, () => {})
+  const backHead = doc.querySelector(`button[${pure.FOOTER_HEAD_ATTR}]`)
+  check('再收起：回到容器前面，inline 标记摘掉',
+    backHead.parentElement === footer.parentElement
+    && backHead.getAttribute(pure.FOOTER_HEAD_INLINE_ATTR) === null)
+  check('再收起：仍然只有一个按钮', doc.querySelectorAll(`button[${pure.FOOTER_HEAD_ATTR}]`).length === 1)
+
+  check('样式表里有 inline 态规则（绝对定位 + 右端）',
+    pure.FOOTER_FOLD_CSS.includes('position: absolute') && pure.FOOTER_FOLD_CSS.includes('right: 6px'))
+}
+
 process.exit(failures === 0 ? 0 : 1)

@@ -682,9 +682,9 @@ node build.mjs                    # 产出 lib/index.js + lib/client.js
                                   #   ⚠️ 宿主半会**内联** schemastery / cosmokit：
                                   #   优先用 DSH 检出里的 vendor 副本，检出不在时退到 node_modules
                                   #   里同版本的 npm 包（两者逐字节相同）——CI 上走的就是退路
-npm test                          # 30 个套件；当前 2621 passed, 0 failed（2026-10-28 实测；CI 三平台同样全绿）
+npm test                          # 30 个套件；当前 2627 passed, 0 failed（2026-10-28 实测；CI 三平台同样全绿）
                                   #   走 scripts/run-tests.mjs：顺带把"多少套件/多少条"记进 test/.last-run.json
-npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（206 条，须单独跑）
+npm run test:mutations            # 手动跑：变异测试，证明那套护栏真的在咬人（208 条，须单独跑）
                                   #   同样记录结果，供下面的文档门禁核对
 npm run gates                     # 发版门禁三条一起跑：tag 指向 / 包内容 / 文档数字
 npm run check:tag                 #   ① tag 名里的版本 == 该 tag 所指提交里的 package.json 版本
@@ -765,6 +765,7 @@ Remove-Item   "$env:USERPROFILE\.dsh\profiles\web\package.json.lock" -Force
 | 0.1.7-rc.1 / rc.2 | 可用 | 依赖窗口的第一段 |
 | 0.2.0-rc.1 / rc.2 | 可用 | 桌面版装的这一版 |
 | **0.2.1-alpha.1 / alpha.2** | **可用（0.20.0 起）** | 2026-10-10 把 `D:\DeepSeek Harness` 未封装版升上去后真机验证（含设置页开关点击与写入落盘） |
+| **0.2.2-rc.1** | **可用（0.29.3 起）** | 2026-11-04 源码仓库切到 `dsh-v0.2.2-rc.1`、`pnpm build:web` 后真机验证：doctor 8 行 / 29 字段全声明、`bar` 与 `icons` 两种折叠、底部区「账号与其他」、快捷指令面板都正常。**0.2.2 把面板列表的「更多」改成了 `span` 包一颗按钮**，0.29.3 之前会把它当"别人的节点"→ 折叠坏一半（详见 CHANGELOG） |
 
 **依赖窗口**：`@deepseek-ai/dsh-tool-terminal` 声明为
 `>=0.1.7-rc.1 <0.1.8 || >=0.2.0-rc.1 <0.2.1-alpha.0 || >=0.2.1-alpha.1 <0.3.0`。

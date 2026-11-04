@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.29.2\",",
+    from: "\"version\": \"0.29.3\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1661,6 +1661,22 @@ const cases = [
     expect: "只改收起状态时，没有字段需要写盘",
   },
   {
+    name: "TF 0.2.2 的 span 包装层又当成别人的节点（折叠坏一半）",
+    file: "src/client/sidebar-nav.ts",
+    from: "    const isRow = isPanelRowButton(child) || solePanelRowButton(child) !== null",
+    to: "    const isRow = isPanelRowButton(child)",
+    test: "test/sidebar-nav.mjs",
+    expect: "包装层被认成面板行",
+  },
+  {
+    name: "TG 图标模式的标题挂在包装层上（悬停看不到名字）",
+    file: "src/client/sidebar-nav.ts",
+    from: "    const button = isPanelRowButton(row) ? row : solePanelRowButton(row) ?? row",
+    to: "    const button = row",
+    test: "test/sidebar-nav.mjs",
+    expect: "标题挂到包装层里那颗按钮上",
+  },
+  {
     name: "SZ 底部区认错容器（把整只侧边栏当成底部区）",
     file: "src/client/sidebar-footer.ts",
     from: "    if (last !== null && last !== nav && last.querySelector('button') !== null) return last",
@@ -1687,8 +1703,8 @@ const cases = [
   {
     name: "SX 把别人的节点也当面板行（折叠时别的插件的按钮跟着消失）",
     file: "src/client/sidebar-nav.ts",
-    from: "    const isRow = child.tagName === 'BUTTON'\n      && label !== ''\n      && child.querySelector('[aria-hidden=\"true\"]') !== null",
-    to: '    const isRow = true',
+    from: "  return element.tagName === 'BUTTON'\n    && label !== ''\n    && element.querySelector('[aria-hidden=\"true\"]') !== null",
+    to: '  return true',
     test: "test/sidebar-nav.mjs",
     expect: "别人的两个节点被分到 foreign",
   },

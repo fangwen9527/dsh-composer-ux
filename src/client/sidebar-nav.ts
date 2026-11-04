@@ -181,7 +181,10 @@ function ensureStyle(doc: Document): void {
  * 判定依据是**结构**（有没有 svg），不是类名，宿主改样式也不受影响。
  */
 function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
-  for (const button of rows) {
+  for (const row of rows) {
+    // 行可能是那颗按钮本身，也可能是"只包着它"的包装层（0.2.2 的「更多」）。
+    // 标题要挂在真正可点的那颗按钮上。
+    const button = isPanelRowButton(row) ? row : solePanelRowButton(row) ?? row
     if (on) {
       const label = (button.getAttribute('aria-label') ?? '').trim()
       if (label !== '' && button.getAttribute(NAV_FOLD_TITLE_ATTR) !== label) {
@@ -190,7 +193,9 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
       }
       // 递归找文字 span：有的宿主版本把标签再包一层（「更多」那颗就被包过），
       // 只处理直接子节点会漏掉它。判据仍是"里面有没有 svg"。
-      for (const span of [...button.querySelectorAll('span')] as HTMLElement[]) {
+      // 判据仍是"里面有没有 svg"。包装层自己的裸文本不在这批 span 里，
+      // 由 CSS 的 font-size:0（作用在整行上）负责。
+      for (const span of [...row.querySelectorAll('span')] as HTMLElement[]) {
         if (span.querySelector('svg') !== null) continue
         span.style.display = 'none'
       }
@@ -200,7 +205,7 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
       button.removeAttribute('title')
       button.removeAttribute(NAV_FOLD_TITLE_ATTR)
     }
-    for (const span of [...button.querySelectorAll('span')] as HTMLElement[]) {
+    for (const span of [...row.querySelectorAll('span')] as HTMLElement[]) {
       if (span.style.display === 'none') span.style.display = ''
     }
   }
@@ -220,14 +225,33 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
  * @param nav - 那一组。
  * @returns 面板行（按 DOM 顺序）与其它节点。
  */
+/**
+ * 这一颗是不是"面板行按钮"（宿主自己的 PanelRow / PanelMoreMenu 都长这样）。
+ *
+ * 判据：BUTTON + 非空 aria-label + 内含 aria-hidden 元素（那颗图标）。
+ */
+function isPanelRowButton(element: Element): element is HTMLElement {
+  const label = (element.getAttribute('aria-label') ?? '').trim()
+  return element.tagName === 'BUTTON'
+    && label !== ''
+    && element.querySelector('[aria-hidden="true"]') !== null
+}
+
+/**
+ * 包装层里是否**只有一个**面板行按钮（0.2.2 的「更多」就是这种：span 包一颗按钮）。
+ *
+ * 只认"唯一一颗"：多于一颗说明那是别人放的一组按钮，不属于我们要折叠的那一组。
+ */
+function solePanelRowButton(wrapper: Element): HTMLElement | null {
+  const buttons = [...wrapper.querySelectorAll('button')].filter(isPanelRowButton)
+  return buttons.length === 1 ? buttons[0] as HTMLElement : null
+}
+
 export function splitPanelRows(nav: HTMLElement, mark = true): { rows: HTMLElement[]; foreign: HTMLElement[] } {
   const rows: HTMLElement[] = []
   const foreign: HTMLElement[] = []
   for (const child of [...nav.children] as HTMLElement[]) {
-    const label = (child.getAttribute('aria-label') ?? '').trim()
-    const isRow = child.tagName === 'BUTTON'
-      && label !== ''
-      && child.querySelector('[aria-hidden="true"]') !== null
+    const isRow = isPanelRowButton(child) || solePanelRowButton(child) !== null
     const shouldMark = isRow && mark
     if (!shouldMark) {
       // 不标（关掉了 / 别人的节点）：顺手把上一轮留下的标记摘干净。

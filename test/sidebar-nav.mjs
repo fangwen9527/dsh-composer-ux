@@ -108,7 +108,7 @@ class StubElement {
   }
 }
 
-function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'], foreign = [] } = {}) {
+function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'], foreign = [], wrapLast = false } = {}) {
   const html = new StubElement('html')
   const head = new StubElement('head')
   const body = new StubElement('body')
@@ -118,7 +118,7 @@ function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务
   body.appendChild(sidebar)
   const nav = new StubElement('nav')
   if (label !== '') nav.setAttribute('aria-label', label)
-  for (const text of buttons) {
+  for (const [index, text] of buttons.entries()) {
     const button = new StubElement('button')
     button.setAttribute('aria-label', text)
     const glyph = new StubElement('span')
@@ -129,6 +129,12 @@ function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务
     const title = new StubElement('span')
     title.textContent = text
     button.append(glyph, title)
+    if (wrapLast && index === buttons.length - 1) {
+      const wrapper = new StubElement('span')
+      wrapper.appendChild(button)
+      nav.appendChild(wrapper)
+      continue
+    }
     nav.appendChild(button)
   }
   // 别的插件往这一组里塞的东西：可能是裸按钮、也可能是包一层的 div。
@@ -247,6 +253,30 @@ console.log('4. 宿主没有那一组：静默不介入')
   check('返回 false（界面/自检据此说"没找到"，而不是假装成功）',
     pure.applyNavFold(doc, { mode: 'bar', collapsed: true }, () => {}) === false)
   check('没有插入任何折叠条', sidebar.querySelector(`button[${pure.NAV_FOLD_HEAD_ATTR}]`) === null)
+}
+
+console.log('8. 包装层行（0.2.2 的「更多」）：span 包一颗按钮也要认')
+{
+  // 依据：0.2.2-rc.1 真机 DOM —— nav 的第三个子节点变成 <span>更多</span>，按钮包在里面。
+  const wrapped = makeDoc({ buttons: ['插件', '自动化任务', '更多'], wrapLast: true })
+  const split = pure.splitPanelRows(wrapped.nav)
+  check('❗包装层被认成面板行（应 3 行，不是 2 行）', split.rows.length === 3, String(split.rows.length))
+  check('❗包装层本身被标记（CSS 才压得到它的宽度与文字）',
+    split.rows[2].getAttribute(pure.NAV_FOLD_ROW_ATTR) !== null)
+  check('没有把包装层算成"别人的节点"', split.foreign.length === 0, String(split.foreign.length))
+
+  // 没有别人的节点 ⇒ bar 模式可以整只收起 nav（旧判据会因为有"别人的节点"而不收）
+  pure.applyNavFold(wrapped.doc, { mode: 'bar', collapsed: true }, () => {})
+  check('❗bar 模式整只 nav 收起来了（包装层不再"挡路"）', wrapped.nav.style.display === 'none')
+
+  pure.applyNavFold(wrapped.doc, { mode: 'icons', collapsed: true }, () => {})
+  const inner = split.rows[2].querySelector('button')
+  check('图标模式把标题挂到包装层里那颗按钮上（而不是包装层）',
+    inner !== null && inner.getAttribute('title') === '更多', inner?.getAttribute('title'))
+
+  pure.applyNavFold(wrapped.doc, { mode: 'off', collapsed: true }, () => {})
+  check('关掉后包装层标记也摘干净',
+    wrapped.nav.querySelectorAll('[data-ux-nav-row]').length === 0)
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

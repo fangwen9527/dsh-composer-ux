@@ -2,6 +2,43 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.29.5] — 2026-11-13（**严重回归修复**：开启插件后侧边栏「会话」列表消失）
+
+用户报：「我的插件开启时 侧边栏就有问题，会话栏目消失」，附截图（面板图标行下方整块空白）。
+
+**根因**：DSH 0.2.2 把侧边栏改成
+
+```
+div.root
+├─ div.scrollRegion
+│   ├─ div.scrollArea      ← nav（全局面板）+ div.regionArea（会话列表）+ span.scrollFade
+│   └─ span.scrollFade
+├─ div.footArea            ← footerActions([data-slot="sidebar.footer.action"]) + settingsArea([data-slot="sidebar.settings"])
+└─ …
+```
+
+而「底部区折叠」还沿用 0.27.0 时的定位法：**`nav` 的父节点的最后一个子节点** = 现在的 **`regionArea`**。
+于是"收起账号与其他"把**会话列表**整块 `display:none` 了 —— 0.29.0 ~ 0.29.4 全部中招（0.2.2 起）。
+
+**修法**：不再按位置猜，改按语义标记定位，并加硬保护：
+
+1. 同时存在 `data-slot="sidebar.footer.action"` 与 `data-slot="sidebar.settings"` 时，从前者往上爬到
+   **同时包含两者**的那一层（= `footArea`）；
+2. **硬保护**：候选容器里一旦含 `nav[aria-label="全局面板"]` 或 `[data-slot="sidebar.workspaces"]`，
+   立即放弃 —— 任何情况下都不许折叠"面板组 / 会话列表"所在的层；
+3. 兜底（老规则、账号按钮回退）也要过同一道硬保护，过不了就往上一层再试。
+
+**验证（这次查的是"属性写在谁身上"，不是"按钮在不在"）**：rc.3 真机上
+`[data-ux-footer-fold]` 只有 **1 个**元素、class 是 `footArea`；`regionArea` **没有**该属性；
+「账号与其他」的父节点是 `root`、下一个兄弟就是 `footArea`；会话列表正常显示。
+
+**为什么之前没测出来**：`test/sidebar-footer.mjs` 的桩只有"nav 直接挂在 root 下"这一种形态，
+所以整条链路都是假绿。本次补了 rc.3 的真实结构（scrollRegion / scrollArea / regionArea / footArea），
+并把"会话列表那层一个属性都没有"钉成断言。
+
+**顺手修的两个测试自身问题**：① 该文件的汇总行被挤到中间，第 6、7 节跑在它之后（等于不算数）；
+② 桩缺 `contains()`。两处都已修好，条数从 18 → 34。
+
 ## [0.29.4] — 2026-11-13（适配 DSH 0.2.2-rc.3：面板项变成 div 包按钮、已固定的项多一颗动作按钮）
 
 把本地源码仓库切到 `dsh-v0.2.2-rc.3`（`pnpm install` + `build:web` + `build:lib`）后真机核对，

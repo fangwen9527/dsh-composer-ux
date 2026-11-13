@@ -76,7 +76,21 @@ class StubElement {
     this.parentElement = null
   }
   /** 深度优先找所有匹配（只支持 `tag` / `tag[attr]` / `[attr]` / `:scope > tag` 这几种本模块用到的形状）。 */
+  contains(node) {
+    if (node === this) return true
+    for (const child of this.children) if (child.contains(node)) return true
+    return false
+  }
   querySelectorAll(selector) {
+    // 真 DOM 的 querySelector 支持逗号分隔（"a, b" = 命中任意一个）。桩以前只认单条，
+    // 于是 `nav[aria-label="全局面板"], nav[aria-label="Global panels"]` 永远匹配不到 ——
+    // 硬保护因此形同虚设（2026-11-13 查出来的）。这里按逗号拆开，逐条试。
+    const parts = selector.split(",").map(part => part.trim()).filter(Boolean)
+    if (parts.length > 1) {
+      const merged = []
+      for (const part of parts) for (const hit of this.querySelectorAll(part)) if (!merged.includes(hit)) merged.push(hit)
+      return merged
+    }
     const direct = selector.startsWith(':scope > ')
     const want = (direct ? selector.slice(':scope > '.length) : selector).trim()
     const match = (element) => {

@@ -74,7 +74,21 @@ class StubElement {
     this.parentElement = null
   }
   get lastElementChild() { return this.children.length === 0 ? null : this.children[this.children.length - 1] }
+  contains(node) {
+    if (node === this) return true
+    for (const child of this.children) if (child.contains(node)) return true
+    return false
+  }
   querySelectorAll(selector) {
+    // 真 DOM 的 querySelector 支持逗号分隔（"a, b" = 命中任意一个）。桩以前只认单条，
+    // 于是 `nav[aria-label="全局面板"], nav[aria-label="Global panels"]` 永远匹配不到 ——
+    // 硬保护因此形同虚设（2026-11-13 查出来的）。这里按逗号拆开，逐条试。
+    const parts = selector.split(",").map(part => part.trim()).filter(Boolean)
+    if (parts.length > 1) {
+      const merged = []
+      for (const part of parts) for (const hit of this.querySelectorAll(part)) if (!merged.includes(hit)) merged.push(hit)
+      return merged
+    }
     const want = selector.trim()
     const match = (element) => {
       const attrMatch = /^([a-z]*)\[([a-z-]+)(?:=['"]?([^'"]*)['"]?)?\]$/.exec(want)
@@ -106,7 +120,7 @@ class StubElement {
  * 搭一棵"像宿主的"侧边栏：
  * root → [nav(面板行…), regionArea, footer(footerActions(用量卡片) + settingsArea(账号按钮))]
  */
-function makeSidebar({ withAccount = true } = {}) {
+function makeSidebar({ withAccount = true, rc3 = false, slots = true } = {}) {
   const html = new StubElement('html')
   const head = new StubElement('head')
   const body = new StubElement('body')
@@ -115,6 +129,13 @@ function makeSidebar({ withAccount = true } = {}) {
 
   const root = new StubElement('aside')
   body.appendChild(root)
+  // rc.3 起：nav 与"会话列表"被 scrollArea 包在一起，footArea 是它们的外层兄弟。
+  const scrollRegion = rc3 ? new StubElement('div') : null
+  const scrollArea = rc3 ? new StubElement('div') : null
+  if (rc3 && scrollRegion !== null && scrollArea !== null) {
+    root.appendChild(scrollRegion)
+    scrollRegion.appendChild(scrollArea)
+  }
 
   const nav = new StubElement('nav')
   nav.setAttribute('aria-label', '全局面板')
@@ -124,10 +145,19 @@ function makeSidebar({ withAccount = true } = {}) {
   glyph.setAttribute('aria-hidden', 'true')
   row.appendChild(glyph)
   nav.appendChild(row)
-  root.appendChild(nav)
+  if (rc3 && scrollArea !== null) scrollArea.appendChild(nav)
+  else root.appendChild(nav)
 
   const region = new StubElement('div')
-  root.appendChild(region)
+  // 会话列表这一层在 rc.3 里与 nav 同级（同样住在 scrollArea 里）—— 绝不能被当成底部区。
+  const workspaces = new StubElement('div')
+  // 真机上 regionArea 里有会话/工作区按钮 —— 桩必须照做，否则"位置兜底"看起来永远安全。
+  const sessionButton = new StubElement('button')
+  sessionButton.setAttribute('aria-label', '酒馆远程连接')
+  workspaces.appendChild(sessionButton)
+  region.appendChild(workspaces)
+  if (rc3 && scrollArea !== null) scrollArea.appendChild(region)
+  else root.appendChild(region)
 
   const footer = new StubElement('div')
   const actions = new StubElement('div')
@@ -149,6 +179,13 @@ function makeSidebar({ withAccount = true } = {}) {
     settings.appendChild(account)
   }
   footer.appendChild(settings)
+  // 两个槽的标记（rc.3 真机上就在 footArea 的两个子 div 里）。
+  // slots: false 用来模拟"没有槽标记的宿主"——这时只能靠位置兜底 + 硬保护。
+  if (slots) {
+    actions.setAttribute('data-slot', 'sidebar.footer.action')
+    settings.setAttribute('data-slot', 'sidebar.settings')
+    workspaces.setAttribute('data-slot', 'sidebar.workspaces')
+  }
   root.appendChild(footer)
 
   const doc = {
@@ -158,7 +195,7 @@ function makeSidebar({ withAccount = true } = {}) {
     querySelector: selector => html.querySelector(selector),
     querySelectorAll: selector => html.querySelectorAll(selector),
   }
-  return { doc, root, nav, footer, card, cardButton }
+  return { doc, root, nav, footer, card, cardButton, region, workspaces, scrollArea, scrollRegion }
 }
 
 console.log('1. 找得到底部区（结构定位，不认哈希类名）')
@@ -239,7 +276,39 @@ console.log('5. 样式表只藏容器，不写任何子选择器')
     !/\[data-ux-footer-fold='folded'\][^\n]*>/.test(pure.FOOTER_FOLD_CSS))
 }
 
-console.log(`\n${passes} passed, ${failures} failed`)
+console.log('7. rc.3 真实结构：绝不能把会话列表当底部区（0.29.5 修）')
+{
+  // 事故：0.29.0~0.29.4 在 rc.3 上把 regionArea（会话列表）当底部区藏了 —— 用户侧表现就是"会话栏目消失"。
+  const rc3 = makeSidebar({ rc3: true })
+  check('❗底部区认的是 footArea（含两个插槽的那一层）', pure.findSidebarFooter(rc3.doc) === rc3.footer)
+  check('❗会话列表所在层没有被当成底部区',
+    pure.findSidebarFooter(rc3.doc) !== rc3.region
+    && pure.findSidebarFooter(rc3.doc) !== rc3.scrollArea
+    && pure.findSidebarFooter(rc3.doc) !== rc3.scrollRegion)
+
+  pure.applyFooterFold(rc3.doc, { collapsed: true }, () => {})
+  check('❗收起后打标记的是 footArea', rc3.footer.getAttribute(pure.FOOTER_FOLD_ATTR) === 'folded')
+  check('❗会话列表那层一个属性都没有（这就是回归的判据）',
+    rc3.region.getAttribute(pure.FOOTER_FOLD_ATTR) === null
+    && rc3.scrollArea.getAttribute(pure.FOOTER_FOLD_ATTR) === null
+    && rc3.scrollRegion.getAttribute(pure.FOOTER_FOLD_ATTR) === null)
+  check('会话列表里的 workspaces 槽也完好',
+    rc3.workspaces.getAttribute('data-slot') === 'sidebar.workspaces'
+    && rc3.workspaces.getAttribute(pure.FOOTER_FOLD_ATTR) === null)
+
+  const head = rc3.doc.querySelector(`button[${pure.FOOTER_HEAD_ATTR}]`)
+  check('❗「账号与其他」插在 root 下、footArea 之前（不是塞进滚动区）',
+    head !== null && head.parentElement === rc3.root,
+    head?.parentElement === rc3.root ? 'root' : head?.parentElement?.tagName ?? 'null')
+
+  // 展开后一切复原，会话列表依旧没被动过
+  pure.applyFooterFold(rc3.doc, { collapsed: false }, () => {})
+  check('展开后 footArea 属性摘掉、会话列表仍未被动',
+    rc3.footer.getAttribute(pure.FOOTER_FOLD_ATTR) === null
+    && rc3.region.getAttribute(pure.FOOTER_FOLD_ATTR) === null)
+}
+
+
 console.log('6. 展开时缩进账号行右端（0.29.2 用户截图要求），收起时仍是整条')
 {
   // 用户 2026-10-29：「这个展开时，把这个账号和其他和收缩按钮放到这个位置」（指方文右侧的空白）。
@@ -274,4 +343,21 @@ console.log('6. 展开时缩进账号行右端（0.29.2 用户截图要求），
     pure.FOOTER_FOLD_CSS.includes('position: absolute') && pure.FOOTER_FOLD_CSS.includes('right: 6px'))
 }
 
+console.log('8. 没有槽标记时：硬保护必须把会话列表挡在外面')
+{
+  // 现实里别的 DSH 版本/宿主可能不带 data-slot 标记。这时只能按位置兜底 ——
+  // 而 rc.3 的位置兜底第一枪就打在 regionArea（会话列表）上，必须靠 forbidden() 挡回去。
+  const noSlots = makeSidebar({ rc3: true, slots: false })
+  check('❗没有槽标记也认到 footArea', pure.findSidebarFooter(noSlots.doc) === noSlots.footer)
+  check('❗位置兜底没有把会话列表当底部区',
+    pure.findSidebarFooter(noSlots.doc) !== noSlots.region)
+
+  pure.applyFooterFold(noSlots.doc, { collapsed: true }, () => {})
+  check('❗收起后会话列表那层仍然没有任何标记',
+    noSlots.region.getAttribute(pure.FOOTER_FOLD_ATTR) === null
+    && noSlots.scrollArea.getAttribute(pure.FOOTER_FOLD_ATTR) === null)
+  check('收起的是 footArea', noSlots.footer.getAttribute(pure.FOOTER_FOLD_ATTR) === 'folded')
+}
+
+console.log(`\n${passes} passed, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

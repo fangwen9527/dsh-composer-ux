@@ -1488,7 +1488,7 @@ const cases = [
   {
     name: "ID 市场清单版本与包版本漂了",
     file: "dsh-plugin.json",
-    from: "\"version\": \"0.29.4\",",
+    from: "\"version\": \"0.29.5\",",
     to: "\"version\": \"0.0.0\",",
     test: "test/doctor.mjs",
     expect: "版本一致",
@@ -1677,6 +1677,22 @@ const cases = [
     expect: "标题挂到包装层里那颗按钮上",
   },
   {
+    name: "TM 硬保护整体失效（没有槽标记时会把会话列表当底部区）",
+    file: "src/client/sidebar-footer.ts",
+    from: "  const forbidden = (element: HTMLElement): boolean =>",
+    to: "  const forbidden = (_element: HTMLElement): boolean => false\n  const ignoredGuard = (element: HTMLElement): boolean =>",
+    test: "test/sidebar-footer.mjs",
+    expect: "没有槽标记也认到 footArea",
+  },
+  {
+    name: "TN 硬保护漏掉「住在滚动区里」（没有槽标记时会折叠会话列表）",
+    file: "src/client/sidebar-footer.ts",
+    from: "  const scroller = navContainer !== null && navContainer !== sidebarRoot ? navContainer : null",
+    to: "  const scroller = null",
+    test: "test/sidebar-footer.mjs",
+    expect: "位置兜底没有把会话列表当底部区",
+  },
+  {
     name: "TH 0.2.2-rc.3 的 div 包装层又只认单按钮（已固定的项漏折叠）",
     file: "src/client/sidebar-nav.ts",
     from: "  return { main: buttons[0] as HTMLElement, extra: buttons.length - 1 }",
@@ -1691,14 +1707,6 @@ const cases = [
     to: "    const markValue = ''",
     test: "test/sidebar-nav.mjs",
     expect: "带动作按钮的行标成 action",
-  },
-  {
-    name: "SZ 底部区认错容器（把整只侧边栏当成底部区）",
-    file: "src/client/sidebar-footer.ts",
-    from: "    if (last !== null && last !== nav && last.querySelector('button') !== null) return last",
-    to: "    if (last !== null && last !== nav && last.querySelector('button') !== null) return root",
-    test: "test/sidebar-footer.mjs",
-    expect: "nav 的父节点的最后一个子节点就是底部区",
   },
   {
     name: "TA 收起底部区的样式丢了（点了没反应）",

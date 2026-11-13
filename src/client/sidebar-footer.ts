@@ -110,27 +110,50 @@ export const FOOTER_FOLD_CSS = `
  * @returns 容器；找不到返回 null（此时整个功能静默不介入）。
  */
 export function findSidebarFooter(doc: Document): HTMLElement | null {
+  // 硬保护：任何"含面板组或会话列表"的容器都不许当底部区 —— rc.3 的会话列表就住在 nav 的兄弟层。
   const nav = findPanelNav(doc)
-  const root = nav?.parentElement ?? null
-  if (root !== null) {
-    const last = root.lastElementChild as HTMLElement | null
-    // 最后一个子节点必须不是 nav 自己，而且里面确实有按钮（账号行 / 插件卡片），
-    // 才算"底部区" —— 免得在别的宿主布局上误收一个空 div。
-    if (last !== null && last !== nav && last.querySelector('button') !== null) return last
+  const navContainer = nav?.parentElement ?? null
+  // 侧边栏根 = nav 最顶层的祖先（两种形态都成立）。
+  let sidebarRoot: HTMLElement | null = nav
+  while (sidebarRoot?.parentElement != null && sidebarRoot.parentElement !== doc.body) sidebarRoot = sidebarRoot.parentElement
+  // 只有"滚动容器 ≠ 侧边栏根"时才把"住在滚动区里"当成拒绝理由：
+  // 老形态下 nav 的父节点就是 root，而 root 当然含着 footArea，用这条会把底部区也拒掉。
+  const scroller = navContainer !== null && navContainer !== sidebarRoot ? navContainer : null
+  const forbidden = (element: HTMLElement): boolean =>
+    element.querySelector('nav[aria-label="全局面板"], nav[aria-label="Global panels"]') !== null
+    || (scroller !== null && (scroller === element || scroller.contains(element)))
+    || element.querySelector('[data-slot="sidebar.workspaces"]') !== null
+
+  // ① 首选：按插槽标记找（0.2.2 起两个槽都在 footArea 里）。
+  const actionSlot = doc.querySelector('[data-slot="sidebar.footer.action"]')
+  const settingsSlot = doc.querySelector('[data-slot="sidebar.settings"]')
+  if (actionSlot !== null && settingsSlot !== null) {
+    let candidate = actionSlot.parentElement
+    while (candidate !== null && candidate !== doc.body) {
+      if (candidate.contains(settingsSlot)) {
+        if (!forbidden(candidate)) return candidate
+        break
+      }
+      candidate = candidate.parentElement
+    }
   }
-  // 兜底（正常不会走到：宿主只要有一格面板就会渲染 nav）。
-  //
-  // 没有 nav 可参照时，用账号菜单按钮往上退两层：宿主的结构是
-  // `footArea > settingsArea > …账号按钮…`，所以"上两层"就是 footArea。
-  // 这条路径**只求不崩**，不追求和主路径一样精确 —— 真跑不到主路径时，宁可少收一点，
-  // 也不要把整个侧边栏收掉。
+
+  // ② 兜底：老规则（nav 的父节点的最后一个子节点），但要过硬保护；
+  //    过不了就往上一层，取那一层最后一个"不含面板组/会话列表"的子节点。
+  let scope: HTMLElement | null = navContainer
+  while (scope !== null && scope !== doc.body) {
+    const last = scope.lastElementChild as HTMLElement | null
+    if (last !== null && last !== nav && !forbidden(last) && last.querySelector('button') !== null) return last
+    scope = scope.parentElement
+  }
+
+  // ③ 最后兜底（正常走不到）：从账号按钮往上退两层。
   for (const label of ACCOUNT_LABELS) {
     const account = doc.querySelector(`button[aria-label="${label}"]`)
     if (account === null) continue
-    const up1 = account.parentElement
-    const up2 = up1?.parentElement ?? null
-    const candidate = up2 ?? up1
-    if (candidate !== null && candidate !== doc.body && candidate.querySelector('button') !== null) return candidate
+    const candidate = account.parentElement?.parentElement ?? account.parentElement
+    if (candidate !== null && candidate !== doc.body && !forbidden(candidate)
+      && candidate.querySelector('button') !== null) return candidate
   }
   return null
 }

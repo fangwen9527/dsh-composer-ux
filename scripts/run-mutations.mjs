@@ -65,7 +65,10 @@ if (cases === 0) {
 const dirty = []
 for (const [file, before] of snapshot) {
   try {
-    if (readFileSync(file, 'utf8') !== before) dirty.push(file)
+    // 按语义内容比较，而不是逐字节：Windows 上 git autocrlf / CRLF 会让同一份内容在
+    // 读回时只是换行不同，逐字节比会误报"没还原干净"（2026-11-13 真机踩到）。
+    const normalize = text => text.replace(/\r\n/g, '\n')
+    if (normalize(readFileSync(file, 'utf8')) !== normalize(before)) dirty.push(file)
   } catch {
     dirty.push(`${file}（读不到了）`)
   }

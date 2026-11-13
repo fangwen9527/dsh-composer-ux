@@ -108,7 +108,7 @@ class StubElement {
   }
 }
 
-function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'], foreign = [], wrapLast = false } = {}) {
+function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务', '上下文洞察', 'MCP连接器', '更多'], foreign = [], wrapLast = false, pinFirst = false } = {}) {
   const html = new StubElement('html')
   const head = new StubElement('head')
   const body = new StubElement('body')
@@ -132,6 +132,19 @@ function makeDoc({ label = '全局面板', buttons = ['插件', '自动化任务
     if (wrapLast && index === buttons.length - 1) {
       const wrapper = new StubElement('span')
       wrapper.appendChild(button)
+      nav.appendChild(wrapper)
+      continue
+    }
+    if (pinFirst && index === 0) {
+      // 0.2.2-rc.3：已固定的项 = 外层 div + 主行按钮 + 一颗「取消固定」动作按钮。
+      const wrapper = new StubElement('div')
+      const pin = new StubElement('button')
+      pin.setAttribute('aria-label', '从侧边栏取消固定' + text)
+      const pinGlyph = new StubElement('span')
+      pinGlyph.setAttribute('aria-hidden', 'true')
+      pinGlyph.appendChild(new StubElement('svg'))
+      pin.appendChild(pinGlyph)
+      wrapper.append(button, pin)
       nav.appendChild(wrapper)
       continue
     }
@@ -277,6 +290,33 @@ console.log('8. 包装层行（0.2.2 的「更多」）：span 包一颗按钮�
   pure.applyNavFold(wrapped.doc, { mode: 'off', collapsed: true }, () => {})
   check('关掉后包装层标记也摘干净',
     wrapped.nav.querySelectorAll('[data-ux-nav-row]').length === 0)
+}
+
+console.log('9. 0.2.2-rc.3：div 包按钮 + 已固定项的动作按钮')
+{
+  const pinned = makeDoc({ buttons: ['插件', '自动化任务', '更多'], pinFirst: true, wrapLast: true })
+  const split = pure.splitPanelRows(pinned.nav)
+  check('❗div 包装层被认成行（3 行）', split.rows.length === 3, String(split.rows.length))
+  check('❗带动作按钮的行标成 action（图标模式才不强设 34px）',
+    split.rows[0].getAttribute(pure.NAV_FOLD_ROW_ATTR) === 'action',
+    String(split.rows[0].getAttribute(pure.NAV_FOLD_ROW_ATTR)))
+  check('单按钮的包装层标记为空串（照旧整行 34px）',
+    split.rows[1].getAttribute(pure.NAV_FOLD_ROW_ATTR) === '')
+  check('别人的节点数仍是 0', split.foreign.length === 0, String(split.foreign.length))
+
+  pure.applyNavFold(pinned.doc, { mode: 'icons', collapsed: true }, () => {})
+  const mainButton = split.rows[0].querySelector('button')
+  const actionButton = [...split.rows[0].querySelectorAll('button')][1]
+  check('❗标题挂在主行按钮上', mainButton?.getAttribute('title') === '插件', mainButton?.getAttribute('title'))
+  check('❗动作按钮本身没被改（aria-label / title 都不动）',
+    actionButton?.getAttribute('title') === null
+    && (actionButton?.getAttribute('aria-label') ?? '').startsWith('从侧边栏取消固定'))
+
+  pure.applyNavFold(pinned.doc, { mode: 'bar', collapsed: true }, () => {})
+  check('❗bar 模式整只 nav 收起来（固定项不再"挡路"）', pinned.nav.style.display === 'none')
+
+  check('样式表里有 action 行的放宽规则',
+    pure.NAV_FOLD_CSS.includes("[data-ux-nav-row='action']") && pure.NAV_FOLD_CSS.includes('width: auto'))
 }
 
 console.log(`\n${passes} passed, ${failures} failed`)

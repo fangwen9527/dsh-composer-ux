@@ -108,6 +108,14 @@ nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}] {
   padding-right: 0;
   justify-content: center;
 }
+/* 带动作按钮的行（0.2.2 起"已固定"的项多一颗固定开关）：只压字号，宽度交给内容。 */
+nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}='action'] {
+  width: auto;
+  min-width: auto;
+  padding-left: 4px;
+  padding-right: 4px;
+  justify-content: flex-start;
+}
 /* 图标那一颗带 aria-hidden，文字那颗不带 —— 靠语义藏文字，不认哈希类名。 */
 nav[${NAV_FOLD_ATTR}='icons'] > [${NAV_FOLD_ROW_ATTR}] > span:not([aria-hidden='true']) { display: none !important; }
 /* 「更多」那颗按钮的标签是**裸文本节点**（没有 span），上面那条规则管不到它；
@@ -184,7 +192,7 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
   for (const row of rows) {
     // 行可能是那颗按钮本身，也可能是"只包着它"的包装层（0.2.2 的「更多」）。
     // 标题要挂在真正可点的那颗按钮上。
-    const button = isPanelRowButton(row) ? row : solePanelRowButton(row) ?? row
+    const button = panelRowOf(row)?.main ?? row
     if (on) {
       const label = (button.getAttribute('aria-label') ?? '').trim()
       if (label !== '' && button.getAttribute(NAV_FOLD_TITLE_ATTR) !== label) {
@@ -195,7 +203,7 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
       // 只处理直接子节点会漏掉它。判据仍是"里面有没有 svg"。
       // 判据仍是"里面有没有 svg"。包装层自己的裸文本不在这批 span 里，
       // 由 CSS 的 font-size:0（作用在整行上）负责。
-      for (const span of [...row.querySelectorAll('span')] as HTMLElement[]) {
+      for (const span of [...button.querySelectorAll('span')] as HTMLElement[]) {
         if (span.querySelector('svg') !== null) continue
         span.style.display = 'none'
       }
@@ -205,7 +213,7 @@ function applyTitles(rows: readonly HTMLElement[], on: boolean): void {
       button.removeAttribute('title')
       button.removeAttribute(NAV_FOLD_TITLE_ATTR)
     }
-    for (const span of [...row.querySelectorAll('span')] as HTMLElement[]) {
+    for (const span of [...button.querySelectorAll('span')] as HTMLElement[]) {
       if (span.style.display === 'none') span.style.display = ''
     }
   }
@@ -242,22 +250,36 @@ function isPanelRowButton(element: Element): element is HTMLElement {
  *
  * 只认"唯一一颗"：多于一颗说明那是别人放的一组按钮，不属于我们要折叠的那一组。
  */
-function solePanelRowButton(wrapper: Element): HTMLElement | null {
+/**
+ * 从这个子节点里找出"主行按钮"。
+ *
+ * 宿主（0.2.2-rc.3）把每一项包在一层 div 里；**已固定**的项还会多带一颗「取消固定」动作按钮。
+ * 主行永远是第一颗面板行按钮（宿主按"主行 → 动作"的顺序渲染），所以取第一颗即可。
+ *
+ * @param wrapper - nav 的直接子节点。
+ * @returns 主行按钮与"额外动作按钮"数量；一个都没有 = 不是这一组的行。
+ */
+function panelRowOf(wrapper: Element): { main: HTMLElement; extra: number } | null {
+  if (isPanelRowButton(wrapper)) return { main: wrapper, extra: 0 }
   const buttons = [...wrapper.querySelectorAll('button')].filter(isPanelRowButton)
-  return buttons.length === 1 ? buttons[0] as HTMLElement : null
+  if (buttons.length === 0) return null
+  return { main: buttons[0] as HTMLElement, extra: buttons.length - 1 }
 }
 
 export function splitPanelRows(nav: HTMLElement, mark = true): { rows: HTMLElement[]; foreign: HTMLElement[] } {
   const rows: HTMLElement[] = []
   const foreign: HTMLElement[] = []
   for (const child of [...nav.children] as HTMLElement[]) {
-    const isRow = isPanelRowButton(child) || solePanelRowButton(child) !== null
+    const info = panelRowOf(child)
+    const isRow = info !== null
+    // 带动作按钮的行标成 action：图标模式只压字号，不强设固定宽度（否则动作按钮被挤坏）。
+    const markValue = info !== null && info.extra > 0 ? 'action' : ''
     const shouldMark = isRow && mark
     if (!shouldMark) {
       // 不标（关掉了 / 别人的节点）：顺手把上一轮留下的标记摘干净。
       if (child.hasAttribute(NAV_FOLD_ROW_ATTR)) child.removeAttribute(NAV_FOLD_ROW_ATTR)
-    } else if (!child.hasAttribute(NAV_FOLD_ROW_ATTR)) {
-      child.setAttribute(NAV_FOLD_ROW_ATTR, '')
+    } else if (child.getAttribute(NAV_FOLD_ROW_ATTR) !== markValue) {
+      child.setAttribute(NAV_FOLD_ROW_ATTR, markValue)
     }
     if (isRow) rows.push(child)
     else foreign.push(child)
